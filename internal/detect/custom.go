@@ -1,12 +1,19 @@
 package detect
 
 import (
+	"bytes"
+	"errors"
+	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
-	"gopkg.in/yaml.v3"
+	"go.yaml.in/yaml/v3"
 )
+
+var customNamePattern = regexp.MustCompile(`^[a-zA-Z0-9._-]+$`)
 
 // customDetectorSpec is the on-disk YAML format for user-defined detectors
 // stored in <configDir>/detectors/*.yaml.
@@ -44,7 +51,14 @@ func (d *CustomDetector) Name() string { return d.spec.Name }
 
 func (d *CustomDetector) Detect(dir string) (*Result, error) {
 	for _, f := range d.spec.Match.Files {
-		if _, err := os.Stat(filepath.Join(dir, f)); err != nil {
+		info, err := os.Stat(filepath.Join(dir, f))
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				return nil, nil
+			}
+			return nil, fmt.Errorf("check match file %q: %w", f, err)
+		}
+		if info.IsDir() {
 			return nil, nil
 		}
 	}
@@ -60,16 +74,20 @@ func (d *CustomDetector) Detect(dir string) (*Result, error) {
 }
 
 // LoadCustomDetectors reads every .yaml / .yml file under dir/detectors/ and
-// returns them as Detector instances. Errors on individual files are silently
-// skipped so a single bad file doesn't break all detection.
+// returns them as Detector instances. Invalid specifications are reported with
+// their filename so users can repair a detector instead of silently missing it.
 func LoadCustomDetectors(configDir string) ([]Detector, error) {
 	dir := filepath.Join(configDir, "detectors")
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return nil, nil
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("read detector directory: %w", err)
 	}
 
 	var detectors []Detector
+	seenNames := make(map[string]string)
 	for _, e := range entries {
 		if e.IsDir() {
 			continue
@@ -81,18 +99,76 @@ func LoadCustomDetectors(configDir string) ([]Detector, error) {
 
 		data, err := os.ReadFile(filepath.Join(dir, e.Name()))
 		if err != nil {
-			continue
+			return nil, fmt.Errorf("read detector %s: %w", e.Name(), err)
 		}
 		var spec customDetectorSpec
-		if err := yaml.Unmarshal(data, &spec); err != nil {
-			continue
+		decoder := yaml.NewDecoder(bytes.NewReader(data))
+		decoder.KnownFields(true)
+		if err := decoder.Decode(&spec); err != nil {
+			return nil, fmt.Errorf("parse detector %s: %w", e.Name(), err)
 		}
-		if spec.Name == "" || len(spec.Match.Files) == 0 || len(spec.Processes) == 0 {
-			continue
+		var extra any
+		if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
+			if err != nil {
+				return nil, fmt.Errorf("parse detector %s: %w", e.Name(), err)
+			}
+			return nil, fmt.Errorf("parse detector %s: expected one YAML document", e.Name())
 		}
+		if err := normalizeCustomDetector(&spec); err != nil {
+			return nil, fmt.Errorf("invalid detector %s: %w", e.Name(), err)
+		}
+		if previous, exists := seenNames[spec.Name]; exists {
+			return nil, fmt.Errorf("duplicate detector name %q in %s and %s", spec.Name, previous, e.Name())
+		}
+		seenNames[spec.Name] = e.Name()
 		detectors = append(detectors, &CustomDetector{spec: spec})
 	}
 	return detectors, nil
+}
+
+func normalizeCustomDetector(spec *customDetectorSpec) error {
+	spec.Name = strings.TrimSpace(spec.Name)
+	if spec.Name == "" {
+		return fmt.Errorf("name is required")
+	}
+	if !customNamePattern.MatchString(spec.Name) {
+		return fmt.Errorf("name %q is invalid", spec.Name)
+	}
+	if len(spec.Match.Files) == 0 {
+		return fmt.Errorf("match.files must contain at least one path")
+	}
+	seenFiles := make(map[string]struct{}, len(spec.Match.Files))
+	for i, file := range spec.Match.Files {
+		file = filepath.Clean(strings.TrimSpace(file))
+		if file == "." || !filepath.IsLocal(file) {
+			return fmt.Errorf("match.files[%d] must be a relative path inside the project", i)
+		}
+		if _, exists := seenFiles[file]; exists {
+			return fmt.Errorf("match.files[%d] duplicates %q", i, file)
+		}
+		seenFiles[file] = struct{}{}
+		spec.Match.Files[i] = file
+	}
+	if len(spec.Processes) == 0 {
+		return fmt.Errorf("processes must contain at least one process")
+	}
+	seenProcesses := make(map[string]struct{}, len(spec.Processes))
+	for i := range spec.Processes {
+		process := &spec.Processes[i]
+		process.Name = strings.TrimSpace(process.Name)
+		process.Command = strings.TrimSpace(process.Command)
+		if process.Name == "" || !customNamePattern.MatchString(process.Name) {
+			return fmt.Errorf("processes[%d].name %q is invalid", i, process.Name)
+		}
+		if process.Command == "" {
+			return fmt.Errorf("processes[%d].command is required", i)
+		}
+		if _, exists := seenProcesses[process.Name]; exists {
+			return fmt.Errorf("processes[%d] duplicates process %q", i, process.Name)
+		}
+		seenProcesses[process.Name] = struct{}{}
+	}
+	return nil
 }
 
 // ConfigDir returns the default config directory path for wts

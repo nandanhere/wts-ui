@@ -44,4 +44,3 @@ wts switch repo-main
 ### SEE ALSO
 
 * [wts](wts.md)	 - workswitch (wts: worktree switch) process handoff for git worktrees
-

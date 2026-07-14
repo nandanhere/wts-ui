@@ -1,8 +1,10 @@
 package main
 
 import (
+	"bytes"
 	"flag"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 
@@ -40,4 +42,40 @@ func main() {
 	if err := doc.GenMarkdownTree(root, *mdDir); err != nil {
 		panic(fmt.Errorf("generate markdown docs: %w", err))
 	}
+	if err := normalizeGeneratedFiles(*manDir); err != nil {
+		panic(fmt.Errorf("normalize man pages: %w", err))
+	}
+	if err := normalizeGeneratedFiles(*mdDir); err != nil {
+		panic(fmt.Errorf("normalize markdown docs: %w", err))
+	}
+}
+
+func normalizeGeneratedFiles(root string) error {
+	return filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		if !info.Mode().IsRegular() {
+			return nil
+		}
+		contents, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		trimmed := bytes.TrimRight(contents, "\r\n")
+		normalized := make([]byte, len(trimmed)+1)
+		copy(normalized, trimmed)
+		normalized[len(trimmed)] = '\n'
+		if bytes.Equal(contents, normalized) {
+			return nil
+		}
+		return os.WriteFile(path, normalized, info.Mode().Perm())
+	})
 }

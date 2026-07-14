@@ -1,9 +1,15 @@
 package detect
 
 import (
+	"errors"
 	"fmt"
+	"os"
+	"regexp"
 	"sort"
+	"strings"
 )
+
+var shellSafeArgumentPattern = regexp.MustCompile(`^[a-zA-Z0-9._:@/+\-]+$`)
 
 // Process is a single inferred process entry.
 type Process struct {
@@ -38,22 +44,29 @@ func init() {
 // All returns every available detector: built-ins followed by custom detectors
 // loaded from configDir/detectors/*.yaml. If configDir is empty, only built-ins
 // are returned.
-func All(configDir string) []Detector {
+func All(configDir string) ([]Detector, error) {
 	all := make([]Detector, len(builtins))
 	copy(all, builtins)
 
 	if configDir != "" {
-		custom, _ := LoadCustomDetectors(configDir)
+		custom, err := LoadCustomDetectors(configDir)
+		if err != nil {
+			return nil, err
+		}
 		all = append(all, custom...)
 	}
-	return all
+	return all, nil
 }
 
 // Run tries each detector in order and returns the first match. Custom
 // detectors from configDir are appended after built-ins. Returns nil, nil
 // if nothing matched.
 func Run(dir, configDir string) (*Result, error) {
-	for _, d := range All(configDir) {
+	detectors, err := All(configDir)
+	if err != nil {
+		return nil, fmt.Errorf("load detectors: %w", err)
+	}
+	for _, d := range detectors {
 		result, err := d.Detect(dir)
 		if err != nil {
 			return nil, fmt.Errorf("%s detector: %w", d.Name(), err)
@@ -66,4 +79,22 @@ func Run(dir, configDir string) (*Result, error) {
 		}
 	}
 	return nil, nil
+}
+
+func quoteShellArgument(value string) string {
+	if shellSafeArgumentPattern.MatchString(value) {
+		return value
+	}
+	return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'"
+}
+
+func regularFileExists(path string) (bool, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return false, nil
+		}
+		return false, err
+	}
+	return info.Mode().IsRegular(), nil
 }

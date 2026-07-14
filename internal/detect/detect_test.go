@@ -137,23 +137,23 @@ func TestPythonDetector_Django(t *testing.T) {
 	}
 }
 
-func TestPythonDetector_PlainProjectHasNoGuessedCommands(t *testing.T) {
+func TestPythonDetector_PlainProjectDoesNotBlockFallbackDetectors(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, "pyproject.toml"), []byte("[project]\nname = 'demo'\n"))
+	writeFile(t, filepath.Join(dir, "Makefile"), []byte("serve:\n\tpython -m demo\n"))
 
-	d := &PythonDetector{}
-	result, err := d.Detect(dir)
+	result, err := Run(dir, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if result == nil {
 		t.Fatal("expected result, got nil")
 	}
-	if result.Type != "python" {
-		t.Fatalf("expected type python, got %s", result.Type)
+	if result.Type != "makefile" {
+		t.Fatalf("expected makefile fallback, got %s", result.Type)
 	}
-	if len(result.Processes) != 0 {
-		t.Fatalf("expected no guessed processes, got %v", result.Processes)
+	if len(result.Processes) != 1 || result.Processes[0].Name != "serve" {
+		t.Fatalf("unexpected fallback processes: %v", result.Processes)
 	}
 }
 
@@ -312,5 +312,71 @@ func TestRun_ReturnsDetectorErrors(t *testing.T) {
 	}
 	if result != nil {
 		t.Fatalf("expected nil result on error, got %v", result)
+	}
+}
+
+func TestNodeDetector_DetectsModernBunLockfile(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "package.json"), []byte(`{"scripts":{"dev":"vite"}}`))
+	writeFile(t, filepath.Join(dir, "bun.lock"), nil)
+
+	result, err := (&NodeDetector{}).Detect(dir)
+	if err != nil {
+		t.Fatalf("detect: %v", err)
+	}
+	if got := result.Processes[0].Command; got != "bun run dev" {
+		t.Fatalf("unexpected command: got %q; want %q", got, "bun run dev")
+	}
+}
+
+func TestNodeDetectorQuotesUnsafeScriptNames(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "package.json"), []byte(`{"scripts":{"dev; echo injected":"vite"}}`))
+
+	result, err := (&NodeDetector{}).Detect(dir)
+	if err != nil {
+		t.Fatalf("detect: %v", err)
+	}
+	if got := result.Processes[0].Command; got != "npm run 'dev; echo injected'" {
+		t.Fatalf("unsafe script name was not quoted: %q", got)
+	}
+}
+
+func TestMakefileDetectorDeduplicatesTargets(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "Makefile"), []byte("dev: setup\n\t@echo first\n\ndev:\n\t@echo second\n"))
+
+	result, err := (&MakefileDetector{}).Detect(dir)
+	if err != nil {
+		t.Fatalf("detect: %v", err)
+	}
+	if result == nil || len(result.Processes) != 1 {
+		t.Fatalf("expected one deduplicated target, got %#v", result)
+	}
+}
+
+func TestLoadCustomDetectorsReportsInvalidSpecification(t *testing.T) {
+	t.Parallel()
+
+	configDir := t.TempDir()
+	detectorDir := filepath.Join(configDir, "detectors")
+	mkdirAll(t, detectorDir)
+	writeFile(t, filepath.Join(detectorDir, "broken.yaml"), []byte(`name: broken
+match:
+  files: [../outside]
+processes:
+  - name: dev
+    command: echo dev
+`))
+
+	_, err := LoadCustomDetectors(configDir)
+	if err == nil {
+		t.Fatal("expected invalid custom detector error")
 	}
 }

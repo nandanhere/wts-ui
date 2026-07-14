@@ -4,19 +4,21 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
 
-	"gopkg.in/yaml.v3"
+	"go.yaml.in/yaml/v3"
 
 	"github.com/xrehpicx/wts/internal/model"
 )
 
 const DefaultConfigFile = ".wts.yaml"
 
-var processNamePattern = regexp.MustCompile(`^[a-zA-Z0-9._:@/ -]+$`)
+var processNamePattern = regexp.MustCompile(`^[^\p{Cc}\p{Cf}]+$`)
+var environmentNamePattern = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
 
 func Load(configPath string) (*model.Project, error) {
 	if configPath == "" {
@@ -46,6 +48,13 @@ func Load(configPath string) (*model.Project, error) {
 	if err := decoder.Decode(&cfg); err != nil {
 		return nil, fmt.Errorf("parse yaml: %w", err)
 	}
+	var extra any
+	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
+		if err != nil {
+			return nil, fmt.Errorf("parse yaml: %w", err)
+		}
+		return nil, fmt.Errorf("config must contain exactly one YAML document")
+	}
 
 	rootDir := filepath.Dir(absPath)
 	if err := normalizeAndValidate(&cfg); err != nil {
@@ -68,10 +77,31 @@ func Save(configPath string, cfg model.Config) (*model.Project, error) {
 	if err != nil {
 		return nil, fmt.Errorf("resolve config path: %w", err)
 	}
-	if err := normalizeAndValidate(&cfg); err != nil {
+	prepared, err := normalizedConfig(cfg)
+	if err != nil {
 		return nil, err
 	}
+	data, err := marshalNormalized(prepared)
+	if err != nil {
+		return nil, err
+	}
+	if err := writeFileAtomic(absPath, data); err != nil {
+		return nil, fmt.Errorf("write config: %w", err)
+	}
 
+	return model.NewProject(absPath, filepath.Dir(absPath), prepared), nil
+}
+
+// Marshal validates cfg and returns it as a single YAML document.
+func Marshal(cfg model.Config) ([]byte, error) {
+	prepared, err := normalizedConfig(cfg)
+	if err != nil {
+		return nil, err
+	}
+	return marshalNormalized(prepared)
+}
+
+func marshalNormalized(cfg model.Config) ([]byte, error) {
 	var buf bytes.Buffer
 	encoder := yaml.NewEncoder(&buf)
 	encoder.SetIndent(2)
@@ -81,11 +111,67 @@ func Save(configPath string, cfg model.Config) (*model.Project, error) {
 	if err := encoder.Close(); err != nil {
 		return nil, fmt.Errorf("finalize yaml: %w", err)
 	}
-	if err := os.WriteFile(absPath, buf.Bytes(), 0o644); err != nil {
-		return nil, fmt.Errorf("write config: %w", err)
-	}
+	return buf.Bytes(), nil
+}
 
-	return model.NewProject(absPath, filepath.Dir(absPath), cfg), nil
+func normalizedConfig(cfg model.Config) (model.Config, error) {
+	prepared := cloneConfig(cfg)
+	if err := normalizeAndValidate(&prepared); err != nil {
+		return model.Config{}, err
+	}
+	return prepared, nil
+}
+
+func cloneConfig(cfg model.Config) model.Config {
+	clone := cfg
+	clone.Processes = make([]model.Process, len(cfg.Processes))
+	for i, process := range cfg.Processes {
+		clone.Processes[i] = process
+		if process.Env != nil {
+			clone.Processes[i].Env = make(map[string]string, len(process.Env))
+			for key, value := range process.Env {
+				clone.Processes[i].Env[key] = value
+			}
+		}
+	}
+	clone.Groups = make([]model.ProcessGroup, len(cfg.Groups))
+	for i, group := range cfg.Groups {
+		clone.Groups[i] = group
+		clone.Groups[i].Processes = append([]string(nil), group.Processes...)
+	}
+	return clone
+}
+
+func writeFileAtomic(path string, data []byte) error {
+	dir := filepath.Dir(path)
+	temp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	tempPath := temp.Name()
+	defer func() { _ = os.Remove(tempPath) }()
+
+	if info, statErr := os.Stat(path); statErr == nil {
+		if err := temp.Chmod(info.Mode().Perm()); err != nil {
+			_ = temp.Close()
+			return err
+		}
+	} else if !errors.Is(statErr, os.ErrNotExist) {
+		_ = temp.Close()
+		return statErr
+	}
+	if _, err := temp.Write(data); err != nil {
+		_ = temp.Close()
+		return err
+	}
+	if err := temp.Sync(); err != nil {
+		_ = temp.Close()
+		return err
+	}
+	if err := temp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tempPath, path)
 }
 
 func normalizeAndValidate(cfg *model.Config) error {
@@ -143,7 +229,7 @@ func normalizeProcess(proc *model.Process) error {
 		return fmt.Errorf("name is required")
 	}
 	if !processNamePattern.MatchString(proc.Name) {
-		return fmt.Errorf("name %q is invalid (allowed: letters, numbers, '.', '_', '-', ':', '@', '/', ' ')", proc.Name)
+		return fmt.Errorf("name %q is invalid (control and formatting characters are not allowed)", proc.Name)
 	}
 
 	proc.Command = strings.TrimSpace(proc.Command)
@@ -154,6 +240,11 @@ func normalizeProcess(proc *model.Process) error {
 	if proc.Env == nil {
 		proc.Env = map[string]string{}
 	}
+	for key := range proc.Env {
+		if !environmentNamePattern.MatchString(key) {
+			return fmt.Errorf("environment variable name %q is invalid", key)
+		}
+	}
 	return nil
 }
 
@@ -163,7 +254,7 @@ func normalizeGroup(group *model.ProcessGroup, processes map[string]struct{}) er
 		return fmt.Errorf("name is required")
 	}
 	if !processNamePattern.MatchString(group.Name) {
-		return fmt.Errorf("name %q is invalid (allowed: letters, numbers, '.', '_', '-', ':', '@', '/', ' ')", group.Name)
+		return fmt.Errorf("name %q is invalid (control and formatting characters are not allowed)", group.Name)
 	}
 	if len(group.Processes) == 0 {
 		return fmt.Errorf("processes must contain at least one process name")

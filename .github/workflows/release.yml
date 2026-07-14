@@ -15,11 +15,13 @@ on:
 jobs:
   tag:
     runs-on: ubuntu-latest
+    outputs:
+      released: ${{ steps.release.outputs.released }}
     permissions:
       contents: write
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
@@ -32,11 +34,23 @@ jobs:
         run: make airflow
 
       - name: Bump version and tag
+        id: release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           git fetch --force --tags origin
 
-          latest=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
-          commits_since=$(git rev-list "${latest}..HEAD" --count)
+          if latest=$(git describe --tags --abbrev=0 2>/dev/null); then
+            commits_since=$(git rev-list "${latest}..HEAD" --count)
+          else
+            latest="v0.0.0"
+            commits_since=$(git rev-list HEAD --count)
+          fi
+
+          if [[ ! "$latest" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "Latest tag is not semantic versioning compatible: $latest" >&2
+            exit 1
+          fi
 
           bump="${{ inputs.bump }}"
           if [ -z "$bump" ]; then
@@ -44,7 +58,14 @@ jobs:
           fi
 
           if [ "$commits_since" = "0" ]; then
+            release_state=$(gh release view "$latest" --json isDraft --jq '.isDraft' 2>/dev/null || true)
+            if [ "$latest" != "v0.0.0" ] && [ "$release_state" != "false" ]; then
+              echo "Release ${latest} is missing or still draft — retrying publication."
+              echo "released=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
             echo "No changes since ${latest} — nothing to release."
+            echo "released=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
@@ -65,17 +86,19 @@ jobs:
 
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git tag "${next}"
+          git tag -a "${next}" -m "Release ${next}"
           git push origin "${next}"
+          echo "released=true" >> "$GITHUB_OUTPUT"
 
   goreleaser:
     needs: tag
+    if: needs.tag.outputs.released == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
@@ -88,7 +111,7 @@ jobs:
         run: make airflow
 
       - name: Run GoReleaser
-        uses: goreleaser/goreleaser-action@v6
+        uses: goreleaser/goreleaser-action@v7
         with:
           version: "~> v2"
           args: release --clean

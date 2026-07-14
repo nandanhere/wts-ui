@@ -1,7 +1,7 @@
 package detect
 
 import (
-	"os"
+	"fmt"
 	"path/filepath"
 )
 
@@ -15,7 +15,11 @@ func (d *PythonDetector) Detect(dir string) (*Result, error) {
 	markers := []string{"pyproject.toml", "requirements.txt", "setup.py", "setup.cfg"}
 	found := false
 	for _, m := range markers {
-		if _, err := os.Stat(filepath.Join(dir, m)); err == nil {
+		exists, err := regularFileExists(filepath.Join(dir, m))
+		if err != nil {
+			return nil, fmt.Errorf("check %s: %w", m, err)
+		}
+		if exists {
 			found = true
 			break
 		}
@@ -26,7 +30,11 @@ func (d *PythonDetector) Detect(dir string) (*Result, error) {
 
 	var procs []Process
 
-	if _, err := os.Stat(filepath.Join(dir, "manage.py")); err == nil {
+	manageExists, err := regularFileExists(filepath.Join(dir, "manage.py"))
+	if err != nil {
+		return nil, fmt.Errorf("check manage.py: %w", err)
+	}
+	if manageExists {
 		procs = append(procs, Process{
 			Name:    "runserver",
 			Command: "python manage.py runserver",
@@ -38,44 +46,66 @@ func (d *PythonDetector) Detect(dir string) (*Result, error) {
 		return &Result{Type: "python-django", Processes: procs}, nil
 	}
 
-	if runCmd := pythonRunCommand(dir); runCmd != "" {
+	prefix, err := pythonCommandPrefix(dir)
+	if err != nil {
+		return nil, err
+	}
+	runCmd, err := pythonRunCommand(dir, prefix)
+	if err != nil {
+		return nil, err
+	}
+	if runCmd != "" {
 		procs = append(procs, Process{
 			Name:    "run",
 			Command: runCmd,
 		})
 	}
-	if testCmd := pythonTestCommand(dir); testCmd != "" {
+	if testCmd := pythonTestCommand(prefix); testCmd != "" {
 		procs = append(procs, Process{
 			Name:    "test",
 			Command: testCmd,
 		})
 	}
 
+	if len(procs) == 0 {
+		return nil, nil
+	}
 	return &Result{Type: "python", Processes: procs}, nil
 }
 
-func pythonCommandPrefix(dir string) string {
-	if _, err := os.Stat(filepath.Join(dir, "poetry.lock")); err == nil {
-		return "poetry run "
-	}
-	if _, err := os.Stat(filepath.Join(dir, "uv.lock")); err == nil {
-		return "uv run "
-	}
-	return ""
-}
-
-func pythonRunCommand(dir string) string {
-	prefix := pythonCommandPrefix(dir)
-	for _, entry := range []string{"main.py", "app.py"} {
-		if _, err := os.Stat(filepath.Join(dir, entry)); err == nil {
-			return prefix + "python " + entry
+func pythonCommandPrefix(dir string) (string, error) {
+	for _, candidate := range []struct {
+		file   string
+		prefix string
+	}{
+		{file: "poetry.lock", prefix: "poetry run "},
+		{file: "uv.lock", prefix: "uv run "},
+	} {
+		exists, err := regularFileExists(filepath.Join(dir, candidate.file))
+		if err != nil {
+			return "", fmt.Errorf("check %s: %w", candidate.file, err)
+		}
+		if exists {
+			return candidate.prefix, nil
 		}
 	}
-	return ""
+	return "", nil
 }
 
-func pythonTestCommand(dir string) string {
-	prefix := pythonCommandPrefix(dir)
+func pythonRunCommand(dir, prefix string) (string, error) {
+	for _, entry := range []string{"main.py", "app.py"} {
+		exists, err := regularFileExists(filepath.Join(dir, entry))
+		if err != nil {
+			return "", fmt.Errorf("check %s: %w", entry, err)
+		}
+		if exists {
+			return prefix + "python " + entry, nil
+		}
+	}
+	return "", nil
+}
+
+func pythonTestCommand(prefix string) string {
 	if prefix == "" {
 		return ""
 	}

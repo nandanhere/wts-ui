@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -11,13 +12,15 @@ import (
 )
 
 type mockBackend struct {
-	windows     map[string]bool
-	options     map[string]string
-	startCount  map[string]int
-	stopCount   map[string]int
-	panes       map[string][]tmux.PaneInfo // window -> panes
-	exitedByPID map[string]bool
-	attachCalls []AttachSpec
+	windows            map[string]bool
+	options            map[string]string
+	startCount         map[string]int
+	stopCount          map[string]int
+	panes              map[string][]tmux.PaneInfo // window -> panes
+	exitedByPID        map[string]bool
+	attachCalls        []AttachSpec
+	listPanesErr       error
+	ensureSessionCount int
 }
 
 func newMockBackend() *mockBackend {
@@ -33,6 +36,7 @@ func newMockBackend() *mockBackend {
 
 func (m *mockBackend) EnsureTmux(context.Context) error { return nil }
 func (m *mockBackend) EnsureSession(context.Context, string) error {
+	m.ensureSessionCount++
 	return nil
 }
 func (m *mockBackend) HasWindow(_ context.Context, _ string, window string) (bool, error) {
@@ -100,6 +104,9 @@ func (m *mockBackend) SplitWindowCommand(_ context.Context, _, window, _, _, _ s
 	return nil
 }
 func (m *mockBackend) ListPanes(_ context.Context, _, window string) ([]tmux.PaneInfo, error) {
+	if m.listPanesErr != nil {
+		return nil, m.listPanesErr
+	}
 	return m.panes[window], nil
 }
 func (m *mockBackend) StopPane(_ context.Context, paneID string, _ time.Duration) error {
@@ -446,6 +453,63 @@ func TestRestartStopsAndRestartsProcess(t *testing.T) {
 	}
 }
 
+func TestRestartSoleProcessRecreatesWindow(t *testing.T) {
+	t.Parallel()
+
+	backend := newMockBackend()
+	manager := NewManager(testProject(), "/tmp/repo-main", testWorktrees(), backend)
+	ctx := context.Background()
+
+	if err := manager.Start(ctx, "repo-main", RunOptions{Process: "api"}); err != nil {
+		t.Fatalf("start api: %v", err)
+	}
+	if err := manager.Restart(ctx, "repo-main", RunOptions{Process: "api"}); err != nil {
+		t.Fatalf("restart sole api process: %v", err)
+	}
+
+	window := tmux.WindowName("/tmp/repo-main")
+	if !backend.windows[window] || len(backend.panes[window]) != 1 {
+		t.Fatalf("expected recreated window with one pane, got window=%v panes=%#v", backend.windows[window], backend.panes[window])
+	}
+}
+
+func TestStartReplacesExitedProcessPane(t *testing.T) {
+	t.Parallel()
+
+	backend := newMockBackend()
+	manager := NewManager(testProject(), "/tmp/repo-main", testWorktrees(), backend)
+	ctx := context.Background()
+
+	if err := manager.Start(ctx, "repo-main", RunOptions{Process: "api"}); err != nil {
+		t.Fatalf("start api: %v", err)
+	}
+	window := tmux.WindowName("/tmp/repo-main")
+	backend.panes[window][0].Dead = true
+
+	if err := manager.Start(ctx, "repo-main", RunOptions{Process: "api"}); err != nil {
+		t.Fatalf("start exited api: %v", err)
+	}
+	if got := backend.startCount[window]; got != 2 {
+		t.Fatalf("expected exited pane to be replaced, start count = %d; want 2", got)
+	}
+}
+
+func TestStatusReportsPaneListingErrors(t *testing.T) {
+	t.Parallel()
+
+	backend := newMockBackend()
+	manager := NewManager(testProject(), "/tmp/repo-main", testWorktrees(), backend)
+	ctx := context.Background()
+	if err := manager.Start(ctx, "repo-main", RunOptions{Process: "api"}); err != nil {
+		t.Fatalf("start api: %v", err)
+	}
+	backend.listPanesErr = errors.New("tmux server unavailable")
+
+	if _, err := manager.Status(ctx, "repo-main"); err == nil {
+		t.Fatal("expected pane listing error")
+	}
+}
+
 func TestRestartGroupStopsAndRestartsEachProcess(t *testing.T) {
 	t.Parallel()
 	backend := newMockBackend()
@@ -643,6 +707,19 @@ func TestStatusStoppedWorktreeHasNoProcesses(t *testing.T) {
 	}
 	if len(rows[0].Processes) != 0 {
 		t.Fatalf("expected no processes, got %d", len(rows[0].Processes))
+	}
+}
+
+func TestStatusDoesNotCreateTmuxSession(t *testing.T) {
+	t.Parallel()
+
+	backend := newMockBackend()
+	manager := NewManager(testProject(), "/tmp/repo-main", testWorktrees(), backend)
+	if _, err := manager.Status(context.Background(), ""); err != nil {
+		t.Fatalf("status: %v", err)
+	}
+	if backend.ensureSessionCount != 0 {
+		t.Fatalf("status created a tmux session %d time(s)", backend.ensureSessionCount)
 	}
 }
 
