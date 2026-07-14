@@ -25,22 +25,31 @@ func (d *MakefileDetector) Name() string { return "makefile" }
 
 func (d *MakefileDetector) Detect(dir string) (*Result, error) {
 	for _, name := range []string{"Makefile", "makefile", "GNUmakefile"} {
-		if procs := parseMakefile(filepath.Join(dir, name)); len(procs) > 0 {
+		procs, err := parseMakefile(filepath.Join(dir, name))
+		if err != nil {
+			return nil, err
+		}
+		if len(procs) > 0 {
 			return &Result{Type: "makefile", Processes: procs}, nil
 		}
 	}
 	return nil, nil
 }
 
-func parseMakefile(path string) []Process {
+func parseMakefile(path string) ([]Process, error) {
 	f, err := os.Open(path)
 	if err != nil {
-		return nil
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
 	}
 	defer func() { _ = f.Close() }()
 
 	var procs []Process
+	seenTargets := make(map[string]struct{})
 	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
 	for scanner.Scan() {
 		line := scanner.Text()
 		if strings.HasPrefix(line, "\t") || strings.HasPrefix(line, "#") {
@@ -54,10 +63,17 @@ func parseMakefile(path string) []Process {
 		if makeSkipTargets[target] || strings.HasPrefix(target, ".") {
 			continue
 		}
+		if _, exists := seenTargets[target]; exists {
+			continue
+		}
+		seenTargets[target] = struct{}{}
 		procs = append(procs, Process{
 			Name:    target,
 			Command: "make " + target,
 		})
 	}
-	return procs
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+	return procs, nil
 }

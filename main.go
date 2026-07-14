@@ -14,6 +14,7 @@ var (
 )
 
 func main() {
+	version = strings.TrimPrefix(version, "v")
 	if info, ok := debug.ReadBuildInfo(); ok {
 		// go install sets Main.Version to the module version (e.g. v0.2.1)
 		if version == "dev" && info.Main.Version != "" && info.Main.Version != "(devel)" {

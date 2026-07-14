@@ -6,6 +6,29 @@ The format is based on Keep a Changelog and this project follows SemVer.
 
 ## [Unreleased]
 
+### Added
+
+- Cross-platform push and pull-request CI with race-tested coverage, linting,
+  vulnerability scanning, dependency checks, and production builds
+- Regression tests for process restart, tmux failures, unusual worktree paths,
+  detector validation, safe configuration writes, and responsive TUI rendering
+
+### Changed
+
+- Updated the project to Go 1.26 and the stable Bubble Tea, Bubbles, and Lip Gloss
+  v2 module families
+- Improved the TUI with responsive narrow layouts, terminal-aware colors,
+  Unicode-safe truncation, clearer target state, and safer asynchronous refreshes
+- Hardened configuration, detector, tmux, runtime, and release error handling
+
+### Fixed
+
+- Restarting the only managed process no longer tries to split a removed tmux window
+- Exited processes are replaced on start instead of being treated as healthy
+- Worktree discovery now preserves spaces and newlines in valid paths
+- Process names and shell paths inferred from project files are safely quoted
+- Empty custom-detector or Python results can fall through to later detectors
+
 ## [0.2.0] - 2026-03-05
 
 ### Added

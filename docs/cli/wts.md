@@ -10,7 +10,9 @@ Worktrees are discovered live from: git worktree list --porcelain.
 Switching preempts the previously active worktree process and starts the selected
 process or group in the target worktree.
 
-Running `wts` with no subcommand opens the interactive TUI.
+```
+wts [flags]
+```
 
 ### Examples
 

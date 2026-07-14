@@ -78,7 +78,9 @@ func sanitize(value string) string {
 		switch {
 		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
 			b.WriteRune(r)
-		case r == '-', r == '_', r == '.':
+		// ':' and '.' are tmux target separators (session:window.pane), so
+		// names containing either must not be embedded in target strings.
+		case r == '-', r == '_':
 			b.WriteRune(r)
 		default:
 			b.WriteRune('_')

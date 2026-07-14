@@ -40,24 +40,44 @@ branch refs/heads/agent
 func TestResolveByNameAndDir(t *testing.T) {
 	t.Parallel()
 
+	root := t.TempDir()
+	repoDir := filepath.Join(root, "repo")
+	agentDir := filepath.Join(root, "repo-agent")
 	items := []Worktree{
-		{Name: "repo", Dir: filepath.Clean("/tmp/repo")},
-		{Name: "repo-agent", Dir: filepath.Clean("/tmp/repo-agent")},
+		{Name: "repo", Dir: repoDir},
+		{Name: "repo-agent", Dir: agentDir},
 	}
 
 	byName, err := Resolve(items, "repo-agent")
 	if err != nil {
 		t.Fatalf("resolve by name: %v", err)
 	}
-	if byName.Dir != filepath.Clean("/tmp/repo-agent") {
+	if byName.Dir != agentDir {
 		t.Fatalf("unexpected dir from name resolve: %q", byName.Dir)
 	}
 
-	byDir, err := Resolve(items, "/tmp/repo")
+	byDir, err := Resolve(items, repoDir)
 	if err != nil {
 		t.Fatalf("resolve by dir: %v", err)
 	}
 	if byDir.Name != "repo" {
 		t.Fatalf("unexpected name from dir resolve: %q", byDir.Name)
+	}
+}
+
+func TestParsePorcelainNULPreservesUnusualPathCharacters(t *testing.T) {
+	t.Parallel()
+
+	dir := filepath.Join(t.TempDir(), "worktree with space\nand newline")
+	raw := "worktree " + dir + "\x00HEAD abcdef\x00branch refs/heads/feature\x00\x00"
+	items, err := parsePorcelain([]byte(raw))
+	if err != nil {
+		t.Fatalf("parsePorcelain: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("expected 1 worktree, got %d", len(items))
+	}
+	if items[0].Dir != filepath.Clean(dir) {
+		t.Fatalf("path changed during parse: got %q; want %q", items[0].Dir, filepath.Clean(dir))
 	}
 }

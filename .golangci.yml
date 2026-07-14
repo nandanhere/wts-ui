@@ -1,15 +1,26 @@
+version: "2"
+
 run:
   timeout: 3m
   tests: true
 
 linters:
+  default: none
   enable:
-    - govet
     - errcheck
-    - staticcheck
+    - errorlint
+    - govet
     - ineffassign
+    - misspell
+    - staticcheck
+    - unconvert
+    - unused
+
+formatters:
+  enable:
     - gofmt
     - goimports
 
 issues:
-  exclude-use-default: false
+  max-issues-per-linter: 0
+  max-same-issues: 0

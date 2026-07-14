@@ -21,6 +21,19 @@ func TestSessionNameIsDeterministic(t *testing.T) {
 	}
 }
 
+func TestTmuxNamesDoNotContainTargetSeparators(t *testing.T) {
+	t.Parallel()
+
+	for _, name := range []string{
+		SessionName("/tmp/repo.with:separators"),
+		WindowName("/tmp/worktree.with:separators"),
+	} {
+		if strings.ContainsAny(name, ".:") {
+			t.Fatalf("tmux target name contains a separator: %q", name)
+		}
+	}
+}
+
 func TestWindowName(t *testing.T) {
 	t.Parallel()
 

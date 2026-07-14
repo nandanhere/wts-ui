@@ -1,28 +1,42 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Get latest tag
-latest=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
-commits_since=$(git rev-list "${latest}..HEAD" --count 2>/dev/null || echo "0")
+branch=$(git branch --show-current)
+if [ "$branch" != "main" ]; then
+  echo "Releases must be created from main (current branch: ${branch:-detached})." >&2
+  exit 1
+fi
+
+if [ -n "$(git status --porcelain)" ]; then
+  echo "Working tree must be clean before releasing." >&2
+  exit 1
+fi
+
+git fetch --force --tags origin
+
+if latest=$(git describe --tags --abbrev=0 2>/dev/null); then
+  commits_since=$(git rev-list "${latest}..HEAD" --count)
+else
+  latest="v0.0.0"
+  commits_since=$(git rev-list HEAD --count)
+fi
 
 if [ "$commits_since" = "0" ]; then
   echo "No changes since ${latest} — nothing to release."
   exit 0
 fi
 
-# Parse semver and bump patch
+if ! [[ "$latest" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+  echo "Latest tag is not semantic versioning compatible: $latest" >&2
+  exit 1
+fi
+
 IFS='.' read -r major minor patch <<< "${latest#v}"
 patch=$((patch + 1))
 next="v${major}.${minor}.${patch}"
 
-# Update version in main.go
-sed -i '' "s/version = \".*\"/version = \"${major}.${minor}.${patch}\"/" main.go
-
-# Commit, tag, push
-git add main.go
-git commit -m "release: ${next}"
-git tag "${next}"
-git push && git push origin "${next}"
+git tag -a "${next}" -m "Release ${next}"
+git push origin main "${next}"
 
 echo ""
 echo "Released ${next} (${commits_since} commits since ${latest})"

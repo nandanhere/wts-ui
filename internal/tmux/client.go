@@ -95,6 +95,9 @@ func (c *Client) EnsureSession(ctx context.Context, session string) error {
 	if err == nil {
 		return nil
 	}
+	if !isMissingTmuxTarget(err) {
+		return fmt.Errorf("check tmux session %q: %w", session, err)
+	}
 	_, err = c.runner.Run(ctx, c.bin, "new-session", "-d", "-s", session)
 	if err != nil {
 		return fmt.Errorf("create tmux session %q: %w", session, err)
@@ -107,11 +110,7 @@ func (c *Client) HasWindow(ctx context.Context, session, window string) (bool, e
 	if err == nil {
 		return true, nil
 	}
-	var exitErr *exec.ExitError
-	if errors.As(err, &exitErr) {
-		return false, nil
-	}
-	if strings.Contains(err.Error(), "can't find window") || strings.Contains(err.Error(), "can't find session") {
+	if isMissingTmuxTarget(err) {
 		return false, nil
 	}
 	return false, fmt.Errorf("check window %q in session %q: %w", window, session, err)
@@ -133,10 +132,15 @@ func (c *Client) StartWindowCommand(ctx context.Context, session, window, dir, s
 	}
 
 	target := session + ":" + window
-	c.hardenPane(ctx, target, paneTitle)
+	if err := c.hardenPane(ctx, target, paneTitle); err != nil {
+		_, _ = c.runner.Run(ctx, c.bin, "kill-window", "-t", target)
+		return fmt.Errorf("configure window %q: %w", window, err)
+	}
 
 	payload := buildPayload(command, env)
-	if _, err := c.runner.Run(ctx, c.bin, "send-keys", "-t", target, shell+" -lc "+shellQuote(payload), "C-m"); err != nil {
+	commandLine := shellQuote(shell) + " -lc " + shellQuote(payload)
+	if _, err := c.runner.Run(ctx, c.bin, "send-keys", "-t", target, commandLine, "C-m"); err != nil {
+		_, _ = c.runner.Run(ctx, c.bin, "kill-window", "-t", target)
 		return fmt.Errorf("start command for workspace window %q: %w", window, err)
 	}
 	return nil
@@ -151,8 +155,23 @@ func (c *Client) StopWindow(ctx context.Context, session, window string, timeout
 		return nil
 	}
 
-	if _, err := c.runner.Run(ctx, c.bin, "send-keys", "-t", session+":"+window, "C-c"); err != nil {
-		return fmt.Errorf("send interrupt to %q: %w", window, err)
+	panes, err := c.ListPanes(ctx, session, window)
+	if err != nil {
+		if isMissingTmuxTarget(err) {
+			return nil
+		}
+		return err
+	}
+	for _, pane := range panes {
+		if pane.Dead || IsShellCommand(pane.Command) {
+			continue
+		}
+		if _, err := c.runner.Run(ctx, c.bin, "send-keys", "-t", pane.ID, "C-c"); err != nil {
+			if isMissingTmuxTarget(err) {
+				continue
+			}
+			return fmt.Errorf("interrupt pane %q in window %q: %w", pane.ID, window, err)
+		}
 	}
 
 	deadline := time.Now().Add(timeout)
@@ -164,13 +183,45 @@ func (c *Client) StopWindow(ctx context.Context, session, window string, timeout
 		if !alive {
 			return nil
 		}
-		time.Sleep(200 * time.Millisecond)
+		exited, err := c.windowProcessesExited(ctx, session, window)
+		if err != nil {
+			return err
+		}
+		if exited {
+			break
+		}
+		if err := waitForPoll(ctx, 200*time.Millisecond); err != nil {
+			return err
+		}
 	}
 
-	if _, err := c.runner.Run(ctx, c.bin, "kill-window", "-t", session+":"+window); err != nil {
+	if _, err := c.runner.Run(ctx, c.bin, "kill-window", "-t", session+":"+window); err != nil && !isMissingTmuxTarget(err) {
 		return fmt.Errorf("force kill window %q: %w", window, err)
 	}
 	return nil
+}
+
+func (c *Client) windowProcessesExited(ctx context.Context, session, window string) (bool, error) {
+	panes, err := c.ListPanes(ctx, session, window)
+	if err != nil {
+		if isMissingTmuxTarget(err) {
+			return true, nil
+		}
+		return false, err
+	}
+	if len(panes) == 0 {
+		return false, nil
+	}
+	for _, pane := range panes {
+		if pane.Dead || IsShellCommand(pane.Command) {
+			continue
+		}
+		if pane.PID != "" && c.PaneExitedByPID(ctx, pane.PID) {
+			continue
+		}
+		return false, nil
+	}
+	return true, nil
 }
 
 func (c *Client) SetSessionOption(ctx context.Context, session, key, value string) error {
@@ -191,11 +242,8 @@ func (c *Client) SetSessionOption(ctx context.Context, session, key, value strin
 func (c *Client) GetSessionOption(ctx context.Context, session, key string) (string, error) {
 	value, err := c.runner.Run(ctx, c.bin, "show-option", "-t", session, "-v", key)
 	if err != nil {
-		var exitErr *exec.ExitError
-		if errors.As(err, &exitErr) {
-			return "", nil
-		}
-		if strings.Contains(err.Error(), "invalid option") || strings.Contains(err.Error(), "unknown option") {
+		message := strings.ToLower(err.Error())
+		if isMissingTmuxTarget(err) || strings.Contains(message, "invalid option") || strings.Contains(message, "unknown option") {
 			return "", nil
 		}
 		return "", fmt.Errorf("read tmux option %q: %w", key, err)
@@ -232,8 +280,14 @@ func (c *Client) PaneCurrentCommand(ctx context.Context, session, window string)
 	// Check if the pane shell has any child processes.
 	children, err := c.runner.Run(ctx, "pgrep", "-P", pid)
 	if err != nil {
-		// pgrep exits 1 when no children found — that means process exited.
-		return "shell", nil
+		if ctx.Err() != nil {
+			return "", ctx.Err()
+		}
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
+			return "shell", nil
+		}
+		return "", fmt.Errorf("check pane process children: %w", err)
 	}
 	if strings.TrimSpace(children) == "" {
 		return "shell", nil
@@ -267,7 +321,9 @@ func (c *Client) Attach(ctx context.Context, session, window, paneID string) err
 }
 
 func (c *Client) SetPaneTitle(ctx context.Context, session, window, title string) error {
-	c.hardenPane(ctx, session+":"+window, title)
+	if err := c.hardenPane(ctx, session+":"+window, title); err != nil {
+		return fmt.Errorf("set pane title for %q: %w", window, err)
+	}
 	return nil
 }
 
@@ -279,10 +335,15 @@ func (c *Client) SplitWindowCommand(ctx context.Context, session, window, dir, s
 	}
 	paneID = strings.TrimSpace(paneID)
 
-	c.hardenPane(ctx, paneID, paneTitle)
+	if err := c.hardenPane(ctx, paneID, paneTitle); err != nil {
+		_, _ = c.runner.Run(ctx, c.bin, "kill-pane", "-t", paneID)
+		return fmt.Errorf("configure pane %q: %w", paneTitle, err)
+	}
 
 	payload := buildPayload(command, env)
-	if _, err := c.runner.Run(ctx, c.bin, "send-keys", "-t", paneID, shell+" -lc "+shellQuote(payload), "C-m"); err != nil {
+	commandLine := shellQuote(shell) + " -lc " + shellQuote(payload)
+	if _, err := c.runner.Run(ctx, c.bin, "send-keys", "-t", paneID, commandLine, "C-m"); err != nil {
+		_, _ = c.runner.Run(ctx, c.bin, "kill-pane", "-t", paneID)
 		return fmt.Errorf("start command in pane %q: %w", paneTitle, err)
 	}
 	return nil
@@ -293,18 +354,25 @@ func (c *Client) SplitWindowCommand(ctx context.Context, session, window, dir, s
 // per-pane option (which cannot be overwritten by the shell, unlike pane_title),
 // and enables remain-on-exit so panes survive process exit and logs remain
 // accessible.
-func (c *Client) hardenPane(ctx context.Context, target, paneTitle string) {
+func (c *Client) hardenPane(ctx context.Context, target, paneTitle string) error {
 	if paneTitle == "" {
-		return
+		return nil
 	}
 	// Set pane title before the shell starts — the shell will likely
 	// overwrite pane_title via escape sequences, but @wts_process persists.
-	_, _ = c.runner.Run(ctx, c.bin, "select-pane", "-t", target, "-T", paneTitle)
+	if _, err := c.runner.Run(ctx, c.bin, "select-pane", "-t", target, "-T", paneTitle); err != nil {
+		return fmt.Errorf("set title: %w", err)
+	}
 	if processName := ProcessFromPaneTitle(paneTitle); processName != "" {
-		_, _ = c.runner.Run(ctx, c.bin, "set-option", "-p", "-t", target, "-q", PaneProcessOptionKey(), processName)
+		if _, err := c.runner.Run(ctx, c.bin, "set-option", "-p", "-t", target, "-q", PaneProcessOptionKey(), processName); err != nil {
+			return fmt.Errorf("set process identity: %w", err)
+		}
 	}
 	// Keep pane alive after process exit so we can still read logs and identity.
-	_, _ = c.runner.Run(ctx, c.bin, "set-option", "-p", "-t", target, "-q", "remain-on-exit", "on")
+	if _, err := c.runner.Run(ctx, c.bin, "set-option", "-p", "-t", target, "-q", "remain-on-exit", "on"); err != nil {
+		return fmt.Errorf("enable remain-on-exit: %w", err)
+	}
+	return nil
 }
 
 func (c *Client) ListPanes(ctx context.Context, session, window string) ([]PaneInfo, error) {
@@ -312,9 +380,13 @@ func (c *Client) ListPanes(ctx context.Context, session, window string) ([]PaneI
 	if err != nil {
 		return nil, fmt.Errorf("list panes for %q: %w", window, err)
 	}
+	return parsePaneList(output), nil
+}
+
+func parsePaneList(output string) []PaneInfo {
 	var panes []PaneInfo
 	for _, line := range strings.Split(output, "\n") {
-		line = strings.TrimSpace(line)
+		line = strings.TrimSuffix(line, "\r")
 		if line == "" {
 			continue
 		}
@@ -336,36 +408,71 @@ func (c *Client) ListPanes(ctx context.Context, session, window string) ([]PaneI
 		}
 		panes = append(panes, info)
 	}
-	return panes, nil
+	return panes
 }
 
 func (c *Client) StopPane(ctx context.Context, paneID string, timeout time.Duration) error {
-	// Get the pane's PID before sending interrupt.
-	pidOut, err := c.runner.Run(ctx, c.bin, "list-panes", "-t", paneID, "-F", "#{pane_pid}")
+	// Get the pane state before sending interrupt. A dead pane can be removed
+	// immediately, while a live pane is allowed to return to its shell first.
+	pid, exited, err := c.paneState(ctx, paneID)
 	if err != nil {
-		// Pane may already be gone.
-		return nil
-	}
-	pid := strings.TrimSpace(pidOut)
-
-	if _, err := c.runner.Run(ctx, c.bin, "send-keys", "-t", paneID, "C-c"); err != nil {
-		return nil
+		if isMissingTmuxTarget(err) {
+			return nil
+		}
+		return fmt.Errorf("read pane %q state: %w", paneID, err)
 	}
 
-	if pid != "" {
+	if !exited {
+		if _, err := c.runner.Run(ctx, c.bin, "send-keys", "-t", paneID, "C-c"); err != nil {
+			if isMissingTmuxTarget(err) {
+				return nil
+			}
+			return fmt.Errorf("interrupt pane %q: %w", paneID, err)
+		}
+	}
+
+	if !exited {
 		deadline := time.Now().Add(timeout)
 		for time.Now().Before(deadline) {
-			if !c.PaneExitedByPID(ctx, pid) {
-				time.Sleep(200 * time.Millisecond)
-				continue
+			_, exited, err = c.paneState(ctx, paneID)
+			if err != nil {
+				if isMissingTmuxTarget(err) {
+					return nil
+				}
+				return fmt.Errorf("poll pane %q state: %w", paneID, err)
 			}
-			break
+			if exited || (pid != "" && c.PaneExitedByPID(ctx, pid)) {
+				break
+			}
+			if err := waitForPoll(ctx, 200*time.Millisecond); err != nil {
+				return err
+			}
 		}
 	}
 
 	// Kill the pane (harmless if already gone).
-	_, _ = c.runner.Run(ctx, c.bin, "kill-pane", "-t", paneID)
+	if _, err := c.runner.Run(ctx, c.bin, "kill-pane", "-t", paneID); err != nil && !isMissingTmuxTarget(err) {
+		return fmt.Errorf("kill pane %q: %w", paneID, err)
+	}
 	return nil
+}
+
+func (c *Client) paneState(ctx context.Context, paneID string) (pid string, exited bool, err error) {
+	// list-panes -t <pane> expands to every pane in that pane's window. Use
+	// display-message so the format is evaluated for exactly paneID.
+	output, err := c.runner.Run(ctx, c.bin, "display-message", "-p", "-t", paneID, "#{pane_pid}\t#{pane_dead}\t#{pane_current_command}")
+	if err != nil {
+		return "", false, err
+	}
+	line := output
+	if i := strings.IndexByte(line, '\n'); i >= 0 {
+		line = line[:i]
+	}
+	parts := strings.SplitN(line, "\t", 3)
+	if len(parts) != 3 {
+		return "", false, fmt.Errorf("unexpected pane state %q", line)
+	}
+	return strings.TrimSpace(parts[0]), parts[1] == "1" || IsShellCommand(strings.TrimSpace(parts[2])), nil
 }
 
 func (c *Client) CapturePaneByID(ctx context.Context, paneID string, lines int) (string, error) {
@@ -381,10 +488,46 @@ func (c *Client) CapturePaneByID(ctx context.Context, paneID string, lines int) 
 
 func (c *Client) PaneExitedByPID(ctx context.Context, pid string) bool {
 	children, err := c.runner.Run(ctx, "pgrep", "-P", pid)
-	if err != nil {
-		return true // pgrep exits 1 when no children
+	if err == nil {
+		return strings.TrimSpace(children) == ""
 	}
-	return strings.TrimSpace(children) == ""
+	if ctx.Err() != nil {
+		return false
+	}
+	var exitErr *exec.ExitError
+	return errors.As(err, &exitErr) && exitErr.ExitCode() == 1
+}
+
+func isMissingTmuxTarget(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	if strings.Contains(message, "error connecting to") && strings.Contains(message, "no such file or directory") {
+		return true
+	}
+	for _, fragment := range []string{
+		"can't find pane",
+		"can't find window",
+		"can't find session",
+		"no server running",
+	} {
+		if strings.Contains(message, fragment) {
+			return true
+		}
+	}
+	return false
+}
+
+func waitForPoll(ctx context.Context, duration time.Duration) error {
+	timer := time.NewTimer(duration)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 func buildPayload(command string, env map[string]string) string {

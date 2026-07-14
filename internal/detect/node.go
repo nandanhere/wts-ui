@@ -2,8 +2,10 @@ package detect
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 )
 
 // NodeDetector recognizes Node.js / TypeScript projects by the presence of a
@@ -16,7 +18,10 @@ func (d *NodeDetector) Detect(dir string) (*Result, error) {
 	pkgPath := filepath.Join(dir, "package.json")
 	data, err := os.ReadFile(pkgPath)
 	if err != nil {
-		return nil, nil
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("read package.json: %w", err)
 	}
 
 	var pkg struct {
@@ -29,31 +34,45 @@ func (d *NodeDetector) Detect(dir string) (*Result, error) {
 		return nil, nil
 	}
 
-	runner := npmRunner(dir)
+	runner, err := npmRunner(dir)
+	if err != nil {
+		return nil, err
+	}
 
-	var procs []Process
+	names := make([]string, 0, len(pkg.Scripts))
 	for name := range pkg.Scripts {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	procs := make([]Process, 0, len(names))
+	for _, name := range names {
 		procs = append(procs, Process{
 			Name:    name,
-			Command: runner + " run " + name,
+			Command: runner + " run " + quoteShellArgument(name),
 		})
 	}
 	return &Result{Type: "nodejs", Processes: procs}, nil
 }
 
 // npmRunner returns "pnpm", "yarn", or "npm" based on lock file presence.
-func npmRunner(dir string) string {
+func npmRunner(dir string) (string, error) {
 	for _, pair := range []struct {
 		lock   string
 		runner string
 	}{
 		{"pnpm-lock.yaml", "pnpm"},
 		{"yarn.lock", "yarn"},
+		{"bun.lock", "bun"},
 		{"bun.lockb", "bun"},
 	} {
-		if _, err := os.Stat(filepath.Join(dir, pair.lock)); err == nil {
-			return pair.runner
+		exists, err := regularFileExists(filepath.Join(dir, pair.lock))
+		if err != nil {
+			return "", fmt.Errorf("check %s: %w", pair.lock, err)
+		}
+		if exists {
+			return pair.runner, nil
 		}
 	}
-	return "npm"
+	return "npm", nil
 }

@@ -4,7 +4,7 @@ Thanks for contributing.
 
 ## Development setup
 
-1. Install Go 1.22+.
+1. Install Go 1.26+, GNU Make, and a POSIX-compatible shell.
 2. Clone the repo.
 3. Run:
 

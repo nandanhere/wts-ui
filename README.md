@@ -10,7 +10,7 @@ The installed command is `wts`.
 
 ## Requirements
 
-- Go `1.22+`
+- Go `1.26+`
 - `git`
 - `tmux`
 
@@ -35,6 +35,12 @@ wts
 ```
 
 `wts` opens the worktree/process switcher. `wts init` generates `.wts.yaml` for the current repo. `wts tui` remains available as an explicit alias for the TUI.
+
+Use `make airflow` before submitting changes. It checks formatting, dependencies,
+static analysis, race-tested coverage, known vulnerabilities, and the production
+build—the same verification performed on every GitHub push and pull request.
+This development command requires GNU Make and a POSIX-compatible shell; on
+Windows, `go test -shuffle=on ./...` runs the platform test suite directly.
 
 ## More
 

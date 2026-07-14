@@ -11,7 +11,7 @@ import (
 	"strings"
 	"text/tabwriter"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	"github.com/spf13/cobra"
 
 	"github.com/xrehpicx/wts/internal/config"
@@ -35,11 +35,19 @@ type app struct {
 }
 
 type runtimeContext struct {
+	ctx        context.Context
 	project    *model.Project
 	repoRoot   string
 	worktrees  []gitwt.Worktree
 	manager    *runtime.Manager
 	newBackend func() runtime.Backend
+}
+
+func (rc *runtimeContext) context() context.Context {
+	if rc.ctx != nil {
+		return rc.ctx
+	}
+	return context.Background()
 }
 
 func NewRootCmd(version, commit string) *cobra.Command {
@@ -83,6 +91,9 @@ process or group in the target worktree.`,
 		},
 	}
 	root.PersistentFlags().StringVar(&a.configPath, "config", "", "path to .wts.yaml")
+	root.SetIn(a.in)
+	root.SetOut(a.out)
+	root.SetErr(a.err)
 
 	root.AddCommand(a.newInitCmd())
 	root.AddCommand(a.newValidateCmd())
@@ -113,7 +124,7 @@ func (a *app) runTUICommand(ctx context.Context) error {
 	}
 	return a.withRuntime(ctx, func(rc *runtimeContext) error {
 		m := newTUIModel(rc)
-		p := tea.NewProgram(m, tea.WithAltScreen())
+		p := tea.NewProgram(m)
 		finalModel, err := p.Run()
 		if err != nil {
 			return err
@@ -149,6 +160,7 @@ func (a *app) withRuntime(ctx context.Context, fn func(*runtimeContext) error) e
 			return err
 		}
 		rc := &runtimeContext{
+			ctx:        ctx,
 			project:    project,
 			repoRoot:   repoRoot,
 			worktrees:  worktrees,
@@ -168,6 +180,7 @@ func (a *app) newValidateCmd() *cobra.Command {
   wts validate
   wts validate --config ../other/.wts.yaml
 `),
+		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return a.withProject(func(p *model.Project) error {
 				_, _ = fmt.Fprintf(a.out, "config valid: %s (%d processes, %d groups)\n", p.ConfigPath, len(p.Processes), len(p.Groups))
@@ -186,6 +199,7 @@ func (a *app) newProcessesCmd() *cobra.Command {
   wts processes
   wts processes --config ../other/.wts.yaml
 `),
+		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return a.withProject(func(p *model.Project) error {
 				tw := tabwriter.NewWriter(a.out, 0, 4, 2, ' ', 0)
@@ -211,6 +225,7 @@ func (a *app) newListCmd() *cobra.Command {
   wts list
 `),
 		Aliases: []string{"ls"},
+		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return a.withRuntime(cmd.Context(), func(rc *runtimeContext) error {
 				tw := tabwriter.NewWriter(a.out, 0, 4, 2, ' ', 0)
@@ -270,15 +285,15 @@ its own tmux pane.`),
 				if err := fn(rc.manager, cmd.Context(), args[0], opts); err != nil {
 					return err
 				}
-				verb := name
-				if verb == "start" {
-					verb = "switched to"
-				} else if verb == "switch" {
-					verb = "switched to"
-				} else {
-					verb += "ed"
+				target, _ := rc.project.ResolveTarget(opts.Process, opts.Group)
+				switch name {
+				case "start":
+					_, _ = fmt.Fprintf(a.out, "✓ started %s in %s\n", formatTargetLabel(target), args[0])
+				case "switch":
+					_, _ = fmt.Fprintf(a.out, "✓ switched %s to %s\n", formatTargetLabel(target), args[0])
+				case "restart":
+					_, _ = fmt.Fprintf(a.out, "✓ restarted %s in %s\n", formatTargetLabel(target), args[0])
 				}
-				_, _ = fmt.Fprintf(a.out, "✓ %s %s\n", verb, args[0])
 				return nil
 			})
 		},
@@ -305,6 +320,7 @@ func (a *app) newNextCmd() *cobra.Command {
   wts next --group dev
   wts next --attach
 `),
+		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			opts, err := runOptionsFromFlags(strings.TrimSpace(process), strings.TrimSpace(group), attach)
 			if err != nil {
@@ -335,6 +351,7 @@ func (a *app) newPrevCmd() *cobra.Command {
   wts prev --group dev
   wts prev --attach
 `),
+		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			opts, err := runOptionsFromFlags(strings.TrimSpace(process), strings.TrimSpace(group), attach)
 			if err != nil {
@@ -356,7 +373,6 @@ func (a *app) cycleAndSwitch(ctx context.Context, delta int, opts runtime.RunOpt
 			return fmt.Errorf("no git worktrees found (create one with: git worktree add ../branch-name)")
 		}
 
-		currentIdx := 0
 		rows, err := rc.manager.Status(ctx, "")
 		if err != nil {
 			return err
@@ -368,20 +384,35 @@ func (a *app) cycleAndSwitch(ctx context.Context, delta int, opts runtime.RunOpt
 				break
 			}
 		}
-		for i := range items {
-			if filepath.Clean(items[i].Dir) == activeDir {
-				currentIdx = i
-				break
-			}
-		}
-
-		next := (currentIdx + delta + len(items)) % len(items)
+		next := nextWorktreeIndex(items, activeDir, delta)
 		if err := rc.manager.Switch(ctx, items[next].Dir, opts); err != nil {
 			return err
 		}
 		_, _ = fmt.Fprintf(a.out, "✓ switched to %s\n", items[next].Name)
 		return nil
 	})
+}
+
+func nextWorktreeIndex(items []gitwt.Worktree, activeDir string, delta int) int {
+	if len(items) == 0 {
+		return -1
+	}
+	activeIdx := -1
+	if activeDir != "" {
+		for i := range items {
+			if filepath.Clean(items[i].Dir) == filepath.Clean(activeDir) {
+				activeIdx = i
+				break
+			}
+		}
+	}
+	if activeIdx == -1 {
+		if delta < 0 {
+			return len(items) - 1
+		}
+		return 0
+	}
+	return (activeIdx + delta + len(items)) % len(items)
 }
 
 func (a *app) newStopCmd() *cobra.Command {
@@ -411,13 +442,10 @@ With --all it stops all discovered worktree windows.`),
 `),
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if all && len(args) > 0 {
-				return fmt.Errorf("--all cannot be combined with a worktree selector")
-			}
 			proc := strings.TrimSpace(process)
 			groupName := strings.TrimSpace(group)
-			if proc != "" && groupName != "" {
-				return fmt.Errorf("--process and --group cannot be combined")
+			if err := validateStopSelection(all, proc, groupName, args); err != nil {
+				return err
 			}
 			return a.withRuntime(cmd.Context(), func(rc *runtimeContext) error {
 				switch {
@@ -455,6 +483,22 @@ With --all it stops all discovered worktree windows.`),
 	cmd.Flags().StringVar(&process, "process", "", "stop a specific process (requires worktree argument)")
 	cmd.Flags().StringVar(&group, "group", "", "stop all processes in a configured group (requires worktree argument)")
 	return cmd
+}
+
+func validateStopSelection(all bool, process, group string, args []string) error {
+	if process != "" && group != "" {
+		return fmt.Errorf("--process and --group cannot be combined")
+	}
+	if all && len(args) > 0 {
+		return fmt.Errorf("--all cannot be combined with a worktree selector")
+	}
+	if all && (process != "" || group != "") {
+		return fmt.Errorf("--all cannot be combined with --process or --group")
+	}
+	if len(args) == 0 && (process != "" || group != "") {
+		return fmt.Errorf("--process and --group require a worktree selector")
+	}
+	return nil
 }
 
 func (a *app) newStatusCmd() *cobra.Command {
@@ -554,6 +598,9 @@ func (a *app) newLogsCmd() *cobra.Command {
 `),
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if lines <= 0 {
+				return fmt.Errorf("--lines must be greater than zero")
+			}
 			return a.withRuntime(cmd.Context(), func(rc *runtimeContext) error {
 				output, err := rc.manager.Logs(cmd.Context(), args[0], strings.TrimSpace(process), lines)
 				if err != nil {
@@ -585,6 +632,7 @@ func (a *app) newPickCmd() *cobra.Command {
   wts pick --group dev
   wts pick --attach
 `),
+		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			opts, err := runOptionsFromFlags(strings.TrimSpace(process), strings.TrimSpace(group), attach)
 			if err != nil {
@@ -647,6 +695,7 @@ Exiting TUI does not stop running worktree processes.`),
 		Example: strings.TrimSpace(`
   wts tui
 `),
+		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return a.runTUICommand(cmd.Context())
 		},
@@ -668,6 +717,7 @@ func (a *app) newVersionCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "version",
 		Short: "Show wts version",
+		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if a.commit != "" {
 				_, _ = fmt.Fprintf(a.out, "wts %s (%s)\n", a.version, a.commit)
@@ -732,6 +782,7 @@ See 'wts init --help' or docs/detectors.md for the file format.`),
   wts init --force
   wts init --dry-run
 `),
+		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			targetDir := dir
 			if targetDir == "" {
@@ -751,6 +802,8 @@ See 'wts init --help' or docs/detectors.md for the file format.`),
 			if !force && !dryRun {
 				if _, err := os.Stat(outPath); err == nil {
 					return fmt.Errorf("%s already exists (use --force to overwrite)", config.DefaultConfigFile)
+				} else if !os.IsNotExist(err) {
+					return fmt.Errorf("inspect existing config: %w", err)
 				}
 			}
 
@@ -787,7 +840,7 @@ See 'wts init --help' or docs/detectors.md for the file format.`),
 				Processes: procs,
 			}
 
-			yamlData, err := marshalConfig(cfg)
+			yamlData, err := config.Marshal(cfg)
 			if err != nil {
 				return fmt.Errorf("marshal config: %w", err)
 			}
@@ -803,7 +856,7 @@ See 'wts init --help' or docs/detectors.md for the file format.`),
 				return nil
 			}
 
-			if err := os.WriteFile(outPath, yamlData, 0o644); err != nil {
+			if _, err := config.Save(outPath, cfg); err != nil {
 				return fmt.Errorf("write config: %w", err)
 			}
 			_, _ = fmt.Fprintf(a.out, "  Written %s\n", outPath)
@@ -820,24 +873,6 @@ See 'wts init --help' or docs/detectors.md for the file format.`),
 	cmd.Flags().StringVar(&dir, "dir", "", "project directory (default: current working directory)")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "print generated config without writing")
 	return cmd
-}
-
-func marshalConfig(cfg model.Config) ([]byte, error) {
-	var b strings.Builder
-	b.WriteString(fmt.Sprintf("version: %d\n", cfg.Version))
-	b.WriteString("defaults:\n")
-	b.WriteString(fmt.Sprintf("  stop_timeout_sec: %d\n", cfg.Defaults.StopTimeoutSec))
-	b.WriteString(fmt.Sprintf("  shell: %s\n", cfg.Defaults.Shell))
-	b.WriteString("processes:\n")
-	for _, p := range cfg.Processes {
-		b.WriteString(fmt.Sprintf("  - name: %s\n", p.Name))
-		if strings.ContainsAny(p.Command, "\"'${}|&;<>()") {
-			b.WriteString(fmt.Sprintf("    command: %q\n", p.Command))
-		} else {
-			b.WriteString(fmt.Sprintf("    command: %s\n", p.Command))
-		}
-	}
-	return []byte(b.String()), nil
 }
 
 func worktreeLabel(wt gitwt.Worktree) string {

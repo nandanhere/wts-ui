@@ -1,25 +1,21 @@
 package cli
 
 import (
-	"context"
-	"fmt"
-	"os"
-	"path/filepath"
+	"image/color"
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/bubbles/help"
-	"github.com/charmbracelet/bubbles/key"
-	"github.com/charmbracelet/bubbles/spinner"
-	"github.com/charmbracelet/bubbles/textinput"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/help"
+	"charm.land/bubbles/v2/key"
+	"charm.land/bubbles/v2/spinner"
+	"charm.land/bubbles/v2/textinput"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 
 	"github.com/xrehpicx/wts/internal/config"
 	"github.com/xrehpicx/wts/internal/gitwt"
 	"github.com/xrehpicx/wts/internal/model"
 	"github.com/xrehpicx/wts/internal/runtime"
-	"github.com/xrehpicx/wts/internal/tmux"
 )
 
 type actionDoneMsg struct{ text string }
@@ -30,8 +26,9 @@ type groupCreatedMsg struct {
 	target  model.Target
 }
 type statusRefreshedMsg struct {
-	rows []runtime.StatusRow
-	err  error
+	rows      []runtime.StatusRow
+	worktrees []gitwt.Worktree
+	err       error
 }
 type logsMsg struct {
 	dir           string
@@ -139,7 +136,7 @@ func newTUIKeyMap() tuiKeyMap {
 }
 
 func (k tuiKeyMap) ShortHelp() []key.Binding {
-	return []key.Binding{k.Next, k.Prev, k.Switch, k.Restart, k.Stop, k.StopAll, k.Attach, k.ProcPrev, k.ProcNext, k.Filter, k.CreateGroup, k.Help, k.Quit}
+	return []key.Binding{k.Next, k.Prev, k.ProcPrev, k.ProcNext, k.Switch, k.Stop, k.Help, k.Quit}
 }
 
 func (k tuiKeyMap) FullHelp() [][]key.Binding {
@@ -149,9 +146,10 @@ func (k tuiKeyMap) FullHelp() [][]key.Binding {
 	}
 }
 
-func newTUIStyles() tuiStyles {
-	ac := func(light, dark string) lipgloss.AdaptiveColor {
-		return lipgloss.AdaptiveColor{Light: light, Dark: dark}
+func newTUIStyles(isDark bool) tuiStyles {
+	lightDark := lipgloss.LightDark(isDark)
+	ac := func(light, dark string) color.Color {
+		return lightDark(lipgloss.Color(light), lipgloss.Color(dark))
 	}
 	return tuiStyles{
 		title: lipgloss.NewStyle().
@@ -213,23 +211,25 @@ func newTUIStyles() tuiStyles {
 	}
 }
 
+func (m *tuiModel) applyColorScheme(isDark bool) {
+	m.styles = newTUIStyles(isDark)
+	m.help.Styles = help.DefaultStyles(isDark)
+	m.filterInput.SetStyles(textinput.DefaultStyles(isDark))
+	m.createGroupInput.SetStyles(textinput.DefaultStyles(isDark))
+	lightDark := lipgloss.LightDark(isDark)
+	m.spinner.Style = lipgloss.NewStyle().Foreground(
+		lightDark(lipgloss.Color("#92400E"), lipgloss.Color("#FFD392")),
+	)
+}
+
 func newTUIModel(rc *runtimeContext) *tuiModel {
 	helpModel := help.New()
 	helpModel.ShowAll = false
-	// Use basic ANSI colors inherited from the terminal for the shortcut line.
-	helpModel.Styles.ShortKey = lipgloss.NewStyle().Foreground(lipgloss.Color("7")).Bold(true)
-	helpModel.Styles.ShortDesc = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
-	helpModel.Styles.ShortSeparator = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
-	helpModel.Styles.FullKey = helpModel.Styles.ShortKey
-	helpModel.Styles.FullDesc = helpModel.Styles.ShortDesc
-	helpModel.Styles.FullSeparator = helpModel.Styles.ShortSeparator
-
 	s := spinner.New()
 	s.Spinner = spinner.Spinner{
 		Frames: []string{"◒", "◐", "◓", "◑"},
 		FPS:    80 * time.Millisecond,
 	}
-	s.Style = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "#92400E", Dark: "#FFD392"})
 
 	ti := textinput.New()
 	ti.Prompt = ""
@@ -243,16 +243,17 @@ func newTUIModel(rc *runtimeContext) *tuiModel {
 		rc:                  rc,
 		keys:                newTUIKeyMap(),
 		help:                helpModel,
-		styles:              newTUIStyles(),
+		styles:              newTUIStyles(true),
 		spinner:             s,
 		filterInput:         ti,
-		targetIdx:           -1,
+		targetIdx:           0,
 		createGroupInput:    createGroupInput,
 		createGroupSelected: map[string]bool{},
 	}
+	m.applyColorScheme(true)
 
 	targets := rc.project.Targets()
-	if activeTarget, ok := rc.manager.ActiveTarget(context.Background()); ok {
+	if activeTarget, ok := rc.manager.ActiveTarget(rc.context()); ok {
 		reordered := make([]model.Target, 0, len(targets))
 		reordered = append(reordered, activeTarget)
 		for _, target := range targets {
@@ -270,7 +271,7 @@ func newTUIModel(rc *runtimeContext) *tuiModel {
 		for i := range m.rows {
 			if m.rows[i].Active {
 				m.idx = i
-				if activeTarget, ok := rc.manager.ActiveTarget(context.Background()); ok {
+				if activeTarget, ok := rc.manager.ActiveTarget(rc.context()); ok {
 					m.selectTarget(activeTarget)
 				}
 				break
@@ -281,11 +282,13 @@ func newTUIModel(rc *runtimeContext) *tuiModel {
 }
 
 func (m *tuiModel) Init() tea.Cmd {
-	return tea.Batch(m.fetchLogsCmd(), m.scheduleLogRefresh())
+	return tea.Batch(m.fetchLogsCmd(), m.scheduleLogRefresh(), tea.RequestBackgroundColor)
 }
 
 func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case tea.BackgroundColorMsg:
+		m.applyColorScheme(msg.IsDark())
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
@@ -339,6 +342,10 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if cur := m.current(); cur != nil {
 			currentDir = cur.Dir
 		}
+		if msg.worktrees != nil {
+			m.rc.worktrees = append([]gitwt.Worktree(nil), msg.worktrees...)
+			m.rc.manager.UpdateWorktrees(msg.worktrees)
+		}
 		m.rows = msg.rows
 		if len(msg.rows) == 0 {
 			m.idx = 0
@@ -361,7 +368,7 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	case tickLogsMsg:
 		return m, tea.Batch(m.refreshStatusCmd(), m.fetchLogsCmd(), m.scheduleLogRefresh())
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		if m.createGroupMode {
 			return m.updateCreateGroupKeys(msg)
 		}
@@ -418,457 +425,6 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m *tuiModel) View() string {
-	w, h := m.width, m.height
-	if w <= 0 {
-		w = 110
-	}
-	if h <= 0 {
-		h = 30
-	}
-
-	header := m.renderHeader(w)
-	footer := m.renderFooter(w)
-
-	contentH := max(6, h-lipgloss.Height(header)-lipgloss.Height(footer))
-	content := m.renderContent(w, contentH)
-
-	return lipgloss.JoinVertical(lipgloss.Left, header, content, footer)
-}
-
-// --- Render sections ---
-
-func (m *tuiModel) renderHeader(width int) string {
-	clamp := lipgloss.NewStyle().MaxWidth(width)
-	repoName := filepath.Base(m.rc.repoRoot)
-
-	topLeft := " " + m.styles.title.Render("wts") + m.styles.dimText.Render(" · "+repoName)
-	topRight := m.styles.subtitle.Render(fmt.Sprintf("%d worktrees", len(m.rows))) + " "
-
-	row1 := clamp.Render(headerRow(topLeft, topRight, width))
-
-	var botLeft, botRight string
-
-	if m.filterMode {
-		botLeft = " " + m.styles.dimText.Render("/") + " " + m.filterInput.View()
-		count := m.countFilterMatches(m.filterInput.Value())
-		botRight = m.styles.subtitle.Render(fmt.Sprintf("%d matching", count)) + " "
-	} else {
-		target, ok := m.selectedTarget()
-		active := m.activeRow()
-		var summary string
-		targetLabel := "no target"
-		if ok {
-			targetLabel = formatTargetLabel(target)
-		}
-		if active != nil {
-			wt := m.styles.metaValue.Render(active.Worktree)
-			branch := m.styles.dimText.Render(" [" + active.Branch + "]")
-			var dot string
-			nprocs := len(active.Processes)
-			if active.Running && active.Exited {
-				dot = m.styles.exitedDot.Render(" · ● exited")
-			} else if active.Running && nprocs > 1 {
-				dot = m.styles.runDot.Render(fmt.Sprintf(" · ● %d running", nprocs))
-			} else if active.Running {
-				dot = m.styles.runDot.Render(" · ● running")
-			} else {
-				dot = m.styles.stopDot.Render(" · ○ stopped")
-			}
-			summary = m.styles.title.Render(targetLabel) + m.styles.dimText.Render(" → ") + wt + branch + dot
-		} else if !ok {
-			summary = m.styles.dimText.Render("select a process or group with ←/→")
-		} else {
-			summary = m.styles.title.Render(targetLabel) + m.styles.dimText.Render(" (idle)")
-		}
-		botLeft = " " + summary
-
-		if m.loading {
-			botRight = m.styles.statusBusy.Render(m.spinner.View()+" "+m.loadingMsg) + "  "
-		} else if m.message != "" {
-			if m.messageIsErr {
-				botRight = m.styles.statusErr.Render("✗ "+m.message) + " "
-			} else {
-				botRight = m.styles.statusOk.Render("✓ "+m.message) + " "
-			}
-		}
-	}
-
-	row2 := clamp.Render(headerRow(botLeft, botRight, width))
-	sep := m.styles.separator.Render(strings.Repeat("─", width))
-
-	return lipgloss.JoinVertical(lipgloss.Left, row1, row2, sep)
-}
-
-func (m *tuiModel) renderContent(width, height int) string {
-	if len(m.rows) == 0 {
-		empty := m.styles.dimText.Render("No worktrees found. Create one with:")
-		hint := m.styles.metaValue.Render("  git worktree add ../branch-name")
-		return m.renderPanel("Worktrees", []string{empty, hint}, width, height, true)
-	}
-
-	spacer := 1
-	usableWidth := max(20, width-spacer)
-	leftWidth := max(28, (usableWidth*3)/10)
-	rightWidth := max(30, usableWidth-leftWidth)
-	if leftWidth+rightWidth > width {
-		rightWidth = usableWidth - leftWidth
-	}
-
-	left := m.renderListPanel(leftWidth, height)
-	right := m.renderDetailPanel(rightWidth, height)
-	if m.createGroupMode {
-		right = m.renderCreateGroupPanel(rightWidth, height)
-	}
-	left = lipgloss.NewStyle().MarginRight(spacer).Render(left)
-	return lipgloss.JoinHorizontal(lipgloss.Top, left, right)
-}
-
-func (m *tuiModel) renderListPanel(width, height int) string {
-	maxTextWidth := max(12, width-4)
-	lines := make([]string, 0, len(m.rows)*3)
-
-	// Compute display names, disambiguating when names collide.
-	nameCount := map[string]int{}
-	for _, r := range m.rows {
-		nameCount[r.Worktree]++
-	}
-	displayNames := make([]string, len(m.rows))
-	for i, r := range m.rows {
-		if nameCount[r.Worktree] > 1 {
-			parent := filepath.Base(filepath.Dir(r.Dir))
-			displayNames[i] = r.Worktree + " (" + parent + ")"
-		} else {
-			displayNames[i] = r.Worktree
-		}
-	}
-
-	for i := range m.rows {
-		row := m.rows[i]
-
-		// --- Line 1: cursor + dot + name + badge ---
-		cursor := "  "
-		if i == m.idx {
-			cursor = "▸ "
-		}
-
-		var dot string
-		if row.Prunable {
-			dot = m.styles.exitedDot.Render("⚠")
-		} else if m.loading && row.Dir == m.loadingDir {
-			dot = m.spinner.View()
-		} else if row.Running && row.Exited {
-			dot = m.styles.exitedDot.Render("●")
-		} else if row.Running {
-			dot = m.styles.runDot.Render("●")
-		} else {
-			dot = m.styles.stopDot.Render("○")
-		}
-
-		nameText := truncateLine(displayNames[i], max(1, maxTextWidth-6))
-		namePart := cursor + dot + " " + nameText
-
-		// Right-aligned badge.
-		procBadge := ""
-		if row.Prunable {
-			procBadge = "prunable"
-		} else if len(row.Processes) > 1 {
-			procBadge = fmt.Sprintf("×%d", len(row.Processes))
-		} else if row.Active {
-			procBadge = "★"
-		}
-
-		var line1 string
-		if procBadge != "" {
-			nameW := lipgloss.Width(namePart)
-			badgeW := lipgloss.Width(procBadge)
-			gap := max(1, maxTextWidth-nameW-badgeW)
-			line1 = namePart + strings.Repeat(" ", gap) + m.styles.dimText.Render(procBadge)
-		} else {
-			line1 = namePart
-		}
-
-		// --- Line 2: branch (indented, dimmed) + process names ---
-		branchIndent := "     "
-		availW := max(1, maxTextWidth-len(branchIndent))
-		branchText := truncateLine(row.Branch, availW)
-
-		var line2 string
-		if row.Prunable {
-			line2 = branchIndent + m.styles.dimText.Render(branchText)
-		} else if len(row.Processes) > 0 && row.Running {
-			// Show compact process status dots after branch.
-			procParts := make([]string, 0, len(row.Processes))
-			for _, p := range row.Processes {
-				var pdot string
-				if p.Running && p.Exited {
-					pdot = m.styles.exitedDot.Render("●")
-				} else if p.Running {
-					pdot = m.styles.runDot.Render("●")
-				} else {
-					pdot = m.styles.stopDot.Render("○")
-				}
-				procParts = append(procParts, pdot+" "+m.styles.dimText.Render(p.Name))
-			}
-			procInfo := strings.Join(procParts, m.styles.dimText.Render(" · "))
-			branchLine := m.styles.dimText.Render(branchText)
-			sep := m.styles.dimText.Render(" · ")
-			combined := branchLine + sep + procInfo
-			if lipgloss.Width(combined) > availW {
-				line2 = branchIndent + m.styles.dimText.Render(branchText)
-			} else {
-				line2 = branchIndent + combined
-			}
-		} else {
-			line2 = branchIndent + m.styles.dimText.Render(branchText)
-		}
-
-		// Apply selection styling padded to full width for uniform highlight.
-		if i == m.idx {
-			sel := m.styles.selectedRow.Width(maxTextWidth)
-			line1 = sel.Render(line1)
-			line2 = sel.Render(line2)
-		}
-
-		lines = append(lines, line1, line2)
-
-		// Add a blank separator between entries (except after the last one).
-		if i < len(m.rows)-1 {
-			lines = append(lines, "")
-		}
-	}
-
-	return m.renderPanel("Worktrees", lines, width, height, true)
-}
-
-func (m *tuiModel) renderDetailPanel(width, height int) string {
-	maxW := max(12, width-4)
-	target, ok := m.selectedTarget()
-	panelTitle := "←/→ to select process or group"
-	if ok {
-		panelTitle = formatTargetLabel(target)
-	}
-
-	row := m.current()
-	if row == nil {
-		return m.renderPanel(panelTitle,
-			[]string{m.styles.dimText.Render("No worktree selected.")},
-			width, height, false)
-	}
-
-	innerHeight := max(1, height-2)
-	capacity := innerHeight - 2
-	if capacity < 4 {
-		return m.renderPanel(panelTitle,
-			[]string{m.styles.dimText.Render(row.Worktree)},
-			width, height, false)
-	}
-
-	// Meta line: branch · dir
-	meta := m.styles.metaValue.Render(row.Branch) +
-		m.styles.dimText.Render(" · ") +
-		m.styles.dimText.Render(truncateLine(shortenPath(row.Dir), max(1, maxW-lipgloss.Width(row.Branch)-4)))
-
-	// Running processes summary
-	var procSummary string
-	if len(row.Processes) > 0 {
-		parts := make([]string, 0, len(row.Processes))
-		for _, p := range row.Processes {
-			var dot string
-			if p.Running && p.Exited {
-				dot = m.styles.exitedDot.Render("●")
-			} else if p.Running {
-				dot = m.styles.runDot.Render("●")
-			} else {
-				dot = m.styles.stopDot.Render("○")
-			}
-			parts = append(parts, dot+" "+p.Name)
-		}
-		procSummary = strings.Join(parts, m.styles.dimText.Render("  "))
-	} else if !row.Running {
-		procSummary = m.styles.stopDot.Render("○") + m.styles.dimText.Render(" no processes running")
-	}
-
-	// Command for selected process
-	detailLines := make([]string, 0, 3)
-	switch {
-	case !ok:
-		detailLines = append(detailLines, m.styles.dimText.Render("← / → to select a process or group"))
-	case target.Kind == model.TargetGroup:
-		members := truncateLine(strings.Join(target.ProcessNames, ", "), maxW)
-		detailLines = append(detailLines, m.styles.dimText.Render("members: ")+m.styles.metaValue.Render(members))
-	default:
-		procDef, err := m.rc.project.Process(target.Name)
-		if err != nil {
-			detailLines = append(detailLines, m.styles.statusErr.Render(truncateLine(err.Error(), maxW)))
-		} else {
-			detailLines = append(detailLines, m.styles.dimText.Render("▸ ")+m.styles.metaValue.Render(truncateLine(procDef.Command, maxW-2)))
-		}
-	}
-
-	// Output separator
-	label := " output "
-	if ok && target.Kind == model.TargetProcess {
-		label = " " + target.Name + " "
-	} else if ok {
-		label = " " + target.Name + " "
-	}
-	sepW := max(0, maxW-runeLen(label))
-	leftSep := max(0, sepW/5)
-	rightSep := max(0, sepW-leftSep)
-	outputSep := m.styles.separator.Render(strings.Repeat("─", leftSep)) +
-		m.styles.dimText.Render(label) +
-		m.styles.separator.Render(strings.Repeat("─", rightSep))
-
-	// Action hint
-	var hint string
-	targetNoun := "target"
-	if ok && target.Kind == model.TargetGroup {
-		targetNoun = "group"
-	} else if ok {
-		targetNoun = "process"
-	}
-	if row.Running && row.Exited {
-		hint = m.styles.dimText.Render("a attach tmux · r restart · x stop · " + targetNoun + " exited")
-	} else if row.Running {
-		hint = m.styles.dimText.Render("s/↵ add " + targetNoun + " · a attach tmux · r restart · x stop")
-	} else {
-		hint = m.styles.dimText.Render("s/↵ start " + targetNoun)
-	}
-
-	// Build lines: meta(1) + procs(1) + cmd(1) + sep(1) + [logs...] + hint(1)
-	lines := make([]string, 0, capacity)
-	lines = append(lines, meta)
-	if procSummary != "" {
-		lines = append(lines, procSummary)
-	}
-	lines = append(lines, detailLines...)
-	lines = append(lines, outputSep)
-
-	logSpace := capacity - len(lines) - 1
-	if logSpace > 0 {
-		cur := m.current()
-		if cur != nil && cur.Dir == m.logDir && len(m.logLines) > 0 {
-			if ok && target.Kind == model.TargetGroup {
-				lines = append(lines, m.renderGroupLogs(target, logSpace, maxW)...)
-			} else {
-				processName := ""
-				if ok {
-					processName = target.Name
-				}
-				processLogs := m.logLines[processName]
-				start := max(0, len(processLogs)-logSpace)
-				for _, l := range processLogs[start:] {
-					lines = append(lines, m.styles.logText.Render(truncateLine(l, maxW)))
-				}
-			}
-		} else if !row.Running {
-			lines = append(lines, m.styles.dimText.Render(targetNoun+" not running"))
-		}
-	}
-
-	for len(lines) < capacity-1 {
-		lines = append(lines, "")
-	}
-	lines = append(lines, hint)
-
-	return m.renderPanel(panelTitle, lines, width, height, false)
-}
-
-func (m *tuiModel) renderCreateGroupPanel(width, height int) string {
-	maxW := max(12, width-4)
-	innerHeight := max(1, height-2)
-	capacity := innerHeight - 2
-
-	lines := []string{
-		m.styles.dimText.Render("Create a group in " + filepath.Base(m.rc.project.ConfigPath)),
-		"",
-		m.styles.dimText.Render("name"),
-		m.renderCreateGroupNameLine(maxW),
-		"",
-		m.styles.dimText.Render("members"),
-	}
-
-	processNames := m.rc.project.ProcessNames()
-	if len(processNames) == 0 {
-		lines = append(lines, m.styles.statusErr.Render("No processes available"))
-	} else {
-		for i, name := range processNames {
-			cursor := "  "
-			if m.createGroupFocus == createGroupFocusMembers && i == m.createGroupCursor {
-				cursor = "▸ "
-			}
-			box := "[ ]"
-			if m.createGroupSelected[name] {
-				box = "[x]"
-			}
-			line := cursor + box + " " + name
-			if m.createGroupFocus == createGroupFocusMembers && i == m.createGroupCursor {
-				line = m.styles.modalFocus.Render(truncateLine(line, maxW))
-			} else {
-				line = m.styles.row.Render(truncateLine(line, maxW))
-			}
-			lines = append(lines, line)
-		}
-	}
-
-	lines = append(lines, "")
-	lines = append(lines, m.styles.dimText.Render("tab switch focus · space toggle member · enter save · esc cancel"))
-
-	if len(lines) > capacity {
-		lines = lines[:capacity]
-	}
-	for len(lines) < capacity {
-		lines = append(lines, "")
-	}
-
-	return m.styles.modalBorder.Width(width).Render(strings.Join(append([]string{m.styles.panelTitle.Render("Create Group"), ""}, lines...), "\n"))
-}
-
-func (m *tuiModel) renderCreateGroupNameLine(maxW int) string {
-	line := m.createGroupInput.View()
-	if strings.TrimSpace(line) == "" {
-		line = m.styles.dimText.Render("group name")
-	}
-	line = truncateLine(line, maxW)
-	if m.createGroupFocus == createGroupFocusName {
-		return m.styles.modalFocus.Render(line)
-	}
-	return m.styles.row.Render(line)
-}
-
-func (m *tuiModel) renderPanel(title string, lines []string, width, height int, focused bool) string {
-	innerHeight := max(1, height-2)
-
-	content := make([]string, 0, innerHeight)
-	content = append(content, m.styles.panelTitle.Render(title))
-	content = append(content, "")
-	for _, line := range lines {
-		content = append(content, line)
-		if len(content) >= innerHeight {
-			break
-		}
-	}
-	for len(content) < innerHeight {
-		content = append(content, "")
-	}
-
-	border := m.styles.panelBorder
-	if focused {
-		border = m.styles.panelFocus
-	}
-	return border.Width(width).Render(strings.Join(content, "\n"))
-}
-
-func (m *tuiModel) renderFooter(width int) string {
-	m.help.Width = max(20, width)
-	helpView := m.help.ShortHelpView(m.keys.ShortHelp())
-	if m.showAll {
-		helpView = m.help.FullHelpView(m.keys.FullHelp())
-	}
-	return " " + helpView
-}
-
 // --- Navigation ---
 
 func (m *tuiModel) next() {
@@ -908,6 +464,30 @@ func (m *tuiModel) selectedTarget() (model.Target, bool) {
 		return model.Target{}, false
 	}
 	return m.targets[m.targetIdx], true
+}
+
+func targetProcessState(row *runtime.StatusRow, target model.Target) (managed, exited bool) {
+	if row == nil || target.Name == "" {
+		return false, false
+	}
+	members := make(map[string]struct{}, max(1, len(target.ProcessNames)))
+	for _, name := range target.ProcessNames {
+		members[name] = struct{}{}
+	}
+	if len(members) == 0 {
+		members[target.Name] = struct{}{}
+	}
+	allExited := true
+	for _, process := range row.Processes {
+		if _, matches := members[process.Name]; !matches {
+			continue
+		}
+		managed = true
+		if !process.Exited {
+			allExited = false
+		}
+	}
+	return managed, managed && allExited
 }
 
 func (m *tuiModel) selectTarget(target model.Target) {
@@ -1037,8 +617,8 @@ func (m *tuiModel) enterCreateGroupMode() tea.Cmd {
 	return m.createGroupInput.Focus()
 }
 
-func (m *tuiModel) updateCreateGroupKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.Type {
+func (m *tuiModel) updateCreateGroupKeys(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	switch msg.Code {
 	case tea.KeyEsc:
 		m.createGroupMode = false
 		m.createGroupSelected = map[string]bool{}
@@ -1057,7 +637,7 @@ func (m *tuiModel) updateCreateGroupKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	if m.createGroupFocus == createGroupFocusMembers {
-		switch msg.Type {
+		switch msg.Code {
 		case tea.KeyUp:
 			if len(m.rc.project.Processes) > 0 {
 				m.createGroupCursor = (m.createGroupCursor - 1 + len(m.rc.project.Processes)) % len(m.rc.project.Processes)
@@ -1144,8 +724,8 @@ func (m *tuiModel) enterFilterMode() tea.Cmd {
 	return m.filterInput.Focus()
 }
 
-func (m *tuiModel) updateFilterKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.Type {
+func (m *tuiModel) updateFilterKeys(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	switch msg.Code {
 	case tea.KeyEnter:
 		m.filterMode = false
 		m.filterInput.Blur()
@@ -1172,9 +752,11 @@ func (m *tuiModel) updateFilterKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (m *tuiModel) filterProcesses(query string) {
 	if query == "" {
+		m.targetIdx = m.preFilterIdx
 		return
 	}
 	q := strings.ToLower(query)
+	m.targetIdx = -1
 	for i, target := range m.targets {
 		if strings.Contains(strings.ToLower(formatTargetLabel(target)), q) {
 			m.targetIdx = i
@@ -1195,311 +777,4 @@ func (m *tuiModel) countFilterMatches(query string) int {
 		}
 	}
 	return count
-}
-
-// --- Async actions ---
-
-func (m *tuiModel) switchCurrentCmd() tea.Cmd {
-	row := m.current()
-	if row == nil {
-		return nil
-	}
-	target, ok := m.selectedTarget()
-	if !ok {
-		m.message = "select a process or group first with ←/→"
-		m.messageIsErr = true
-		return nil
-	}
-	dir, name := row.Dir, row.Worktree
-	m.loading = true
-	m.loadingDir = dir
-
-	// If the worktree has at least one live process, use Start (additive).
-	// Otherwise use Switch (preemptive: stops the other active worktree).
-	useAdditive := row.Running && !row.Exited
-	if useAdditive {
-		m.loadingMsg = "starting " + formatTargetLabel(target) + " in " + name + "..."
-	} else {
-		m.loadingMsg = "switching " + formatTargetLabel(target) + " to " + name + "..."
-	}
-
-	action := func() tea.Msg {
-		opts := runOptionsForTarget(target)
-		var err error
-		if useAdditive {
-			err = m.rc.manager.Start(context.Background(), dir, opts)
-		} else {
-			err = m.rc.manager.Switch(context.Background(), dir, opts)
-		}
-		if err != nil {
-			return actionErrMsg{err: err}
-		}
-		if useAdditive {
-			return actionDoneMsg{text: "started " + formatTargetLabel(target) + " in " + name}
-		}
-		return actionDoneMsg{text: "switched " + formatTargetLabel(target) + " to " + name}
-	}
-	return tea.Batch(m.spinner.Tick, action)
-}
-
-func (m *tuiModel) restartCurrentCmd() tea.Cmd {
-	row := m.current()
-	if row == nil {
-		return nil
-	}
-	target, ok := m.selectedTarget()
-	if !ok {
-		m.message = "select a process or group first with ←/→"
-		m.messageIsErr = true
-		return nil
-	}
-	dir, name := row.Dir, row.Worktree
-	m.loading = true
-	m.loadingDir = dir
-	m.loadingMsg = "restarting " + formatTargetLabel(target) + " in " + name + "..."
-	action := func() tea.Msg {
-		if err := m.rc.manager.Restart(context.Background(), dir, runOptionsForTarget(target)); err != nil {
-			return actionErrMsg{err: err}
-		}
-		return actionDoneMsg{text: "restarted " + formatTargetLabel(target) + " in " + name}
-	}
-	return tea.Batch(m.spinner.Tick, action)
-}
-
-func (m *tuiModel) stopCurrentCmd() tea.Cmd {
-	row := m.current()
-	if row == nil {
-		return nil
-	}
-	target, ok := m.selectedTarget()
-	if !ok {
-		m.message = "select a process or group first with ←/→"
-		m.messageIsErr = true
-		return nil
-	}
-	dir, name := row.Dir, row.Worktree
-	m.loading = true
-	m.loadingDir = dir
-	m.loadingMsg = "stopping " + formatTargetLabel(target) + " in " + name + "..."
-	action := func() tea.Msg {
-		var err error
-		if target.Kind == model.TargetGroup {
-			err = m.rc.manager.StopGroup(context.Background(), dir, target.Name)
-		} else {
-			err = m.rc.manager.StopProcess(context.Background(), dir, target.Name)
-		}
-		if err != nil {
-			return actionErrMsg{err: err}
-		}
-		return actionDoneMsg{text: "stopped " + formatTargetLabel(target) + " in " + name}
-	}
-	return tea.Batch(m.spinner.Tick, action)
-}
-
-func (m *tuiModel) stopAllCurrentCmd() tea.Cmd {
-	row := m.current()
-	if row == nil {
-		return nil
-	}
-	dir, name := row.Dir, row.Worktree
-	m.loading = true
-	m.loadingDir = dir
-	m.loadingMsg = "stopping all in " + name + "..."
-	action := func() tea.Msg {
-		if err := m.rc.manager.StopWorktree(context.Background(), dir); err != nil {
-			return actionErrMsg{err: err}
-		}
-		return actionDoneMsg{text: "stopped all in " + name}
-	}
-	return tea.Batch(m.spinner.Tick, action)
-}
-
-func (m *tuiModel) attachCurrentCmd() tea.Cmd {
-	row := m.current()
-	if row == nil {
-		return nil
-	}
-	target, ok := m.selectedTarget()
-	if !ok {
-		m.message = "select a process or group first with ←/→"
-		m.messageIsErr = true
-		return nil
-	}
-	if !row.Running {
-		m.message = "selected worktree is not running"
-		m.messageIsErr = true
-		return nil
-	}
-
-	dir, name := row.Dir, row.Worktree
-	m.loading = true
-	m.loadingDir = dir
-	m.loadingMsg = "attaching " + formatTargetLabel(target) + " in " + name + "..."
-
-	action := func() tea.Msg {
-		spec, err := m.rc.manager.ResolveAttach(context.Background(), dir, runOptionsForTarget(target))
-		if err != nil {
-			return actionErrMsg{err: err}
-		}
-		return attachReadyMsg{spec: spec}
-	}
-	return tea.Batch(m.spinner.Tick, action)
-}
-
-// --- Log streaming ---
-
-func (m *tuiModel) fetchLogsCmd() tea.Cmd {
-	row := m.current()
-	if row == nil {
-		return nil
-	}
-	dir := row.Dir
-	target, ok := m.selectedTarget()
-	return func() tea.Msg {
-		linesByTarget := map[string][]string{}
-		if ok && target.Kind == model.TargetGroup {
-			for _, processName := range target.ProcessNames {
-				output, err := m.rc.manager.Logs(context.Background(), dir, processName, 200)
-				if err != nil {
-					continue
-				}
-				raw := strings.TrimRight(output, "\n")
-				if raw == "" {
-					continue
-				}
-				linesByTarget[processName] = strings.Split(raw, "\n")
-			}
-			return logsMsg{dir: dir, linesByTarget: linesByTarget}
-		}
-
-		processName := ""
-		if ok {
-			processName = target.Name
-		}
-		output, err := m.rc.manager.Logs(context.Background(), dir, processName, 200)
-		if err != nil {
-			return logsMsg{dir: dir, linesByTarget: linesByTarget}
-		}
-		raw := strings.TrimRight(output, "\n")
-		if raw == "" {
-			return logsMsg{dir: dir, linesByTarget: linesByTarget}
-		}
-		linesByTarget[processName] = strings.Split(raw, "\n")
-		return logsMsg{dir: dir, linesByTarget: linesByTarget}
-	}
-}
-
-func (m *tuiModel) scheduleLogRefresh() tea.Cmd {
-	return tea.Tick(2*time.Second, func(time.Time) tea.Msg {
-		return tickLogsMsg{}
-	})
-}
-
-// --- Status refresh ---
-
-func (m *tuiModel) refreshStatusCmd() tea.Cmd {
-	return func() tea.Msg {
-		if wts, err := gitwt.Discover(m.rc.repoRoot); err == nil {
-			m.rc.worktrees = wts
-			m.rc.manager.UpdateWorktrees(wts)
-		}
-		rows, err := m.rc.manager.Status(context.Background(), "")
-		return statusRefreshedMsg{rows: rows, err: err}
-	}
-}
-
-func (m *tuiModel) refreshStatus() {
-	currentDir := ""
-	if cur := m.current(); cur != nil {
-		currentDir = cur.Dir
-	}
-
-	rows, err := m.rc.manager.Status(context.Background(), "")
-	if err != nil {
-		m.rows = nil
-		m.message = err.Error()
-		m.messageIsErr = true
-		return
-	}
-	m.rows = rows
-	if len(rows) == 0 {
-		m.idx = 0
-		return
-	}
-	for i := range rows {
-		if rows[i].Dir == currentDir {
-			m.idx = i
-			return
-		}
-	}
-	if m.idx >= len(rows) {
-		m.idx = len(rows) - 1
-	}
-}
-
-// --- Quit info ---
-
-func (m *tuiModel) buildQuitInfo() {
-	var running []runtime.StatusRow
-	for _, row := range m.rows {
-		if row.Running {
-			running = append(running, row)
-		}
-	}
-	if len(running) == 0 {
-		return
-	}
-
-	session := m.rc.manager.Session()
-	var b strings.Builder
-	b.WriteString("\n  Processes still running in session \"" + session + "\":\n\n")
-	for _, row := range running {
-		window := tmux.WindowName(row.Dir)
-		mark := "●"
-		if row.Active {
-			mark = "★"
-		}
-		b.WriteString(fmt.Sprintf("    %s %s [%s]\n", mark, row.Worktree, row.Branch))
-		b.WriteString(fmt.Sprintf("      tmux attach -t %s \\; select-window -t %s:%s\n\n", session, session, window))
-	}
-	m.quitInfo = b.String()
-}
-
-// --- Helpers ---
-
-func shortenPath(p string) string {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return p
-	}
-	if strings.HasPrefix(p, home) {
-		return "~" + p[len(home):]
-	}
-	return p
-}
-
-func truncateLine(s string, width int) string {
-	if width <= 0 {
-		return ""
-	}
-	if runeLen(s) <= width {
-		return s
-	}
-	r := []rune(s)
-	if width <= 3 {
-		return string(r[:width])
-	}
-	return string(r[:width-3]) + "..."
-}
-
-func runeLen(s string) int {
-	return len([]rune(s))
-}
-
-func headerRow(left, right string, width int) string {
-	gap := width - lipgloss.Width(left) - lipgloss.Width(right)
-	if gap >= 1 {
-		return left + strings.Repeat(" ", gap) + right
-	}
-	return left
 }

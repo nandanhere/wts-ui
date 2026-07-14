@@ -1,7 +1,6 @@
 package gitwt
 
 import (
-	"bufio"
 	"bytes"
 	"fmt"
 	"os"
@@ -32,7 +31,7 @@ func Discover(repoRoot string) ([]Worktree, error) {
 		return nil, fmt.Errorf("resolve repo root: %w", err)
 	}
 
-	cmd := exec.Command("git", "-C", root, "worktree", "list", "--porcelain")
+	cmd := exec.Command("git", "-C", root, "worktree", "list", "--porcelain", "-z")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		msg := strings.TrimSpace(string(out))
@@ -112,9 +111,6 @@ func Resolve(items []Worktree, selector string) (*Worktree, error) {
 }
 
 func parsePorcelain(data []byte) ([]Worktree, error) {
-	scanner := bufio.NewScanner(bytes.NewReader(data))
-	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-
 	items := []Worktree{}
 	var current *Worktree
 
@@ -122,7 +118,6 @@ func parsePorcelain(data []byte) ([]Worktree, error) {
 		if current == nil {
 			return nil
 		}
-		current.Dir = strings.TrimSpace(current.Dir)
 		if current.Dir == "" {
 			return fmt.Errorf("invalid git worktree output: missing worktree path")
 		}
@@ -141,8 +136,12 @@ func parsePorcelain(data []byte) ([]Worktree, error) {
 		return nil
 	}
 
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
+	separator := []byte{'\n'}
+	if bytes.IndexByte(data, 0) >= 0 {
+		separator = []byte{0}
+	}
+	for _, field := range bytes.Split(data, separator) {
+		line := strings.TrimSuffix(string(field), "\r")
 		if line == "" {
 			if err := flush(); err != nil {
 				return nil, err
@@ -154,7 +153,7 @@ func parsePorcelain(data []byte) ([]Worktree, error) {
 			if err := flush(); err != nil {
 				return nil, err
 			}
-			current = &Worktree{Dir: strings.TrimSpace(strings.TrimPrefix(line, "worktree "))}
+			current = &Worktree{Dir: strings.TrimPrefix(line, "worktree ")}
 			continue
 		}
 
@@ -164,20 +163,17 @@ func parsePorcelain(data []byte) ([]Worktree, error) {
 
 		switch {
 		case strings.HasPrefix(line, "HEAD "):
-			current.Head = strings.TrimSpace(strings.TrimPrefix(line, "HEAD "))
+			current.Head = strings.TrimPrefix(line, "HEAD ")
 		case strings.HasPrefix(line, "branch "):
-			current.Branch = strings.TrimSpace(strings.TrimPrefix(line, "branch "))
+			current.Branch = strings.TrimPrefix(line, "branch ")
 		case line == "bare":
 			current.Bare = true
 		case line == "detached":
 			current.Detached = true
 		case strings.HasPrefix(line, "prunable "):
 			current.Prunable = true
-			current.PrunableReason = strings.TrimSpace(strings.TrimPrefix(line, "prunable "))
+			current.PrunableReason = strings.TrimPrefix(line, "prunable ")
 		}
-	}
-	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("parse git worktree output: %w", err)
 	}
 	if err := flush(); err != nil {
 		return nil, err

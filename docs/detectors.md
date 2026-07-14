@@ -44,7 +44,7 @@ processes:
 | `description`        | no       | Human-readable description |
 | `match.files`        | yes      | List of files that must **all** exist for this detector to match |
 | `processes`          | yes      | List of process entries to generate |
-| `processes[].name`   | yes      | Process name (alphanumeric, `.`, `_`, `-`) |
+| `processes[].name`   | yes      | Process name (alphanumeric, `.`, `_`, `-`) for custom detectors |
 | `processes[].command` | yes     | Shell command to run |
 
 ### Rules
@@ -53,7 +53,10 @@ processes:
   detector to trigger.
 - Custom detectors run **after** all built-in detectors, so a built-in match
   takes priority.
-- Invalid YAML files or files missing required fields are silently skipped.
+- Invalid detector files stop detection with a filename and validation error so
+  the configuration can be repaired instead of being silently ignored.
+- Unknown fields, duplicate detector/process names, absolute match paths, and
+  paths that escape the project directory are rejected.
 - File extension must be `.yaml` or `.yml`.
 
 ### Examples
