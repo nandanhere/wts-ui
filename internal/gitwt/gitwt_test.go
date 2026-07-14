@@ -40,20 +40,23 @@ branch refs/heads/agent
 func TestResolveByNameAndDir(t *testing.T) {
 	t.Parallel()
 
+	root := t.TempDir()
+	repoDir := filepath.Join(root, "repo")
+	agentDir := filepath.Join(root, "repo-agent")
 	items := []Worktree{
-		{Name: "repo", Dir: filepath.Clean("/tmp/repo")},
-		{Name: "repo-agent", Dir: filepath.Clean("/tmp/repo-agent")},
+		{Name: "repo", Dir: repoDir},
+		{Name: "repo-agent", Dir: agentDir},
 	}
 
 	byName, err := Resolve(items, "repo-agent")
 	if err != nil {
 		t.Fatalf("resolve by name: %v", err)
 	}
-	if byName.Dir != filepath.Clean("/tmp/repo-agent") {
+	if byName.Dir != agentDir {
 		t.Fatalf("unexpected dir from name resolve: %q", byName.Dir)
 	}
 
-	byDir, err := Resolve(items, "/tmp/repo")
+	byDir, err := Resolve(items, repoDir)
 	if err != nil {
 		t.Fatalf("resolve by dir: %v", err)
 	}

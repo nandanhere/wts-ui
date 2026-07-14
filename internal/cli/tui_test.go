@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -209,9 +210,11 @@ func TestAttachKeyResolvesSelectedProcessPane(t *testing.T) {
 	t.Parallel()
 
 	project := testTUIProject()
-	worktrees := []gitwt.Worktree{{Name: "repo-main", Dir: "/tmp/repo-main", Branch: "main"}}
+	repoRoot := t.TempDir()
+	worktreeDir := filepath.Join(repoRoot, "repo-main")
+	worktrees := []gitwt.Worktree{{Name: "repo-main", Dir: worktreeDir, Branch: "main"}}
 	backend := newTUITestBackend()
-	window := tmux.WindowName("/tmp/repo-main")
+	window := tmux.WindowName(worktreeDir)
 	backend.windows[window] = true
 	backend.panes[window] = []tmux.PaneInfo{
 		{ID: "%0", Process: "api", Title: tmux.ProcessPaneTitle("api"), PID: "1000", Command: "node"},
@@ -220,9 +223,9 @@ func TestAttachKeyResolvesSelectedProcessPane(t *testing.T) {
 
 	rc := &runtimeContext{
 		project:   project,
-		repoRoot:  "/tmp/repo",
+		repoRoot:  repoRoot,
 		worktrees: worktrees,
-		manager:   runtime.NewManager(project, "/tmp/repo", worktrees, backend),
+		manager:   runtime.NewManager(project, repoRoot, worktrees, backend),
 	}
 	m := newTUIModel(rc)
 	m.selectTarget(model.Target{Kind: model.TargetProcess, Name: "web", ProcessNames: []string{"web"}})

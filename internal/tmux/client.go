@@ -503,6 +503,9 @@ func isMissingTmuxTarget(err error) bool {
 		return false
 	}
 	message := strings.ToLower(err.Error())
+	if strings.Contains(message, "error connecting to") && strings.Contains(message, "no such file or directory") {
+		return true
+	}
 	for _, fragment := range []string{
 		"can't find pane",
 		"can't find window",

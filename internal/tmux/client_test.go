@@ -56,6 +56,15 @@ func TestHasWindowDoesNotHideUnexpectedTmuxErrors(t *testing.T) {
 	}
 }
 
+func TestMissingLinuxTmuxSocketIsTreatedAsNoServer(t *testing.T) {
+	t.Parallel()
+
+	err := errors.New("error connecting to /tmp/tmux-1001/default (No such file or directory)")
+	if !isMissingTmuxTarget(err) {
+		t.Fatal("expected absent tmux socket to be treated as a missing server")
+	}
+}
+
 func TestEnsureSessionCreatesOnlyWhenSessionIsMissing(t *testing.T) {
 	t.Parallel()
 
