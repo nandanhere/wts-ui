@@ -68,21 +68,31 @@ func TestMissingLinuxTmuxSocketIsTreatedAsNoServer(t *testing.T) {
 func TestEnsureSessionCreatesOnlyWhenSessionIsMissing(t *testing.T) {
 	t.Parallel()
 
-	var calls []string
-	client := NewClient("tmux")
-	client.runner = runnerFunc(func(_ context.Context, _ string, args ...string) (string, error) {
-		calls = append(calls, strings.Join(args, " "))
-		if args[0] == "has-session" {
-			return "", errors.New("can't find session: session")
-		}
-		return "", nil
-	})
+	for _, message := range []string{
+		"can't find session: session",
+		"no such session: session",
+	} {
+		message := message
+		t.Run(message, func(t *testing.T) {
+			t.Parallel()
 
-	if err := client.EnsureSession(context.Background(), "session"); err != nil {
-		t.Fatalf("ensure session: %v", err)
-	}
-	if len(calls) != 2 || !strings.HasPrefix(calls[1], "new-session") {
-		t.Fatalf("unexpected tmux calls: %#v", calls)
+			var calls []string
+			client := NewClient("tmux")
+			client.runner = runnerFunc(func(_ context.Context, _ string, args ...string) (string, error) {
+				calls = append(calls, strings.Join(args, " "))
+				if args[0] == "has-session" {
+					return "", errors.New(message)
+				}
+				return "", nil
+			})
+
+			if err := client.EnsureSession(context.Background(), "session"); err != nil {
+				t.Fatalf("ensure session: %v", err)
+			}
+			if len(calls) != 2 || !strings.HasPrefix(calls[1], "new-session") {
+				t.Fatalf("unexpected tmux calls: %#v", calls)
+			}
+		})
 	}
 }
 

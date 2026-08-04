@@ -710,7 +710,7 @@ func TestStatusStoppedWorktreeHasNoProcesses(t *testing.T) {
 	}
 }
 
-func TestStatusDoesNotCreateTmuxSession(t *testing.T) {
+func TestStatusCreatesTmuxSession(t *testing.T) {
 	t.Parallel()
 
 	backend := newMockBackend()
@@ -718,8 +718,8 @@ func TestStatusDoesNotCreateTmuxSession(t *testing.T) {
 	if _, err := manager.Status(context.Background(), ""); err != nil {
 		t.Fatalf("status: %v", err)
 	}
-	if backend.ensureSessionCount != 0 {
-		t.Fatalf("status created a tmux session %d time(s)", backend.ensureSessionCount)
+	if backend.ensureSessionCount != 1 {
+		t.Fatalf("status ensured tmux session %d time(s); want 1", backend.ensureSessionCount)
 	}
 }
 

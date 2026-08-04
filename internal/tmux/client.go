@@ -510,6 +510,7 @@ func isMissingTmuxTarget(err error) bool {
 		"can't find pane",
 		"can't find window",
 		"can't find session",
+		"no such session",
 		"no server running",
 	} {
 		if strings.Contains(message, fragment) {

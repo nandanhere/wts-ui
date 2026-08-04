@@ -557,7 +557,7 @@ func (m *Manager) Logs(ctx context.Context, worktree string, processName string,
 }
 
 func (m *Manager) Status(ctx context.Context, worktree string) ([]StatusRow, error) {
-	if err := m.ensureTmux(ctx); err != nil {
+	if err := m.ensureReady(ctx); err != nil {
 		return nil, err
 	}
 
