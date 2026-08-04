@@ -327,6 +327,46 @@ func TestTUIViewStaysWithinTerminalBounds(t *testing.T) {
 	}
 }
 
+func TestWorktreeListScrollsToKeepSelectionVisible(t *testing.T) {
+	t.Parallel()
+
+	rows := make([]runtime.StatusRow, 12)
+	worktrees := make([]gitwt.Worktree, len(rows))
+	for i := range rows {
+		name := fmt.Sprintf("worktree-%02d", i)
+		dir := filepath.Join("/tmp", name)
+		rows[i] = runtime.StatusRow{Worktree: name, Dir: dir, Branch: "main"}
+		worktrees[i] = gitwt.Worktree{Name: name, Dir: dir, Branch: "main"}
+	}
+
+	project := testTUIProject()
+	m := newTUIModel(&runtimeContext{
+		project:   project,
+		repoRoot:  "/tmp/repo",
+		worktrees: worktrees,
+		manager:   runtime.NewManager(project, "/tmp/repo", worktrees, newTUITestBackend()),
+	})
+	m.rows = rows
+	m.idx = 8
+
+	panel := m.renderListPanel(48, 12)
+	if !strings.Contains(panel, "▸ ") || !strings.Contains(panel, "worktree-08") {
+		t.Fatalf("selected worktree was rendered outside the viewport:\n%s", panel)
+	}
+	if strings.Contains(panel, "worktree-00") {
+		t.Fatalf("viewport did not scroll away from the first worktree:\n%s", panel)
+	}
+	if m.listOffset == 0 {
+		t.Fatal("expected list viewport offset to advance")
+	}
+
+	m.idx = 0
+	panel = m.renderListPanel(48, 12)
+	if !strings.Contains(panel, "▸ ") || !strings.Contains(panel, "worktree-00") || m.listOffset != 0 {
+		t.Fatalf("viewport did not follow wrapped selection back to the start:\n%s", panel)
+	}
+}
+
 func TestCreateGroupViewHandlesTinyTerminal(t *testing.T) {
 	t.Parallel()
 

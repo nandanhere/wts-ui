@@ -72,6 +72,7 @@ const (
 type tuiModel struct {
 	rc                  *runtimeContext
 	idx                 int
+	listOffset          int
 	width               int
 	height              int
 	keys                tuiKeyMap

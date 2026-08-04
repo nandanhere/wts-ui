@@ -151,7 +151,11 @@ func (m *tuiModel) renderContent(width, height int) string {
 
 func (m *tuiModel) renderListPanel(width, height int) string {
 	maxTextWidth := max(1, width-m.styles.panelFocus.GetHorizontalFrameSize())
-	lines := make([]string, 0, len(m.rows)*3)
+	innerHeight := max(1, height-m.styles.panelFocus.GetVerticalFrameSize())
+	lineCapacity := max(1, innerHeight-2) // panel title and spacer
+	start, end := visibleWorktreeRange(len(m.rows), m.idx, m.listOffset, lineCapacity)
+	m.listOffset = start
+	lines := make([]string, 0, (end-start)*3)
 
 	// Compute display names, disambiguating when names collide.
 	nameCount := map[string]int{}
@@ -168,7 +172,7 @@ func (m *tuiModel) renderListPanel(width, height int) string {
 		}
 	}
 
-	for i := range m.rows {
+	for i := start; i < end; i++ {
 		row := m.rows[i]
 
 		// --- Line 1: cursor + dot + name + badge ---
@@ -257,13 +261,34 @@ func (m *tuiModel) renderListPanel(width, height int) string {
 
 		lines = append(lines, line1, line2)
 
-		// Add a blank separator between entries (except after the last one).
-		if i < len(m.rows)-1 {
+		// Add a blank separator between visible entries.
+		if i < end-1 {
 			lines = append(lines, "")
 		}
 	}
 
 	return m.renderPanel("Worktrees", lines, width, height, true)
+}
+
+func visibleWorktreeRange(total, selected, offset, lineCapacity int) (int, int) {
+	if total <= 0 {
+		return 0, 0
+	}
+
+	// Each worktree uses two content lines plus one separator. The final
+	// visible entry does not need a separator, hence the extra line here.
+	visible := max(1, (max(1, lineCapacity)+1)/3)
+	visible = min(visible, total)
+	selected = min(max(0, selected), total-1)
+	offset = min(max(0, offset), total-visible)
+
+	if selected < offset {
+		offset = selected
+	} else if selected >= offset+visible {
+		offset = selected - visible + 1
+	}
+
+	return offset, min(total, offset+visible)
 }
 
 func (m *tuiModel) renderDetailPanel(width, height int) string {
