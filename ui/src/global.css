@@ -1,0 +1,115 @@
+:root {
+  color-scheme: light;
+  --wts-font-sans:
+    -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif;
+  --wts-font-mono:
+    "SFMono-Regular", "Cascadia Code", Consolas, monospace;
+  --wts-ink: #17233a;
+  --wts-text: #344563;
+  --wts-muted: #5f6f86;
+  --wts-faint: #718096;
+  --wts-line: #d8dee8;
+  --wts-line-strong: #bec8d6;
+  --wts-surface: #ffffff;
+  --wts-surface-subtle: #f7f9fb;
+  --wts-surface-muted: #eef1f5;
+  --wts-surface-hover: #e8edf4;
+  --wts-canvas: #f2f4f7;
+  --wts-strong-surface: #172b4d;
+  --wts-on-accent: #ffffff;
+  --wts-on-primary: #ffffff;
+  --wts-blue: #0b63ce;
+  --wts-blue-dark: #084f9f;
+  --wts-blue-soft: #eaf2fc;
+  --wts-green: #157a55;
+  --wts-green-soft: #e8f5ef;
+  --wts-green-line: #b8dfcd;
+  --wts-amber: #8a5700;
+  --wts-amber-soft: #fff3d6;
+  --wts-amber-line: #ead39e;
+  --wts-red: #b9382f;
+  --wts-red-soft: #fff0ee;
+  --wts-red-line: #ebcac6;
+  --wts-chrome: rgba(255, 255, 255, 0.92);
+  --wts-chrome-highlight: rgba(255, 255, 255, 0.9);
+  --wts-selection-ink: #10223e;
+  --wts-selection: #bfd9fa;
+  --wts-focus-ring: 0 0 0 3px rgba(11, 99, 206, 0.2);
+  --wts-radius-sm: 6px;
+  --wts-radius-md: 9px;
+  --wts-radius-lg: 12px;
+  --wts-shadow-sm: 0 1px 2px rgba(20, 33, 54, 0.07);
+  --wts-shadow-md:
+    0 14px 38px rgba(20, 33, 54, 0.14),
+    0 2px 7px rgba(20, 33, 54, 0.08);
+  --wts-control-height: 44px;
+  --wts-control-height-compact: 44px;
+  --wts-control-active: translateY(1px);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+html[data-theme="dark"] {
+  color-scheme: dark;
+  --wts-ink: #f1f5fa;
+  --wts-text: #cbd5e2;
+  --wts-muted: #9caabd;
+  --wts-faint: #7f8da1;
+  --wts-line: #2c3747;
+  --wts-line-strong: #435066;
+  --wts-surface: #151b24;
+  --wts-surface-subtle: #1a222d;
+  --wts-surface-muted: #202a37;
+  --wts-surface-hover: #283547;
+  --wts-canvas: #0f141c;
+  --wts-strong-surface: #24344a;
+  --wts-on-accent: #f7fbff;
+  --wts-on-primary: #071a2e;
+  --wts-blue: #69adff;
+  --wts-blue-dark: #94c5ff;
+  --wts-blue-soft: #172c47;
+  --wts-green: #69d5a7;
+  --wts-green-soft: #143126;
+  --wts-green-line: #285d49;
+  --wts-amber: #f2b75f;
+  --wts-amber-soft: #352815;
+  --wts-amber-line: #6e5226;
+  --wts-red: #ff8e86;
+  --wts-red-soft: #391d21;
+  --wts-red-line: #733a3c;
+  --wts-chrome: rgba(18, 24, 33, 0.9);
+  --wts-chrome-highlight: rgba(255, 255, 255, 0.06);
+  --wts-selection-ink: #eef6ff;
+  --wts-selection: #244d7c;
+  --wts-focus-ring: 0 0 0 3px rgba(105, 173, 255, 0.28);
+  --wts-shadow-sm: 0 0 0 1px rgba(255, 255, 255, 0.025);
+  --wts-shadow-md: 0 0 0 1px rgba(255, 255, 255, 0.045);
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+  margin: 0;
+}
+
+body {
+  min-width: 320px;
+  color: var(--wts-ink);
+  background: var(--wts-canvas);
+  font-family: var(--wts-font-sans);
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+::selection {
+  color: var(--wts-selection-ink);
+  background: var(--wts-selection);
+}

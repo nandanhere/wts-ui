@@ -1,0 +1,8 @@
+{
+  "name": "wts-fixture-greeting-backend",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test"
+  }
+}

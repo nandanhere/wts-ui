@@ -1,0 +1,135 @@
+@import "@astryxdesign/core/reset.css" layer(reset);
+@import "@astryxdesign/core/astryx.css" layer(astryx-base);
+@import "@astryxdesign/theme-neutral/theme.css" layer(astryx-theme);
+@import "tailwindcss" layer(utilities);
+
+@layer reset, astryx-base, astryx-theme, utilities;
+
+@theme inline {
+  /* ── Background surfaces (zinc-based, Linear-inspired) ─────── */
+  --ink:        #0a0a0b;
+  --panel:      #111113;
+  --elevated:   #18181b;
+  --surface:    #1f1f23;
+  --border:     #27272a;
+  --borderSoft: #1f1f23;
+
+  /* ── Type (Cloudflare-inspired contrast) ────────────────────── */
+  --ink-text:   #f4f4f5;
+  --ink-subtle: #a1a1aa;
+  --ink-muted:  #71717a;
+
+  /* ── Accent (refined blue) ──────────────────────────────────── */
+  --accent:     #6b8cff;
+  --accent-dim: #5a7ae8;
+  --accent2:    #c084fc;
+  --success:    #22c55e;
+  --warn:       #eab308;
+  --danger:     #ef4444;
+}
+
+@theme inline {
+  --color-ink:        var(--ink);
+  --color-panel:      var(--panel);
+  --color-elevated:   var(--elevated);
+  --color-surface:    var(--surface);
+  --color-border:     var(--border);
+  --color-borderSoft: var(--border-soft);
+  --color-muted:      var(--ink-muted);
+  --color-subtle:     var(--ink-subtle);
+  --color-accent:     var(--accent);
+  --color-accentDim:  var(--accent-dim);
+  --color-accent2:    var(--accent2);
+  --color-success:    var(--success);
+  --color-warn:       var(--warn);
+  --color-danger:     var(--danger);
+  --font-mono: "JetBrains Mono", "SF Mono", ui-monospace, monospace;
+}
+
+body {
+  background: var(--ink);
+  color: var(--ink-text);
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font-feature-settings: "cv02", "cv03", "cv04", "cv11", "salt";
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+/* ── Animations ──────────────────────────────────────────── */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes slideUp {
+  from { opacity: 0; transform: translateY(12px) scale(0.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+@keyframes pulseDot {
+  0%, 100% { opacity: 0.4; transform: scale(1); }
+  50%      { opacity: 1;   transform: scale(1.3); }
+}
+@keyframes breathe {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(96,165,250,0); }
+  50%      { box-shadow: 0 0 0 4px rgba(96,165,250,0.08); }
+}
+
+.animate-in {
+  animation: fadeIn 0.35s ease both;
+}
+.animate-slide-up {
+  animation: slideUp 0.4s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-in,
+  .animate-slide-up,
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
+/* Semantic severity colors used across components */
+:root {
+  --severity-match: #34d399;
+  --severity-warning: #fbbf24;
+  --severity-error: #ef4444;
+  --severity-match-bg: rgba(52,211,153,0.1);
+  --severity-warning-bg: rgba(251,191,36,0.1);
+  --severity-error-bg: rgba(239,68,68,0.1);
+}
+
+/* ── Scrollbar ────────────────────────────────────────────── */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #1f222b; border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #2a2e3a; }
+
+/* Role chip tokens for docs-review */
+.chip-match {
+  --chip-fg: var(--severity-match);
+  --chip-bg: var(--severity-match-bg);
+  color: var(--chip-fg);
+  background: var(--chip-bg);
+}
+.chip-stale {
+  --chip-fg: var(--severity-warning);
+  --chip-bg: var(--severity-warning-bg);
+  color: var(--chip-fg);
+  background: var(--chip-bg);
+}
+.chip-missing,
+.chip-conflict {
+  --chip-fg: var(--severity-error);
+  --chip-bg: var(--severity-error-bg);
+  color: var(--chip-fg);
+  background: var(--chip-bg);
+}

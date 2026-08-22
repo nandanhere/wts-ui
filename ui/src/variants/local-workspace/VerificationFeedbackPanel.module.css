@@ -1,0 +1,188 @@
+.panel {
+  border: 1px solid var(--wts-line, #314159);
+  border-radius: 10px;
+  background: var(--wts-surface-subtle, #121c29);
+}
+
+.panel > summary {
+  display: flex;
+  min-height: 58px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 0 16px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.panel > summary::-webkit-details-marker {
+  display: none;
+}
+
+.panel > summary > span:first-child {
+  display: grid;
+  gap: 3px;
+}
+
+.panel > summary small,
+.panel > summary > span:last-child,
+.content > p,
+.threads > p {
+  color: var(--wts-faint, #92a1b7);
+  font-size: 12px;
+}
+
+.panel > summary > span:last-child {
+  border-radius: 999px;
+  padding: 4px 9px;
+  background: var(--wts-surface-muted, #223047);
+}
+
+.content {
+  display: grid;
+  gap: 14px;
+  padding: 0 16px 16px;
+  border-top: 1px solid var(--wts-line, #314159);
+}
+
+.content > p {
+  margin: 16px 0 0;
+}
+
+.form {
+  display: grid;
+  grid-template-columns: minmax(180px, 0.45fr) minmax(280px, 1fr) auto;
+  align-items: end;
+  gap: 12px;
+  padding-top: 16px;
+}
+
+.form label {
+  display: grid;
+  gap: 6px;
+  color: var(--wts-muted, #b2bfd1);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.form select,
+.form textarea {
+  box-sizing: border-box;
+  width: 100%;
+  border: 1px solid var(--wts-line-strong, #40516a);
+  border-radius: 7px;
+  padding: 9px 10px;
+  color: var(--wts-ink, #eef4ff);
+  background: var(--wts-surface, #0d1622);
+  font: inherit;
+}
+
+.form textarea {
+  min-height: 66px;
+  resize: vertical;
+  line-height: 1.45;
+}
+
+.form button,
+.error button,
+.threads button {
+  min-height: 36px;
+  border: 1px solid var(--wts-line-strong, #40516a);
+  border-radius: 7px;
+  padding: 0 12px;
+  color: var(--wts-ink, #eef4ff);
+  background: var(--wts-surface-muted, #223047);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.form > button {
+  border-color: var(--wts-blue, #68adff);
+  color: var(--wts-on-accent, #08111e);
+  background: var(--wts-blue, #68adff);
+}
+
+.form button:disabled,
+.threads button:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
+}
+
+.error,
+.inlineError {
+  color: var(--wts-red, #ff9ca5);
+}
+
+.error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.inlineError {
+  margin: 0;
+  font-size: 12px;
+}
+
+.threads {
+  display: grid;
+  gap: 8px;
+}
+
+.threads > p {
+  margin: 0;
+}
+
+.threads article {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px 12px;
+  border: 1px solid var(--wts-line, #314159);
+  border-radius: 8px;
+  padding: 12px;
+  background: var(--wts-surface, #0d1622);
+}
+
+.threads article[data-state="resolved"] {
+  opacity: 0.68;
+}
+
+.threads header {
+  display: flex;
+  grid-column: 1 / -1;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.threads header span {
+  color: var(--wts-faint, #92a1b7);
+  font-size: 11px;
+  text-transform: uppercase;
+}
+
+.threads p {
+  margin: 0;
+  color: var(--wts-muted, #c0cada);
+  font-size: 13px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+}
+
+.threads button {
+  align-self: end;
+}
+
+@media (max-width: 900px) {
+  .form {
+    grid-template-columns: 1fr;
+  }
+
+  .form > button {
+    justify-self: start;
+  }
+}

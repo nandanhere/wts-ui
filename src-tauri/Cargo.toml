@@ -1,0 +1,36 @@
+[package]
+name = "wts-desktop"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Native macOS shell for WTS"
+
+[lib]
+name = "wts_desktop"
+crate-type = ["lib", "cdylib", "staticlib"]
+
+[[bin]]
+name = "wts-desktop"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2.6.3", features = [] }
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tauri = { version = "2.11.5", features = [] }
+tauri-plugin-updater = "2.10.1"
+tracing.workspace = true
+tracing-subscriber.workspace = true
+url.workspace = true
+uuid.workspace = true
+wts-app = { path = "../crates/wts-app" }
+wts-core = { path = "../crates/wts-core" }
+wts-integrations = { path = "../crates/wts-integrations" }
+wts-store = { path = "../crates/wts-store" }
+
+[dev-dependencies]
+tempfile = "3"

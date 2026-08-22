@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-open-workspace-work-item"
+description = "Enables the open_workspace_work_item command without any pre-configured scope."
+commands.allow = ["open_workspace_work_item"]
+
+[[permission]]
+identifier = "deny-open-workspace-work-item"
+description = "Denies the open_workspace_work_item command without any pre-configured scope."
+commands.deny = ["open_workspace_work_item"]

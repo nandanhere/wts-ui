@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-open-workspace-in-vscode"
+description = "Enables the open_workspace_in_vscode command without any pre-configured scope."
+commands.allow = ["open_workspace_in_vscode"]
+
+[[permission]]
+identifier = "deny-open-workspace-in-vscode"
+description = "Denies the open_workspace_in_vscode command without any pre-configured scope."
+commands.deny = ["open_workspace_in_vscode"]

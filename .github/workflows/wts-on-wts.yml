@@ -1,0 +1,68 @@
+name: WTS on WTS
+
+on:
+  schedule:
+    - cron: "23 1 * * *"
+  workflow_dispatch:
+  release:
+    types:
+      - published
+
+permissions:
+  contents: read
+
+concurrency:
+  group: wts-on-wts-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  self-host:
+    name: Create and verify a WTS workspace with WTS
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+
+    steps:
+      - name: Check out WTS
+        uses: actions/checkout@v4
+
+      - name: Use Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.13.1
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+
+      - name: Use Rust 1.85
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.85.0
+
+      - name: Cache Rust builds
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install UI dependencies
+        run: npm ci --prefix ui
+
+      - name: Install Chromium and system dependencies
+        run: npm --prefix ui exec -- playwright install --with-deps chromium
+
+      - name: Build the production UI
+        run: npm --prefix ui run build
+
+      - name: Run WTS on WTS
+        env:
+          CI: "true"
+          WTS_SELFHOST_E2E_EVIDENCE_DIR: ${{ github.workspace }}/artifacts/selfhost-evidence
+        run: bash scripts/run-selfhost-e2e.sh
+
+      - name: Upload self-host failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: wts-on-wts-failure-${{ github.run_attempt }}
+          path: |
+            ui/playwright-report
+            ui/test-results
+            artifacts/selfhost-evidence
+          if-no-files-found: warn
+          retention-days: 14

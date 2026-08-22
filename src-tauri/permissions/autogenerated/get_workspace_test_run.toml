@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-get-workspace-test-run"
+description = "Enables the get_workspace_test_run command without any pre-configured scope."
+commands.allow = ["get_workspace_test_run"]
+
+[[permission]]
+identifier = "deny-get-workspace-test-run"
+description = "Denies the get_workspace_test_run command without any pre-configured scope."
+commands.deny = ["get_workspace_test_run"]

@@ -1,0 +1,18 @@
+[package]
+name = "wts-integrations"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Local integration discovery and bounded adapters for WTS"
+
+[dependencies]
+json5 = "0.4"
+reqwest = { version = "0.13.4", default-features = false, features = ["blocking", "json", "rustls"] }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+url.workspace = true
+
+[dev-dependencies]
+tempfile = "3"

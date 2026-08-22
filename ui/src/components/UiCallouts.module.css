@@ -1,0 +1,92 @@
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 2147483646;
+  pointer-events: none;
+  font-family: var(--wts-font-mono);
+}
+
+.outline {
+  position: fixed;
+  border: 1px solid #f05d23;
+  background: rgb(240 93 35 / 5%);
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 45%);
+  pointer-events: none;
+}
+
+.label {
+  position: fixed;
+  max-width: min(320px, calc(100vw - 16px));
+  min-height: 22px;
+  padding: 3px 7px;
+  overflow: hidden;
+  border: 1px solid #9f3512;
+  border-radius: 4px;
+  color: #fff;
+  background: #bc421a;
+  box-shadow: 0 2px 8px rgb(54 22 12 / 28%);
+  font: 600 11px/1.35 var(--wts-font-mono);
+  letter-spacing: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.exit:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: 2px;
+}
+
+.control {
+  position: fixed;
+  right: 12px;
+  bottom: 12px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  max-width: calc(100vw - 24px);
+  padding: 7px 8px 7px 10px;
+  border: 1px solid rgb(255 255 255 / 24%);
+  border-radius: 7px;
+  color: #fff;
+  background: #20242b;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 28%);
+  font: 11px/1.35 var(--wts-font-mono);
+  pointer-events: auto;
+}
+
+.control kbd {
+  padding: 1px 4px;
+  border: 1px solid rgb(255 255 255 / 28%);
+  border-radius: 3px;
+  color: #fff;
+  background: rgb(255 255 255 / 9%);
+  font: inherit;
+}
+
+.exit {
+  min-height: 26px;
+  padding: 3px 8px;
+  border: 1px solid rgb(255 255 255 / 28%);
+  border-radius: 4px;
+  color: #fff;
+  background: transparent;
+  font: inherit;
+  cursor: pointer;
+}
+
+.exit:hover {
+  background: rgb(255 255 255 / 10%);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .overlay {
+    animation: callouts-enter 100ms ease-out;
+  }
+}
+
+@keyframes callouts-enter {
+  from {
+    opacity: 0;
+  }
+}

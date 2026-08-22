@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-get-workspace-evidence"
+description = "Enables the get_workspace_evidence command without any pre-configured scope."
+commands.allow = ["get_workspace_evidence"]
+
+[[permission]]
+identifier = "deny-get-workspace-evidence"
+description = "Denies the get_workspace_evidence command without any pre-configured scope."
+commands.deny = ["get_workspace_evidence"]

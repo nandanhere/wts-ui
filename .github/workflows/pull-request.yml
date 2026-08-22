@@ -1,0 +1,74 @@
+name: Pull request
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: wts-pr-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  deterministic-and-critical-browser:
+    name: Deterministic contracts and critical browser flow
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out WTS
+        uses: actions/checkout@v4
+
+      - name: Use Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.13.1
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+
+      - name: Use Rust 1.85
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.85.0
+          components: clippy,rustfmt
+
+      - name: Cache Rust builds
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install Tauri Linux prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends \
+            libwebkit2gtk-4.1-dev \
+            build-essential \
+            curl \
+            wget \
+            file \
+            libxdo-dev \
+            libssl-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev
+
+      - name: Install UI dependencies
+        run: npm ci --prefix ui
+
+      - name: Install Chromium and system dependencies
+        run: npm --prefix ui exec -- playwright install --with-deps chromium
+
+      - name: Run the pull-request gate
+        env:
+          CI: "true"
+        run: bash scripts/test-pr.sh
+
+      - name: Upload browser failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pull-request-browser-failure-${{ github.run_attempt }}
+          path: |
+            ui/playwright-report
+            ui/test-results
+          if-no-files-found: warn
+          retention-days: 14

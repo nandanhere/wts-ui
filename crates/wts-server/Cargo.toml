@@ -1,0 +1,32 @@
+[package]
+name = "wts-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Loopback HTTP server for the WTS local application"
+
+[[bin]]
+name = "wtsd"
+path = "src/main.rs"
+
+[dependencies]
+axum.workspace = true
+hex.workspace = true
+rand = "0.8"
+serde.workspace = true
+serde_json.workspace = true
+subtle = "2"
+thiserror.workspace = true
+tokio = { workspace = true, features = ["sync"] }
+tower-http.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+uuid.workspace = true
+wts-app = { path = "../wts-app" }
+wts-core = { path = "../wts-core" }
+wts-integrations = { path = "../wts-integrations" }
+wts-store = { path = "../wts-store" }
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }

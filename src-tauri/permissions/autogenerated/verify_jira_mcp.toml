@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-verify-jira-mcp"
+description = "Enables the verify_jira_mcp command without any pre-configured scope."
+commands.allow = ["verify_jira_mcp"]
+
+[[permission]]
+identifier = "deny-verify-jira-mcp"
+description = "Denies the verify_jira_mcp command without any pre-configured scope."
+commands.deny = ["verify_jira_mcp"]

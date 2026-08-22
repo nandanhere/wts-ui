@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-verify-open-project"
+description = "Enables the verify_open_project command without any pre-configured scope."
+commands.allow = ["verify_open_project"]
+
+[[permission]]
+identifier = "deny-verify-open-project"
+description = "Denies the verify_open_project command without any pre-configured scope."
+commands.deny = ["verify_open_project"]

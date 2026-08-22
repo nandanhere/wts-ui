@@ -1,0 +1,66 @@
+# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+
+# dependencies
+/node_modules
+**/node_modules
+/ui/dist
+/.pnp
+.pnp.*
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/versions
+
+# testing
+/coverage
+/ui/playwright-report
+/ui/test-results
+
+# next.js
+/.next/
+/out/
+
+# production
+/build
+/target
+/src-tauri/binaries/wts-report-*
+/dist/
+/.tools/
+*.app.tar.gz
+*.dmg
+*.dmg.sha256
+*.sig
+
+# misc
+.DS_Store
+*.pem
+
+# debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# env files (can opt-in for committing if needed)
+.env*
+
+# vercel
+.vercel
+
+# typescript
+*.tsbuildinfo
+next-env.d.ts
+
+# local agent runtime configuration
+/.agents/
+/.codex/
+/.claude/
+/.opencode/
+
+# generated local knowledge graph and WTS state
+/graphify-out/
+/.wts/
+
+# invention notes may affect filing strategy; keep local until counsel approves
+/docs/*.private.md
