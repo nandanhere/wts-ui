@@ -83,13 +83,17 @@ describe("Extracted presentational components in isolation", () => {
 
   it("keeps only distinct workspace actions in one keyboard-accessible row", async () => {
     const user = userEvent.setup();
+    const openWorkspace = vi.fn();
+    const openWorkspaceInVscode = vi.fn();
     const openJira = vi.fn();
     const moveToParked = vi.fn();
 
     render(
       <WorkspaceCard
         workspace={sampleWorkspace}
-        onOpen={vi.fn()}
+        onOpen={openWorkspace}
+        onOpenWorkspace={openWorkspaceInVscode}
+        primaryActionLabel="Open WS-1 workspace details"
         issueAction={{ label: "Open Jira issue", onPress: openJira }}
         moveActions={[
           { label: "Move to Parked", onPress: moveToParked },
@@ -105,6 +109,12 @@ describe("Extracted presentational components in isolation", () => {
     ).toBeNull();
     expect(screen.queryByText("Open Jira")).toBeNull();
     expect(within(actions).queryByText("Open in VS Code")).toBeNull();
+
+    await user.click(
+      within(actions).getByRole("button", { name: "Open WS-1 in VS Code" }),
+    );
+    expect(openWorkspaceInVscode).toHaveBeenCalledOnce();
+    expect(openWorkspace).not.toHaveBeenCalled();
 
     await user.click(issueLink);
     expect(openJira).toHaveBeenCalledOnce();

@@ -1263,17 +1263,20 @@
 }
 
 .assignedReviewCard footer > strong {
-  display: grid;
-  width: 24px;
+  display: flex;
+  width: auto;
   height: 24px;
   flex: none;
-  place-items: center;
+  align-items: center;
+  gap: 4px;
   margin-left: auto;
+  padding: 0 6px;
   color: var(--wts-blue);
   background: var(--wts-surface-muted);
   border: 1px solid var(--line);
   border-radius: 4px;
   font-size: 12px;
+  white-space: nowrap;
 }
 
 .assignedReviewCard > small {
@@ -1415,8 +1418,18 @@
 }
 
 .cardMoveButton {
-  margin-left: auto;
   color: var(--wts-muted);
+}
+
+.cardOpenButton {
+  margin-left: auto;
+  color: var(--blue);
+  background: var(--wts-blue-soft);
+}
+
+.cardOpenButton:hover {
+  color: var(--wts-on-primary);
+  background: var(--blue);
 }
 
 .cardHeader,
@@ -1557,6 +1570,41 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.cardMergeRequestLink {
+  position: relative;
+  z-index: 2;
+  display: inline-flex;
+  min-height: 24px;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 4px;
+  color: inherit;
+  background: transparent;
+  border: 0;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 750;
+  line-height: 1.35;
+  cursor: pointer;
+}
+
+.cardMergeRequestLink:hover {
+  background: color-mix(in srgb, currentColor 10%, transparent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.cardMergeRequestLink:focus-visible {
+  outline: none;
+  box-shadow: var(--wts-focus-ring);
+}
+
+.cardMergeRequestStatus::before {
+  margin-right: 6px;
+  color: var(--wts-faint);
+  content: "·";
 }
 
 .cardDelivery span {
@@ -2075,6 +2123,67 @@
   outline: none;
 }
 
+.addRepositoryDialog {
+  width: min(620px, calc(100vw - 48px));
+  height: min(520px, calc(100dvh - 56px));
+  min-height: 430px;
+}
+
+.addRepositoryDialog .sourceForm {
+  display: grid;
+  gap: 16px;
+}
+
+.repositoryAdditionReview {
+  display: grid;
+  gap: 4px;
+  padding: 14px;
+  color: var(--wts-muted);
+  background: var(--wts-blue-soft);
+  border: 1px solid color-mix(in srgb, var(--wts-blue) 30%, var(--wts-line));
+  border-radius: var(--wts-radius-md);
+}
+
+.repositoryAdditionReview strong {
+  color: var(--wts-ink);
+}
+
+.repositoryAdditionReview small {
+  color: var(--wts-faint);
+}
+
+.repositoryIdentityReview {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin: 0;
+  padding: 12px;
+  background: var(--wts-canvas);
+  border: 1px solid var(--wts-line);
+  border-radius: var(--wts-radius-md);
+}
+
+.repositoryIdentityReview div {
+  min-width: 0;
+}
+
+.repositoryIdentityReview dt {
+  color: var(--wts-faint);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.repositoryIdentityReview dd {
+  overflow: hidden;
+  margin: 3px 0 0;
+  color: var(--wts-ink);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .dialogHeader {
   display: flex;
   flex: 0 0 auto;
@@ -2435,7 +2544,7 @@
   font-size: 12px;
 }
 
-.inputWithIcon select {
+.inputWithIcon [data-select-trigger] {
   flex: 1;
   align-self: stretch;
   min-width: 0;
@@ -2448,7 +2557,7 @@
   cursor: pointer;
 }
 
-.inputWithIcon select:disabled {
+.inputWithIcon [data-select-trigger][data-disabled] {
   color: var(--wts-faint);
   cursor: not-allowed;
 }
@@ -2884,7 +2993,7 @@
   font-weight: 600;
 }
 
-.workspaceFolderPicker select,
+.workspaceFolderPicker [data-select-trigger],
 .workspaceFolderPicker input {
   width: 100%;
   min-width: 0;
@@ -2897,7 +3006,7 @@
   font-size: 12px;
 }
 
-.workspaceFolderPicker select {
+.workspaceFolderPicker [data-select-trigger] {
   padding-right: 30px;
 }
 
@@ -4332,7 +4441,7 @@
   font-weight: 650;
 }
 
-.compactSelect select {
+.compactSelect [data-select-trigger] {
   width: 100%;
   height: 36px;
   padding: 0 28px 0 10px;
@@ -4343,7 +4452,7 @@
   font-size: 12px;
 }
 
-.compactSelect select:focus-visible {
+.compactSelect [data-select-trigger][data-focus-visible] {
   border-color: var(--blue);
   box-shadow: 0 0 0 2px rgba(12, 102, 228, 0.16);
 }
@@ -4945,7 +5054,7 @@
 }
 
 .runtimePortRow input,
-.runtimePortRow select {
+.runtimePortRow [data-select-trigger] {
   width: 100%;
   height: 29px;
   min-width: 0;
@@ -4959,7 +5068,7 @@
 }
 
 .runtimePortRow input:focus-visible,
-.runtimePortRow select:focus-visible {
+.runtimePortRow [data-select-trigger][data-focus-visible] {
   border-color: var(--blue);
   box-shadow: var(--wts-focus-ring);
 }
@@ -5356,7 +5465,7 @@
   font-weight: 600;
 }
 
-.planningSettings select {
+.planningSettings [data-select-trigger] {
   width: 100%;
   min-width: 0;
   height: 34px;
@@ -7291,23 +7400,18 @@
 
 .reviewWorkspaceCallout {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 12px;
-  padding: 13px 14px;
-  background: color-mix(in srgb, var(--wts-blue) 8%, var(--wts-surface));
-  border: 1px solid color-mix(in srgb, var(--wts-blue) 38%, var(--wts-line));
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 24px;
+  padding: 22px 24px;
+  background: var(--wts-surface);
+  border: 1px solid var(--wts-line-strong);
   border-radius: var(--wts-radius-md);
+  box-shadow: var(--shadow-sm);
 }
 
-.reviewWorkspaceIcon {
-  display: grid;
-  width: 36px;
-  height: 36px;
-  color: var(--wts-blue);
-  background: var(--wts-blue-soft);
-  border-radius: var(--wts-radius-sm);
-  place-items: center;
+.reviewWorkspaceCallout[data-status="merged"] {
+  border-top-color: color-mix(in srgb, var(--wts-green) 65%, var(--wts-line));
 }
 
 .reviewWorkspaceCallout small,
@@ -7316,43 +7420,249 @@
   margin: 0;
 }
 
-.reviewWorkspaceCallout small {
+.reviewWorkspaceSummary {
+  min-width: 0;
+}
+
+.reviewWorkspaceMeta {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.reviewWorkspaceLink {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0;
   color: var(--wts-blue);
-  font-size: 10px;
+  background: transparent;
+  border: 0;
+  font-size: 12px;
   font-weight: 800;
   letter-spacing: 0.08em;
+  cursor: pointer;
+}
+
+.reviewWorkspaceLink:hover:not(:disabled),
+.reviewWorkspaceLink:focus-visible {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.reviewWorkspaceStatus {
+  display: inline-flex;
+  min-height: 18px;
+  align-items: center;
+  padding: 0 6px;
+  color: var(--wts-blue);
+  background: var(--wts-blue-soft);
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.reviewWorkspaceStatus[data-status="merged"] {
+  color: var(--wts-green);
+  background: color-mix(in srgb, var(--wts-green) 12%, transparent);
+}
+
+.reviewWorkspaceStatus[data-status="closed"] {
+  color: var(--wts-faint);
+  background: var(--wts-surface-muted);
 }
 
 .reviewWorkspaceCallout h2 {
-  margin-top: 2px;
+  margin-top: 12px;
+  color: var(--wts-ink);
+  font-size: 20px;
+  line-height: 1.3;
+}
+
+.reviewWorkspaceOutcome {
+  margin-top: 7px !important;
+  color: var(--wts-ink) !important;
+  font-size: 13px !important;
+  font-weight: 650;
+}
+
+.reviewWorkspaceByline,
+.reviewWorkspaceBranches {
+  margin-top: 8px !important;
+  color: var(--wts-muted);
+  font-size: 12px !important;
+}
+
+.reviewWorkspaceBranches {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.reviewWorkspaceBranches code {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.reviewWorkspaceActions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.reviewWorkspaceActions button {
+  display: inline-flex;
+  min-height: 34px;
+  align-items: center;
+  gap: 6px;
+  padding: 0 12px;
+  border-radius: var(--wts-radius-sm);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 750;
+  white-space: nowrap;
+}
+
+.reviewWorkspacePrimaryAction {
+  color: white;
+  background: var(--wts-blue);
+  border: 1px solid var(--wts-blue);
+}
+
+.reviewWorkspaceSecondaryAction {
+  color: var(--wts-ink);
+  background: var(--wts-surface-subtle);
+  border: 1px solid var(--wts-line-strong);
+}
+
+.reviewWorkspaceActions button:hover:not(:disabled) {
+  transform: translateY(-1px);
+}
+
+.reviewWorkspaceActions button:focus-visible {
+  outline: 0;
+  box-shadow: var(--wts-focus-ring);
+}
+
+.reviewContextPanel,
+.reviewScopePanel {
+  background: var(--wts-surface);
+  border: 1px solid var(--wts-line);
+  border-radius: var(--wts-radius-md);
+}
+
+.reviewContextPanel {
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+}
+
+.reviewContextIcon {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  color: var(--wts-blue);
+  background: var(--wts-blue-soft);
+  border-radius: var(--wts-radius-sm);
+  place-items: center;
+}
+
+.reviewContextPanel > span:nth-child(2) {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.reviewContextPanel small,
+.reviewScopePanel small {
+  color: var(--wts-faint);
+  font-size: 12px;
+  font-weight: 750;
+  letter-spacing: 0.06em;
+}
+
+.reviewContextPanel strong {
+  color: var(--wts-ink);
+  font-size: 13px;
+}
+
+.reviewContextPanel p {
+  margin: 0 0 0 6px;
+  color: var(--wts-muted);
+  font-size: 12px;
+}
+
+.reviewScopePanel > header {
+  display: flex;
+  align-items: center;
+  min-height: 50px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--wts-line);
+}
+
+.reviewScopePanel h2 {
+  margin: 2px 0 0;
   color: var(--wts-ink);
   font-size: 14px;
 }
 
-.reviewWorkspaceCallout p {
-  margin-top: 2px;
-  color: var(--wts-muted);
-  font-size: 11px;
-}
-
-.reviewWorkspaceCallout button {
-  display: inline-flex;
-  min-height: 32px;
+.reviewScopeRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
   align-items: center;
-  gap: 6px;
-  padding: 0 11px;
-  color: white;
-  background: var(--wts-blue);
-  border: 1px solid var(--wts-blue);
-  border-radius: var(--wts-radius-sm);
-  cursor: pointer;
-  font-size: 11px;
-  font-weight: 750;
+  gap: 16px;
+  min-height: 64px;
+  padding: 10px 16px;
 }
 
-.reviewWorkspaceCallout button:focus-visible {
-  outline: 0;
-  box-shadow: var(--wts-focus-ring);
+.reviewScopeRepository {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 9px;
+}
+
+.reviewScopeRepository > span:last-child {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.reviewScopeRepository strong,
+.reviewScopeRepository small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.reviewScopeWork {
+  color: var(--wts-muted);
+  font-size: 12px;
+}
+
+.reviewScopeRow > button {
+  display: inline-flex;
+  min-height: 30px;
+  align-items: center;
+  gap: 5px;
+  padding: 0 9px;
+  color: var(--wts-blue);
+  background: transparent;
+  border: 0;
+  border-radius: var(--wts-radius-sm);
+  font-size: 12px;
+  font-weight: 750;
+  cursor: pointer;
+}
+
+.reviewScopeRow > button:hover {
+  background: var(--wts-blue-soft);
 }
 
 .mainColumn {
@@ -7640,7 +7950,7 @@
   text-transform: uppercase;
 }
 
-.baseRecoveryControls select {
+.baseRecoveryControls [data-select-trigger] {
   height: 30px;
   padding: 0 28px 0 8px;
   color: var(--wts-ink);
@@ -7650,7 +7960,7 @@
   font: inherit;
 }
 
-.baseRecoveryControls select:focus-visible {
+.baseRecoveryControls [data-select-trigger][data-focus-visible] {
   outline: 2px solid var(--blue);
   outline-offset: 1px;
 }
@@ -9628,6 +9938,68 @@
   color: var(--wts-ink);
 }
 
+.repoRemoveButton {
+  display: inline-grid;
+  width: 24px;
+  height: 24px;
+  margin-left: auto;
+  padding: 0;
+  color: var(--wts-faint);
+  background: transparent;
+  border: 0;
+  border-radius: var(--wts-radius-sm);
+  cursor: pointer;
+  place-items: center;
+  transition: color 150ms ease-out, background 150ms ease-out;
+}
+
+.repoRemoveButton:hover:not(:disabled) {
+  color: var(--wts-red);
+  background: var(--wts-red-soft);
+}
+
+.repoRemoveButton:focus-visible {
+  outline: none;
+  box-shadow: var(--wts-focus-ring);
+}
+
+.repoRemoveButton:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.repositoryRemoveConfirm {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 14px;
+  color: var(--wts-muted);
+  background: var(--wts-red-soft);
+  border-top: 1px solid color-mix(in srgb, var(--wts-red) 25%, var(--wts-line));
+}
+
+.repositoryRemoveConfirm > span {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.repositoryRemoveConfirm > span:first-child {
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.repositoryRemoveConfirm strong {
+  color: var(--wts-ink);
+}
+
+.repositoryRemoveConfirm small {
+  color: var(--wts-muted);
+  line-height: 1.4;
+}
+
 .repositoryLink,
 .repoChangesLink {
   display: inline-flex;
@@ -9694,6 +10066,15 @@
   font-size: 12px;
   font-weight: 650;
   cursor: pointer;
+  text-decoration: none;
+}
+
+.repoDeliveryLink[data-status="merged"] {
+  color: var(--wts-green);
+}
+
+.repoDeliveryLink[data-status="closed"] {
+  color: var(--wts-muted);
 }
 
 .repoDeliveryFallback {
@@ -9701,6 +10082,30 @@
   justify-items: start;
   gap: 2px;
   min-width: 0;
+}
+
+.repoReviewLinks {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 3px;
+}
+
+.repoReviewChangesLink {
+  padding: 2px 4px;
+  color: var(--wts-muted);
+  background: transparent;
+  border: 0;
+  border-radius: var(--wts-radius-sm);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.repoReviewChangesLink:hover,
+.repoReviewChangesLink:focus-visible {
+  color: var(--wts-blue);
+  background: var(--wts-blue-soft);
 }
 
 .repoDeliveryFallback small {
@@ -9725,12 +10130,13 @@
   cursor: pointer;
 }
 
-.repoDeliveryLink:hover:not(:disabled),
+.repoDeliveryLink:hover:not(:disabled):not([aria-disabled="true"]),
 .repoDeliveryLink:focus-visible {
   background: var(--wts-blue-soft);
 }
 
-.repoDeliveryLink:disabled {
+.repoDeliveryLink:disabled,
+.repoDeliveryLink[aria-disabled="true"] {
   cursor: not-allowed;
   opacity: .5;
 }
@@ -9769,6 +10175,32 @@
   min-height: 28px;
   padding: 4px 9px;
   font-size: 12px;
+}
+
+.publishBranchField {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--wts-muted);
+  white-space: nowrap;
+}
+
+.publishBranchInput {
+  width: min(260px, 32vw);
+  min-height: 28px;
+  padding: 4px 8px;
+  border: 1px solid var(--wts-line-strong);
+  border-radius: 6px;
+  color: var(--wts-text);
+  background: var(--wts-surface);
+  font-family: var(--wts-font-mono);
+  font-size: 12px;
+}
+
+.publishBranchInput:focus {
+  border-color: var(--wts-accent);
+  outline: 2px solid color-mix(in srgb, var(--wts-accent) 24%, transparent);
+  outline-offset: 1px;
 }
 
 .repoBase {
@@ -11052,6 +11484,41 @@
 }
 
 @media (max-width: 760px) {
+  .reviewWorkspaceCallout {
+    grid-template-columns: 1fr;
+    align-items: stretch;
+    gap: 16px;
+    padding: 18px;
+  }
+
+  .reviewWorkspaceActions {
+    justify-content: flex-end;
+    flex-wrap: wrap;
+  }
+
+  .reviewContextPanel {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .reviewContextPanel p {
+    grid-column: 2;
+    margin-left: 0;
+  }
+
+  .reviewScopeRow {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .reviewScopeWork {
+    grid-column: 1;
+    padding-left: 37px;
+  }
+
+  .reviewScopeRow > button {
+    grid-column: 2;
+    grid-row: 1 / span 2;
+  }
+
   .chrome {
     grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
     padding-inline: 12px;

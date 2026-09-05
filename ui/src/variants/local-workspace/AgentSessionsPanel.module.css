@@ -189,7 +189,7 @@
   font-weight: 650;
 }
 
-.scheduleControl select {
+.scheduleControl [data-select-trigger] {
   min-height: 34px;
   padding: 0 28px 0 8px;
   color: var(--wts-ink);
@@ -201,7 +201,7 @@
   cursor: pointer;
 }
 
-.scheduleControl select:focus-visible {
+.scheduleControl [data-select-trigger][data-focus-visible] {
   outline: none;
   box-shadow: var(--wts-focus-ring);
 }
@@ -508,7 +508,7 @@
     flex: 1 1 180px;
   }
 
-  .scheduleControl select {
+  .scheduleControl [data-select-trigger] {
     flex: 1;
   }
 
@@ -643,7 +643,7 @@
   font-weight: 750;
 }
 
-.assignment select {
+.assignment [data-select-trigger] {
   min-width: 0;
   height: 36px;
   padding: 0 28px 0 8px;
@@ -656,12 +656,12 @@
   text-overflow: ellipsis;
 }
 
-.assignment select:focus-visible {
+.assignment [data-select-trigger][data-focus-visible] {
   outline: none;
   box-shadow: var(--wts-focus-ring);
 }
 
-.assignment select:disabled {
+.assignment [data-select-trigger][data-disabled] {
   color: var(--wts-faint);
   background: var(--wts-canvas);
 }

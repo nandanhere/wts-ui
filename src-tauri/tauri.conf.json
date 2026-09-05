@@ -40,7 +40,7 @@
       "capabilities": [
         "default"
       ],
-      "freezePrototype": true,
+      "freezePrototype": false,
       "dangerousDisableAssetCspModification": false,
       "csp": {
         "default-src": "'self' customprotocol: asset:",

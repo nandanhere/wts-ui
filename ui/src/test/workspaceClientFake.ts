@@ -23,6 +23,7 @@ import type {
   RuntimeAnalysisResult,
   SetupSnapshot,
   WorkspaceClient,
+  WorkspaceBranchPublicationResult,
   WorkspaceChangeRequestDraft,
   WorkspaceEvidence,
   WorkspaceList,
@@ -31,6 +32,9 @@ import type {
   WorkspaceRepositoryDiff,
   WorkspaceRepositoryFileReview,
   WorkspaceRepositoryReviewGraph,
+  WorkspaceRepositoryAdditionPreflight,
+  WorkspaceRepositoryAdditionResult,
+  WorkspaceRepositoryRemovalResult,
   WorkspaceRepositoryAlignmentPreflight,
   WorkspaceRepositoryAlignmentResult,
   WorkspaceRepositorySyncResult,
@@ -137,12 +141,16 @@ export function fakeWorkspaceClient(options: {
   repositoryFileReview?: WorkspaceRepositoryFileReview;
   repositoryReviewGraph?: WorkspaceRepositoryReviewGraph | null;
   repositorySync?: WorkspaceRepositorySyncResult;
+  repositoryAdditionPreflight?: WorkspaceRepositoryAdditionPreflight;
+  repositoryAddition?: WorkspaceRepositoryAdditionResult;
+  repositoryRemoval?: WorkspaceRepositoryRemovalResult;
   repositoryAlignmentPreflight?: WorkspaceRepositoryAlignmentPreflight;
   repositoryAlignment?: WorkspaceRepositoryAlignmentResult;
   materialize?: MaterializeWorkspaceResult;
   open?: OpenWorkspaceResult;
   repositoryBaseOpen?: OpenRepositoryBaseResult;
   changeRequestDraft?: WorkspaceChangeRequestDraft;
+  branchPublication?: WorkspaceBranchPublicationResult;
   changeRequestOpen?: OpenWorkspaceChangeRequestResult;
   reindex?: GraphIndexResult;
   removalPreflight?: WorkspaceRemovalPreflight;
@@ -334,6 +342,17 @@ export function fakeWorkspaceClient(options: {
   const syncWorkspaceRepository = vi
     .fn<WorkspaceClient["syncWorkspaceRepository"]>()
     .mockRejectedValue(new Error("Unexpected syncWorkspaceRepository call"));
+  const preflightWorkspaceRepositoryAddition = vi
+    .fn<WorkspaceClient["preflightWorkspaceRepositoryAddition"]>()
+    .mockRejectedValue(
+      new Error("Unexpected preflightWorkspaceRepositoryAddition call"),
+    );
+  const addWorkspaceRepository = vi
+    .fn<WorkspaceClient["addWorkspaceRepository"]>()
+    .mockRejectedValue(new Error("Unexpected addWorkspaceRepository call"));
+  const removeWorkspaceRepository = vi
+    .fn<WorkspaceClient["removeWorkspaceRepository"]>()
+    .mockRejectedValue(new Error("Unexpected removeWorkspaceRepository call"));
   const preflightWorkspaceRepositoryAlignment = vi
     .fn<WorkspaceClient["preflightWorkspaceRepositoryAlignment"]>()
     .mockRejectedValue(
@@ -352,6 +371,9 @@ export function fakeWorkspaceClient(options: {
   const prepareWorkspaceChangeRequest = vi
     .fn<WorkspaceClient["prepareWorkspaceChangeRequest"]>()
     .mockRejectedValue(new Error("Unexpected prepareWorkspaceChangeRequest call"));
+  const publishWorkspaceChangeRequestBranch = vi
+    .fn<WorkspaceClient["publishWorkspaceChangeRequestBranch"]>()
+    .mockRejectedValue(new Error("Unexpected publishWorkspaceChangeRequestBranch call"));
   const openWorkspaceChangeRequestDraft = vi
     .fn<WorkspaceClient["openWorkspaceChangeRequestDraft"]>()
     .mockRejectedValue(new Error("Unexpected openWorkspaceChangeRequestDraft call"));
@@ -525,6 +547,17 @@ export function fakeWorkspaceClient(options: {
   if (options.repositorySync) {
     syncWorkspaceRepository.mockResolvedValue(options.repositorySync);
   }
+  if (options.repositoryAdditionPreflight) {
+    preflightWorkspaceRepositoryAddition.mockResolvedValue(
+      options.repositoryAdditionPreflight,
+    );
+  }
+  if (options.repositoryAddition) {
+    addWorkspaceRepository.mockResolvedValue(options.repositoryAddition);
+  }
+  if (options.repositoryRemoval) {
+    removeWorkspaceRepository.mockResolvedValue(options.repositoryRemoval);
+  }
   if (options.repositoryAlignmentPreflight) {
     preflightWorkspaceRepositoryAlignment.mockResolvedValue(
       options.repositoryAlignmentPreflight,
@@ -552,6 +585,9 @@ export function fakeWorkspaceClient(options: {
   }
   if (options.changeRequestDraft) {
     prepareWorkspaceChangeRequest.mockResolvedValue(options.changeRequestDraft);
+  }
+  if (options.branchPublication) {
+    publishWorkspaceChangeRequestBranch.mockResolvedValue(options.branchPublication);
   }
   if (options.changeRequestOpen) {
     openWorkspaceChangeRequestDraft.mockResolvedValue(options.changeRequestOpen);
@@ -626,6 +662,9 @@ export function fakeWorkspaceClient(options: {
     getWorkspaceRepositoryFileReview,
     getWorkspaceRepositoryReviewGraph,
     syncWorkspaceRepository,
+    preflightWorkspaceRepositoryAddition,
+    addWorkspaceRepository,
+    removeWorkspaceRepository,
     preflightWorkspaceRepositoryAlignment,
     alignWorkspaceRepository,
     materializeWorkspace,
@@ -639,6 +678,7 @@ export function fakeWorkspaceClient(options: {
     downloadAndInstallUpdate,
     relaunchUpdatedApp,
     prepareWorkspaceChangeRequest,
+    publishWorkspaceChangeRequestBranch,
     openWorkspaceChangeRequestDraft,
     openWorkspaceCli,
     writeWorkspaceAgentBrief,
@@ -710,6 +750,9 @@ export function fakeWorkspaceClient(options: {
     getWorkspaceRepositoryFileReview,
     getWorkspaceRepositoryReviewGraph,
     syncWorkspaceRepository,
+    preflightWorkspaceRepositoryAddition,
+    addWorkspaceRepository,
+    removeWorkspaceRepository,
     preflightWorkspaceRepositoryAlignment,
     alignWorkspaceRepository,
     materializeWorkspace,
@@ -723,6 +766,7 @@ export function fakeWorkspaceClient(options: {
     downloadAndInstallUpdate,
     relaunchUpdatedApp,
     prepareWorkspaceChangeRequest,
+    publishWorkspaceChangeRequestBranch,
     openWorkspaceChangeRequestDraft,
     openWorkspaceCli,
     writeWorkspaceAgentBrief,

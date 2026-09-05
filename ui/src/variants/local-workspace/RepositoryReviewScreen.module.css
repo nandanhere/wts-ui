@@ -58,7 +58,7 @@
   letter-spacing: 0.04em;
 }
 
-.header select {
+.header [data-select-trigger] {
   width: min(240px, 20vw);
   min-width: 132px;
   height: 30px;

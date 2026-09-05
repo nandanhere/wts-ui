@@ -1,6 +1,6 @@
 .panel {
   display: grid;
-  grid-template-columns: 244px minmax(0, 1fr);
+  grid-template-columns: 276px minmax(0, 1fr);
   min-height: 100%;
   background: var(--wts-canvas);
 }
@@ -8,7 +8,7 @@
 .sidebar {
   display: flex;
   min-width: 0;
-  padding: 16px 10px;
+  padding: 7px 0 9px;
   background: color-mix(in srgb, var(--wts-surface) 88%, var(--wts-canvas));
   border-right: 1px solid var(--wts-line);
   flex-direction: column;
@@ -18,12 +18,29 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 8px 10px;
+  min-height: 24px;
+  padding: 0 8px;
   color: var(--wts-faint);
   font-size: 11px;
   font-weight: 800;
   letter-spacing: 0.09em;
   text-transform: uppercase;
+}
+
+.sidebar > header > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.sidebar > header > span svg {
+  transform: rotate(-90deg);
+}
+
+.fileHeaderActions {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
 }
 
 .sidebar > header small {
@@ -39,23 +56,121 @@
   place-items: center;
 }
 
+.fileTools {
+  display: grid;
+  gap: 5px;
+  padding: 5px 8px 8px;
+}
+
+.fileSearch {
+  display: flex;
+  height: 26px;
+  align-items: center;
+  gap: 6px;
+  padding: 0 7px;
+  color: var(--wts-faint);
+  background: var(--wts-surface);
+  border: 1px solid var(--wts-line-strong);
+  border-radius: 4px;
+}
+
+.fileSearch:focus-within {
+  border-color: var(--wts-blue);
+  box-shadow: 0 0 0 1px var(--wts-blue);
+}
+
+.fileSearch input {
+  width: 100%;
+  min-width: 0;
+  padding: 0;
+  color: var(--wts-ink);
+  background: transparent;
+  border: 0;
+  outline: 0;
+  font: 11px/1 var(--wts-font-sans);
+}
+
+.fileSearch input::placeholder {
+  color: var(--wts-faint);
+}
+
+.fileFilters {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 2px;
+}
+
+.fileFilters button {
+  min-height: 23px;
+  padding: 0 6px;
+  color: var(--wts-faint);
+  background: transparent;
+  border: 0;
+  border-radius: 3px;
+  font: 650 10px/1 var(--wts-font-sans);
+  cursor: pointer;
+}
+
+.fileFilters button:hover {
+  color: var(--wts-ink);
+  background: var(--wts-surface-subtle);
+}
+
+.fileFilters button[aria-pressed="true"] {
+  color: var(--wts-ink);
+  background: var(--wts-surface-muted);
+}
+
 .documentList {
   display: flex;
-  gap: 4px;
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow: auto;
   flex-direction: column;
+}
+
+.documentRow {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr);
+  align-items: center;
+}
+
+.documentRow:hover,
+.documentRow[data-checked] {
+  background: var(--wts-surface-subtle);
+}
+
+.selectionCheckbox {
+  width: 13px;
+  height: 13px;
+  margin: 0;
+  justify-self: center;
+  accent-color: var(--wts-blue);
+  cursor: pointer;
+}
+
+.selectionCheckbox:focus-visible {
+  outline: 2px solid var(--wts-blue);
+  outline-offset: 2px;
+}
+
+.selectionCheckbox:disabled {
+  cursor: default;
+  opacity: 0.45;
 }
 
 .documentButton {
   display: grid;
   width: 100%;
-  grid-template-columns: 30px minmax(0, 1fr);
+  min-height: 25px;
+  grid-template-columns: 16px minmax(0, 1fr) auto;
   align-items: center;
-  gap: 8px;
-  padding: 9px 8px;
+  gap: 5px;
+  padding: 2px 9px 2px 0;
   color: var(--wts-muted);
   background: transparent;
-  border: 1px solid transparent;
-  border-radius: 7px;
+  border: 0;
+  border-radius: 2px;
   font: inherit;
   text-align: left;
   cursor: pointer;
@@ -69,8 +184,6 @@
 .documentButton[data-selected] {
   color: var(--wts-ink);
   background: var(--wts-blue-soft);
-  border-color: color-mix(in srgb, var(--wts-blue) 42%, var(--wts-line));
-  box-shadow: inset 2px 0 0 var(--wts-blue);
 }
 
 .documentButton:focus-visible,
@@ -78,6 +191,7 @@
 .primaryButton:focus-visible,
 .secondaryButton:focus-visible,
 .viewSwitchButton:focus-visible,
+.fileFilters button:focus-visible,
 .resolveButton:focus-visible,
 .sourceLine:focus-visible,
 .feedbackTarget button:focus-visible,
@@ -89,46 +203,130 @@
 
 .documentIcon {
   display: grid;
-  width: 30px;
-  height: 30px;
+  width: 16px;
+  height: 20px;
   color: var(--wts-faint);
-  background: var(--wts-surface-muted);
-  border-radius: 6px;
   place-items: center;
 }
 
 .documentButton[data-selected] .documentIcon {
   color: var(--wts-blue);
-  background: color-mix(in srgb, var(--wts-blue) 12%, var(--wts-surface));
-}
-
-.documentButton > span:last-child {
-  display: flex;
-  min-width: 0;
-  flex-direction: column;
-  gap: 2px;
 }
 
 .documentButton b {
   overflow: hidden;
   font-size: 12px;
-  font-weight: 700;
+  font-weight: 500;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .documentButton small {
-  overflow: hidden;
+  padding: 2px 4px;
+  color: var(--wts-muted);
+  background: var(--wts-surface-muted);
+  border-radius: 3px;
+  font-size: 8px;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  line-height: 1;
+  text-transform: uppercase;
+}
+
+.documentButton[data-old] b,
+.documentButton[data-old] .documentIcon {
   color: var(--wts-faint);
-  font-size: 10px;
-  line-height: 1.35;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+}
+
+.noFiles {
+  margin: 10px 12px;
+  color: var(--wts-faint);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.bulkActions {
+  display: flex;
+  min-height: 38px;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin: 0 8px 8px;
+  padding: 5px 6px 5px 10px;
+  color: var(--wts-ink);
+  background: var(--wts-surface);
+  border: 1px solid var(--wts-line-strong);
+  border-radius: 6px;
+  box-shadow: 0 5px 16px color-mix(in srgb, var(--wts-ink) 14%, transparent);
+  font-size: 11px;
+  animation: planningBulkActionsIn 140ms ease-out;
+}
+
+.bulkActions > span {
+  margin-right: auto;
+  font-weight: 700;
+}
+
+.clearSelectionButton,
+.bulkActionButton {
+  display: inline-flex;
+  min-height: 26px;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 4px;
+  font: 700 10px/1 var(--wts-font-sans);
+  cursor: pointer;
+}
+
+.clearSelectionButton {
+  width: 24px;
+  padding: 0;
+  color: var(--wts-faint);
+  background: transparent;
+}
+
+.bulkActionButton {
+  padding: 0 9px;
+  color: var(--wts-on-accent);
+  background: var(--wts-blue);
+}
+
+.bulkActionButton[data-action="current"] {
+  color: var(--wts-muted);
+  background: var(--wts-surface-muted);
+}
+
+.clearSelectionButton:hover {
+  color: var(--wts-ink);
+  background: var(--wts-surface-muted);
+}
+
+.bulkActionButton:hover {
+  background: color-mix(in srgb, var(--wts-blue) 88%, var(--wts-ink));
+}
+
+.bulkActionButton[data-action="current"]:hover {
+  color: var(--wts-ink);
+  background: var(--wts-surface-subtle);
+}
+
+.clearSelectionButton:focus-visible,
+.bulkActionButton:focus-visible {
+  outline: none;
+  box-shadow: var(--wts-focus-ring);
+}
+
+@keyframes planningBulkActionsIn {
+  from {
+    opacity: 0;
+    transform: translateY(5px);
+  }
 }
 
 .keyboardHint {
-  margin: auto 8px 0;
-  padding-top: 14px;
+  margin: auto 12px 0;
+  padding-top: 10px;
   color: var(--wts-faint);
   font-size: 10px;
   line-height: 1.45;
@@ -497,20 +695,93 @@
 }
 
 .mermaidDiagram {
-  display: grid;
   min-height: 160px;
-  padding: 20px;
-  overflow: auto;
+  overflow: hidden;
   background: var(--wts-canvas);
   border: 1px solid var(--wts-line);
   border-radius: 8px;
+}
+
+.mermaidToolbar {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  min-height: 34px;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 3px;
+  padding: 4px 6px;
+  background: color-mix(in srgb, var(--wts-surface) 94%, transparent);
+  border-bottom: 1px solid var(--wts-line);
+}
+
+.mermaidToolbar button {
+  display: inline-grid;
+  min-width: 26px;
+  height: 25px;
+  padding: 0 7px;
+  color: var(--wts-muted);
+  background: transparent;
+  border: 0;
+  border-radius: 4px;
+  font: 700 11px/1 var(--wts-font-sans);
+  cursor: pointer;
   place-items: center;
 }
 
-.mermaidDiagram img {
+.mermaidToolbar button:hover:not(:disabled) {
+  color: var(--wts-ink);
+  background: var(--wts-surface-muted);
+}
+
+.mermaidToolbar button:disabled {
+  cursor: default;
+  opacity: 0.4;
+}
+
+.mermaidToolbar button:focus-visible {
+  outline: none;
+  box-shadow: var(--wts-focus-ring);
+}
+
+.mermaidToolbar output {
+  min-width: 42px;
+  color: var(--wts-faint);
+  font: 600 10px/1 var(--wts-font-mono);
+  text-align: center;
+}
+
+.mermaidViewport {
+  position: relative;
+  height: clamp(260px, 55vh, 680px);
+  min-height: 126px;
+  overflow: hidden;
+  overscroll-behavior: contain;
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+
+.mermaidViewport:active {
+  cursor: grabbing;
+}
+
+.mermaidCanvas {
+  position: absolute;
+  top: 0;
+  left: 0;
   display: block;
-  max-width: 100%;
-  height: auto;
+  pointer-events: none;
+  transform-origin: 0 0;
+  will-change: transform;
+}
+
+.mermaidCanvas svg {
+  display: block;
+  width: 100%;
+  max-width: none !important;
+  height: 100%;
 }
 
 .mermaidState {
@@ -1185,7 +1456,9 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .spinner {
+  .spinner,
+  .bulkActions {
     animation: none;
+    transition: none;
   }
 }

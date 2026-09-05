@@ -74,12 +74,15 @@ export interface WorkspacePlanningSelection {
   format: WorkspacePlanningFormat;
 }
 
-export type WorkspacePlanningDocumentId =
+export type FixedWorkspacePlanningDocumentId =
   | "readme"
   | "plan"
   | "findings"
   | "kanban"
   | "programBacklog";
+export type WorkspacePlanningDocumentId =
+  | FixedWorkspacePlanningDocumentId
+  | `generated-${string}`;
 
 export interface WorkspacePlanningDocumentDescriptor {
   documentId: WorkspacePlanningDocumentId;
@@ -832,6 +835,37 @@ export interface WorkspaceRepositorySyncResult {
   materialization: WorkspaceMaterialization;
 }
 
+export interface WorkspaceRepositoryAdditionPreflight {
+  workspaceId: string;
+  repositoryId: string;
+  repositoryLabel: string;
+  baseRef: string;
+  resolvedBaseRef: string;
+  baseCommitOid: string;
+  targetDisplayPath: string;
+  branchName: string;
+  effectDigest: string;
+}
+
+export interface WorkspaceRepositoryAdditionResult {
+  workspaceId: string;
+  repositoryId: string;
+  repositoryLabel: string;
+  replayed: boolean;
+  graphRefreshed: boolean;
+  graphDetail: string;
+  materialization: WorkspaceMaterialization;
+}
+
+export interface WorkspaceRepositoryRemovalResult {
+  workspaceId: string;
+  repositoryId: string;
+  repositoryLabel: string;
+  graphRefreshed: boolean;
+  graphDetail: string;
+  materialization: WorkspaceMaterialization;
+}
+
 export interface WorkspaceRepositoryAlignmentPreflight {
   workspaceId: string;
   repositoryId: string;
@@ -916,6 +950,15 @@ export interface WorkspaceChangeRequestDraft {
   effectDigest: string;
 }
 
+export interface WorkspaceBranchPublicationResult {
+  workspaceId: string;
+  repositoryId: string;
+  repositoryLabel: string;
+  remoteName: string;
+  branchName: string;
+  headCommitOid: string;
+}
+
 export interface OpenWorkspaceChangeRequestResult {
   workspaceId: string;
   repositoryId: string;
@@ -944,6 +987,7 @@ export interface GitlabMergeRequest {
   id: string;
   repositoryId: string;
   projectPath: string;
+  webUrl: string;
   iid: number;
   title: string;
   sourceBranch: string;
@@ -1968,6 +2012,21 @@ export interface WorkspaceClient {
     workspaceId: string,
     repositoryId: string,
   ): Promise<WorkspaceRepositorySyncResult>;
+  preflightWorkspaceRepositoryAddition(
+    workspaceId: string,
+    repositoryId: string,
+    baseRef: string,
+  ): Promise<WorkspaceRepositoryAdditionPreflight>;
+  addWorkspaceRepository(
+    workspaceId: string,
+    repositoryId: string,
+    baseRef: string,
+    effectDigest: string,
+  ): Promise<WorkspaceRepositoryAdditionResult>;
+  removeWorkspaceRepository(
+    workspaceId: string,
+    repositoryId: string,
+  ): Promise<WorkspaceRepositoryRemovalResult>;
   preflightWorkspaceRepositoryAlignment(
     workspaceId: string,
     repositoryId: string,
@@ -2003,6 +2062,11 @@ export interface WorkspaceClient {
     workspaceId: string,
     repositoryId: string,
   ): Promise<WorkspaceChangeRequestDraft>;
+  publishWorkspaceChangeRequestBranch(
+    workspaceId: string,
+    repositoryId: string,
+    branchName?: string,
+  ): Promise<WorkspaceBranchPublicationResult>;
   openWorkspaceChangeRequestDraft(
     workspaceId: string,
     repositoryId: string,
@@ -2201,6 +2265,25 @@ function stringField(
   return value;
 }
 
+function trustedHttpUrlField(value: unknown, path: string): string {
+  const url = stringField(value, path);
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return invalidPayload(path);
+  }
+  if (
+    parsed.protocol !== "https:" ||
+    parsed.username ||
+    parsed.password ||
+    !parsed.hostname
+  ) {
+    return invalidPayload(path);
+  }
+  return parsed.href;
+}
+
 function arrayField(value: unknown, path: string): unknown[] {
   if (!Array.isArray(value)) return invalidPayload(path);
   return value;
@@ -2340,16 +2423,20 @@ function normalizePlanningDocumentId(
   value: unknown,
   path: string,
 ): WorkspacePlanningDocumentId {
-  if (
-    value !== "readme" &&
-    value !== "plan" &&
-    value !== "findings" &&
-    value !== "kanban" &&
-    value !== "programBacklog"
-  ) {
+  if (typeof value !== "string") {
     return invalidPayload(path);
   }
-  return value;
+  if (
+    value === "readme" ||
+    value === "plan" ||
+    value === "findings" ||
+    value === "kanban" ||
+    value === "programBacklog" ||
+    /^generated-[0-9a-f]{64}$/.test(value)
+  ) {
+    return value as WorkspacePlanningDocumentId;
+  }
+  return invalidPayload(path);
 }
 
 function normalizePlanningDocumentList(
@@ -3021,6 +3108,7 @@ export function normalizeGitlabMergeRequestInbox(
         "id",
         "repositoryId",
         "projectPath",
+        "webUrl",
         "iid",
         "title",
         "sourceBranch",
@@ -3050,6 +3138,7 @@ export function normalizeGitlabMergeRequestInbox(
         id: stringField(item.id, `${path}.id`),
         repositoryId: stringField(item.repositoryId, `${path}.repositoryId`),
         projectPath: stringField(item.projectPath, `${path}.projectPath`),
+        webUrl: trustedHttpUrlField(item.webUrl, `${path}.webUrl`),
         iid,
         title: stringField(item.title, `${path}.title`),
         sourceBranch: stringField(item.sourceBranch, `${path}.sourceBranch`),
@@ -5707,6 +5796,95 @@ function normalizeWorkspaceRepositorySyncResult(
   return result;
 }
 
+function normalizeWorkspaceRepositoryAdditionPreflight(
+  value: unknown,
+): WorkspaceRepositoryAdditionPreflight {
+  const raw = exactRecord(value, "workspaceRepositoryAdditionPreflight", [
+    "workspaceId",
+    "repositoryId",
+    "repositoryLabel",
+    "baseRef",
+    "resolvedBaseRef",
+    "baseCommitOid",
+    "targetDisplayPath",
+    "branchName",
+    "effectDigest",
+  ]);
+  return {
+    workspaceId: stringField(raw.workspaceId, "workspaceRepositoryAdditionPreflight.workspaceId"),
+    repositoryId: stringField(raw.repositoryId, "workspaceRepositoryAdditionPreflight.repositoryId"),
+    repositoryLabel: stringField(raw.repositoryLabel, "workspaceRepositoryAdditionPreflight.repositoryLabel"),
+    baseRef: stringField(raw.baseRef, "workspaceRepositoryAdditionPreflight.baseRef"),
+    resolvedBaseRef: stringField(raw.resolvedBaseRef, "workspaceRepositoryAdditionPreflight.resolvedBaseRef"),
+    baseCommitOid: stringField(raw.baseCommitOid, "workspaceRepositoryAdditionPreflight.baseCommitOid"),
+    targetDisplayPath: stringField(raw.targetDisplayPath, "workspaceRepositoryAdditionPreflight.targetDisplayPath"),
+    branchName: stringField(raw.branchName, "workspaceRepositoryAdditionPreflight.branchName"),
+    effectDigest: stringField(raw.effectDigest, "workspaceRepositoryAdditionPreflight.effectDigest"),
+  };
+}
+
+function normalizeWorkspaceRepositoryAdditionResult(
+  value: unknown,
+): WorkspaceRepositoryAdditionResult {
+  const raw = exactRecord(value, "workspaceRepositoryAdditionResult", [
+    "workspaceId",
+    "repositoryId",
+    "repositoryLabel",
+    "replayed",
+    "graphRefreshed",
+    "graphDetail",
+    "materialization",
+  ]);
+  const result = {
+    workspaceId: stringField(raw.workspaceId, "workspaceRepositoryAdditionResult.workspaceId"),
+    repositoryId: stringField(raw.repositoryId, "workspaceRepositoryAdditionResult.repositoryId"),
+    repositoryLabel: stringField(raw.repositoryLabel, "workspaceRepositoryAdditionResult.repositoryLabel"),
+    replayed: booleanField(raw.replayed, "workspaceRepositoryAdditionResult.replayed"),
+    graphRefreshed: booleanField(raw.graphRefreshed, "workspaceRepositoryAdditionResult.graphRefreshed"),
+    graphDetail: stringField(raw.graphDetail, "workspaceRepositoryAdditionResult.graphDetail"),
+    materialization: normalizeMaterialization(raw.materialization, "workspaceRepositoryAdditionResult.materialization"),
+  };
+  if (
+    result.materialization.workspaceId !== result.workspaceId ||
+    !result.materialization.worktrees.some(
+      (worktree) => worktree.repositoryId === result.repositoryId,
+    )
+  ) {
+    return invalidPayload("workspaceRepositoryAdditionResult.identity");
+  }
+  return result;
+}
+
+function normalizeWorkspaceRepositoryRemovalResult(
+  value: unknown,
+): WorkspaceRepositoryRemovalResult {
+  const raw = exactRecord(value, "workspaceRepositoryRemovalResult", [
+    "workspaceId",
+    "repositoryId",
+    "repositoryLabel",
+    "graphRefreshed",
+    "graphDetail",
+    "materialization",
+  ]);
+  const result = {
+    workspaceId: stringField(raw.workspaceId, "workspaceRepositoryRemovalResult.workspaceId"),
+    repositoryId: stringField(raw.repositoryId, "workspaceRepositoryRemovalResult.repositoryId"),
+    repositoryLabel: stringField(raw.repositoryLabel, "workspaceRepositoryRemovalResult.repositoryLabel"),
+    graphRefreshed: booleanField(raw.graphRefreshed, "workspaceRepositoryRemovalResult.graphRefreshed"),
+    graphDetail: stringField(raw.graphDetail, "workspaceRepositoryRemovalResult.graphDetail"),
+    materialization: normalizeMaterialization(raw.materialization, "workspaceRepositoryRemovalResult.materialization"),
+  };
+  if (
+    result.materialization.workspaceId !== result.workspaceId ||
+    result.materialization.worktrees.some(
+      (worktree) => worktree.repositoryId === result.repositoryId,
+    )
+  ) {
+    return invalidPayload("workspaceRepositoryRemovalResult.identity");
+  }
+  return result;
+}
+
 function normalizeWorkspaceRepositoryAlignmentPreflight(
   value: unknown,
 ): WorkspaceRepositoryAlignmentPreflight {
@@ -5921,6 +6099,28 @@ function normalizeWorkspaceChangeRequestDraft(
     ),
     verificationSummary: stringField(raw.verificationSummary, `${path}.verificationSummary`),
     effectDigest: digest,
+  };
+}
+
+function normalizeWorkspaceBranchPublicationResult(
+  value: unknown,
+): WorkspaceBranchPublicationResult {
+  const path = "workspaceBranchPublicationResult";
+  const raw = exactRecord(value, path, [
+    "workspaceId", "repositoryId", "repositoryLabel", "remoteName", "branchName",
+    "headCommitOid",
+  ]);
+  const headCommitOid = stringField(raw.headCommitOid, `${path}.headCommitOid`);
+  if (!/^(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})$/.test(headCommitOid)) {
+    return invalidPayload(`${path}.headCommitOid`);
+  }
+  return {
+    workspaceId: stringField(raw.workspaceId, `${path}.workspaceId`),
+    repositoryId: stringField(raw.repositoryId, `${path}.repositoryId`),
+    repositoryLabel: stringField(raw.repositoryLabel, `${path}.repositoryLabel`),
+    remoteName: stringField(raw.remoteName, `${path}.remoteName`),
+    branchName: stringField(raw.branchName, `${path}.branchName`),
+    headCommitOid,
   };
 }
 
@@ -8994,6 +9194,72 @@ class HttpWorkspaceClient implements WorkspaceClient {
     return result;
   }
 
+  async preflightWorkspaceRepositoryAddition(
+    workspaceId: string,
+    repositoryId: string,
+    baseRef: string,
+  ): Promise<WorkspaceRepositoryAdditionPreflight> {
+    const workspace = requiredWorkspaceId(workspaceId);
+    const selection = requiredRepositoryBaseSelection(repositoryId, baseRef);
+    const result = normalizeWorkspaceRepositoryAdditionPreflight(
+      await this.request(
+        `/api/v1/workspaces/${encodeURIComponent(workspace)}/repositories/addition-preflight`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(selection),
+        },
+      ),
+    );
+    if (result.workspaceId !== workspace || result.repositoryId !== selection.repositoryId) {
+      return invalidPayload("workspaceRepositoryAdditionPreflight.identity");
+    }
+    return result;
+  }
+
+  async addWorkspaceRepository(
+    workspaceId: string,
+    repositoryId: string,
+    baseRef: string,
+    effectDigest: string,
+  ): Promise<WorkspaceRepositoryAdditionResult> {
+    const workspace = requiredWorkspaceId(workspaceId);
+    const selection = requiredRepositoryBaseSelection(repositoryId, baseRef);
+    requiredSha256(effectDigest, "effectDigest");
+    const result = normalizeWorkspaceRepositoryAdditionResult(
+      await this.request(
+        `/api/v1/workspaces/${encodeURIComponent(workspace)}/repositories`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ...selection, effectDigest }),
+        },
+      ),
+    );
+    if (result.workspaceId !== workspace || result.repositoryId !== selection.repositoryId) {
+      return invalidPayload("workspaceRepositoryAdditionResult.identity");
+    }
+    return result;
+  }
+
+  async removeWorkspaceRepository(
+    workspaceId: string,
+    repositoryId: string,
+  ): Promise<WorkspaceRepositoryRemovalResult> {
+    const workspace = requiredWorkspaceId(workspaceId);
+    const repository = requiredRepositoryId(repositoryId);
+    const result = normalizeWorkspaceRepositoryRemovalResult(
+      await this.request(
+        `/api/v1/workspaces/${encodeURIComponent(workspace)}/repositories/${encodeURIComponent(repository)}`,
+        { method: "DELETE" },
+      ),
+    );
+    if (result.workspaceId !== workspace || result.repositoryId !== repository) {
+      return invalidPayload("workspaceRepositoryRemovalResult.identity");
+    }
+    return result;
+  }
+
   async preflightWorkspaceRepositoryAlignment(
     workspaceId: string,
     repositoryId: string,
@@ -9190,6 +9456,32 @@ class HttpWorkspaceClient implements WorkspaceClient {
     );
     if (result.workspaceId !== workspace || result.repositoryId !== repository) {
       return invalidPayload("workspaceChangeRequestDraft.identity");
+    }
+    return result;
+  }
+
+  async publishWorkspaceChangeRequestBranch(
+    workspaceId: string,
+    repositoryId: string,
+    branchName?: string,
+  ): Promise<WorkspaceBranchPublicationResult> {
+    const workspace = requiredWorkspaceId(workspaceId);
+    const repository = requiredChangeRequestRepositoryId(repositoryId);
+    const result = normalizeWorkspaceBranchPublicationResult(
+      await this.request(
+        `/api/v1/workspaces/${encodeURIComponent(workspace)}/change-requests/publish-branch`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            repositoryId: repository,
+            ...(branchName ? { branchName } : {}),
+          }),
+        },
+      ),
+    );
+    if (result.workspaceId !== workspace || result.repositoryId !== repository) {
+      return invalidPayload("workspaceBranchPublicationResult.identity");
     }
     return result;
   }
@@ -10223,6 +10515,65 @@ class TauriWorkspaceClient implements WorkspaceClient {
     return result;
   }
 
+  async preflightWorkspaceRepositoryAddition(
+    workspaceId: string,
+    repositoryId: string,
+    baseRef: string,
+  ): Promise<WorkspaceRepositoryAdditionPreflight> {
+    const workspace = requiredWorkspaceId(workspaceId);
+    const selection = requiredRepositoryBaseSelection(repositoryId, baseRef);
+    const result = normalizeWorkspaceRepositoryAdditionPreflight(
+      await this.invoke("preflight_workspace_repository_addition", {
+        workspaceId: workspace,
+        request: selection,
+      }),
+    );
+    if (result.workspaceId !== workspace || result.repositoryId !== selection.repositoryId) {
+      return invalidPayload("workspaceRepositoryAdditionPreflight.identity");
+    }
+    return result;
+  }
+
+  async addWorkspaceRepository(
+    workspaceId: string,
+    repositoryId: string,
+    baseRef: string,
+    effectDigest: string,
+  ): Promise<WorkspaceRepositoryAdditionResult> {
+    const workspace = requiredWorkspaceId(workspaceId);
+    const selection = requiredRepositoryBaseSelection(repositoryId, baseRef);
+    requiredSha256(effectDigest, "effectDigest");
+    const result = normalizeWorkspaceRepositoryAdditionResult(
+      await this.invoke("add_workspace_repository", {
+        workspaceId: workspace,
+        request: selection,
+        effectDigest,
+      }),
+    );
+    if (result.workspaceId !== workspace || result.repositoryId !== selection.repositoryId) {
+      return invalidPayload("workspaceRepositoryAdditionResult.identity");
+    }
+    return result;
+  }
+
+  async removeWorkspaceRepository(
+    workspaceId: string,
+    repositoryId: string,
+  ): Promise<WorkspaceRepositoryRemovalResult> {
+    const workspace = requiredWorkspaceId(workspaceId);
+    const repository = requiredRepositoryId(repositoryId);
+    const result = normalizeWorkspaceRepositoryRemovalResult(
+      await this.invoke("remove_workspace_repository", {
+        workspaceId: workspace,
+        repositoryId: repository,
+      }),
+    );
+    if (result.workspaceId !== workspace || result.repositoryId !== repository) {
+      return invalidPayload("workspaceRepositoryRemovalResult.identity");
+    }
+    return result;
+  }
+
   async preflightWorkspaceRepositoryAlignment(
     workspaceId: string,
     repositoryId: string,
@@ -10404,6 +10755,28 @@ class TauriWorkspaceClient implements WorkspaceClient {
     );
     if (result.workspaceId !== workspace || result.repositoryId !== repository) {
       return invalidPayload("workspaceChangeRequestDraft.identity");
+    }
+    return result;
+  }
+
+  async publishWorkspaceChangeRequestBranch(
+    workspaceId: string,
+    repositoryId: string,
+    branchName?: string,
+  ): Promise<WorkspaceBranchPublicationResult> {
+    const workspace = requiredWorkspaceId(workspaceId);
+    const repository = requiredChangeRequestRepositoryId(repositoryId);
+    const result = normalizeWorkspaceBranchPublicationResult(
+      await this.invoke("publish_workspace_change_request_branch", {
+        workspaceId: workspace,
+        request: {
+          repositoryId: repository,
+          ...(branchName ? { branchName } : {}),
+        },
+      }),
+    );
+    if (result.workspaceId !== workspace || result.repositoryId !== repository) {
+      return invalidPayload("workspaceBranchPublicationResult.identity");
     }
     return result;
   }

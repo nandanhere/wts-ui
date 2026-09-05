@@ -1132,6 +1132,118 @@ impl WorkspaceStore {
         self.view(decoded.record, decoded.lifecycle)
     }
 
+    pub fn add_repository(
+        &self,
+        workspace_id: Uuid,
+        repository: WorkspaceRepositoryRequest,
+    ) -> Result<WorkspaceView, WorkspaceStoreError> {
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let mut decoded = load_projection(&transaction, &workspace_id.to_string())?
+            .ok_or(WorkspaceStoreError::WorkspaceNotFound { workspace_id })?;
+        let request_id = Uuid::new_v4();
+        decoded.record.repositories.push(WorkspaceRepositoryPlan {
+            request_id,
+            repository_id: repository.repository_id,
+            worktree_leaf: repository_leaf(&repository.label, request_id),
+            label: repository.label,
+            base_ref: repository.base_ref,
+        });
+        decoded.record.repositories.sort_by(|left, right| {
+            left.label
+                .to_lowercase()
+                .cmp(&right.label.to_lowercase())
+                .then(left.repository_id.cmp(&right.repository_id))
+                .then(left.base_ref.cmp(&right.base_ref))
+        });
+        decoded.record.updated_at_unix_ms = unix_time_ms()?;
+        if decoded.lifecycle.materialization_state == WorkspaceMaterializationState::Materialized {
+            decoded.lifecycle.worktree_count = u32::try_from(decoded.record.repositories.len())
+                .map_err(|_| {
+                    WorkspaceStoreError::CorruptRecord(
+                        "workspace repository count exceeds the lifecycle limit".into(),
+                    )
+                })?;
+            decoded.lifecycle.observed_at_unix_ms = Some(decoded.record.updated_at_unix_ms);
+        }
+        validate_record(&decoded.record)?;
+        validate_lifecycle(&decoded.record, &decoded.lifecycle)?;
+        let record_json = serde_json::to_string(&decoded.record)?;
+        if record_json.len() > MAX_RECORD_JSON_BYTES {
+            return Err(WorkspaceStoreError::CorruptRecord(
+                "serialized workspace record exceeds the store limit".into(),
+            ));
+        }
+        transaction.execute(
+            "UPDATE workspace_projection
+             SET record_json = ?1, updated_at_unix_ms = ?2
+             WHERE workspace_id = ?3",
+            params![
+                record_json,
+                decoded.record.updated_at_unix_ms,
+                workspace_id.to_string(),
+            ],
+        )?;
+        if decoded.lifecycle.materialization_state == WorkspaceMaterializationState::Materialized {
+            transaction.execute(
+                "UPDATE workspace_lifecycle_projection
+                 SET worktree_count = ?1, observed_at_unix_ms = ?2
+                 WHERE workspace_id = ?3",
+                params![
+                    i64::from(decoded.lifecycle.worktree_count),
+                    decoded.lifecycle.observed_at_unix_ms,
+                    workspace_id.to_string(),
+                ],
+            )?;
+        }
+        transaction.commit()?;
+        self.view(decoded.record, decoded.lifecycle)
+    }
+
+    pub fn remove_repository(
+        &self,
+        workspace_id: Uuid,
+        repository_id: &str,
+    ) -> Result<WorkspaceView, WorkspaceStoreError> {
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let mut decoded = load_projection(&transaction, &workspace_id.to_string())?
+            .ok_or(WorkspaceStoreError::WorkspaceNotFound { workspace_id })?;
+        let previous_len = decoded.record.repositories.len();
+        decoded
+            .record
+            .repositories
+            .retain(|repository| repository.repository_id.as_deref() != Some(repository_id));
+        if decoded.record.repositories.len() == previous_len {
+            return Err(WorkspaceStoreError::WorkspaceNotFound { workspace_id });
+        }
+        decoded.record.updated_at_unix_ms = unix_time_ms()?;
+        if decoded.lifecycle.materialization_state == WorkspaceMaterializationState::Materialized {
+            decoded.lifecycle.worktree_count = u32::try_from(decoded.record.repositories.len())
+                .map_err(|_| {
+                    WorkspaceStoreError::CorruptRecord(
+                        "workspace repository count exceeds the lifecycle limit".into(),
+                    )
+                })?;
+            decoded.lifecycle.observed_at_unix_ms = Some(decoded.record.updated_at_unix_ms);
+        }
+        validate_record(&decoded.record)?;
+        validate_lifecycle(&decoded.record, &decoded.lifecycle)?;
+        let record_json = serde_json::to_string(&decoded.record)?;
+        transaction.execute(
+            "UPDATE workspace_projection SET record_json = ?1, updated_at_unix_ms = ?2 WHERE workspace_id = ?3",
+            params![record_json, decoded.record.updated_at_unix_ms, workspace_id.to_string()],
+        )?;
+        if decoded.lifecycle.materialization_state == WorkspaceMaterializationState::Materialized {
+            transaction.execute(
+                "UPDATE workspace_lifecycle_projection SET worktree_count = ?1, observed_at_unix_ms = ?2 WHERE workspace_id = ?3",
+                params![i64::from(decoded.lifecycle.worktree_count), decoded.lifecycle.observed_at_unix_ms, workspace_id.to_string()],
+            )?;
+        }
+        transaction.commit()?;
+        self.view(decoded.record, decoded.lifecycle)
+    }
+
     /// Returns an already-created workspace for this exact idempotent request.
     ///
     /// This read-only check lets callers replay a successful create before they
@@ -1823,6 +1935,22 @@ impl WorkspaceService {
         request: RenameWorkspaceRequest,
     ) -> Result<WorkspaceView, WorkspaceStoreError> {
         self.store.rename(workspace_id, request)
+    }
+
+    pub fn add_repository(
+        &self,
+        workspace_id: Uuid,
+        repository: WorkspaceRepositoryRequest,
+    ) -> Result<WorkspaceView, WorkspaceStoreError> {
+        self.store.add_repository(workspace_id, repository)
+    }
+
+    pub fn remove_repository(
+        &self,
+        workspace_id: Uuid,
+        repository_id: &str,
+    ) -> Result<WorkspaceView, WorkspaceStoreError> {
+        self.store.remove_repository(workspace_id, repository_id)
     }
 
     pub fn create_replay(

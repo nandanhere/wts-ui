@@ -224,7 +224,7 @@ export function AssignedReviewCard({
       data-ui-label={`${review.repository} review request`}
     >
       <button
-        aria-label="Create review workspace"
+        aria-label="Start review"
         className={styles.assignedReviewBody}
         disabled={preparing}
         onClick={onPrepare}
@@ -246,11 +246,9 @@ export function AssignedReviewCard({
               {commentCount} {commentCount === 1 ? "comment" : "comments"}
             </span>
           )}
-          <strong
-            aria-hidden="true"
-            className={styles.assignedReviewCreateIcon}
-          >
+          <strong className={styles.assignedReviewCreateIcon}>
             <Glyph name={preparing ? "refresh" : "folder"} size={14} />
+            {preparing ? "Starts review…" : "Start review"}
           </strong>
         </footer>
       </button>
@@ -275,11 +273,14 @@ export function DraggableWorkspaceCard({
   dropIndicator,
   index,
   onOpen,
+  onOpenWorkspace,
   placementLabel,
   primaryActionLabel,
   reorderDisabled = false,
   issueAction,
+  gitlabReview,
   mergeRequests,
+  onOpenMergeRequest,
   moveActions,
   workspace,
 }: {
@@ -289,6 +290,7 @@ export function DraggableWorkspaceCard({
   dropIndicator?: "before" | "after";
   index: number;
   onOpen: (modified: boolean) => void;
+  onOpenWorkspace?: () => void;
   placementLabel?: string;
   primaryActionLabel?: string;
   reorderDisabled?: boolean;
@@ -296,7 +298,9 @@ export function DraggableWorkspaceCard({
     label: string;
     onPress: () => void;
   };
+  gitlabReview?: GitlabReview;
   mergeRequests?: readonly GitlabMergeRequest[];
+  onOpenMergeRequest?: (mergeRequest: GitlabMergeRequest) => void;
   moveActions?: Array<{
     label: string;
     onPress: () => void;
@@ -361,10 +365,13 @@ export function DraggableWorkspaceCard({
             | undefined,
         }}
         onOpen={onOpen}
+        onOpenWorkspace={onOpenWorkspace}
         primaryActionLabel={primaryActionLabel}
         issueAction={issueAction}
+        gitlabReview={gitlabReview}
         mergeRequests={mergeRequests}
         moveActions={moveActions}
+        onOpenMergeRequest={onOpenMergeRequest}
         workspace={
           workspace.lane === displayLane
             ? workspace

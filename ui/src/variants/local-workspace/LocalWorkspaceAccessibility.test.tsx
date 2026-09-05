@@ -50,8 +50,9 @@ describe("LocalWorkspace Accessibility and Consistency Improvements", () => {
         expect(screen.getByText("Tooltip Plan")).toBeInTheDocument();
       });
 
-      const jiraBadge = screen.getByText("Jira OTHER-100");
-      await user.hover(jiraBadge);
+      const observedIssue = screen.getByText("OTHER-100");
+      expect(observedIssue).toHaveAttribute("role", "note");
+      await user.hover(observedIssue);
 
       await waitFor(() => {
         expect(screen.getByText("Observed in src/main.rs")).toBeInTheDocument();

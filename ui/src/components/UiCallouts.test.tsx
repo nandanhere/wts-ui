@@ -55,6 +55,9 @@ describe("UI callouts", () => {
 
     expect(document.documentElement).toHaveAttribute("data-ui-debug");
     expect(screen.queryByText("Spaces toolbar")).toBeNull();
+    expect(
+      screen.getByText("Hover over a region. Say its name or ID to Codex."),
+    ).toBeVisible();
 
     fireEvent.pointerMove(screen.getByTestId("spaces-board"), {
       clientX: 80,
@@ -62,6 +65,7 @@ describe("UI callouts", () => {
     });
     await act(async () => vi.runOnlyPendingTimers());
     expect(screen.getByText("Spaces toolbar")).toBeVisible();
+    expect(screen.getByText("spaces.toolbar")).toBeVisible();
     expect(screen.queryByText("Spaces board")).toBeNull();
 
     fireEvent.pointerMove(screen.getByTestId("spaces-board"), {
@@ -70,6 +74,8 @@ describe("UI callouts", () => {
     });
     await act(async () => vi.runOnlyPendingTimers());
     expect(screen.getByText("Spaces board")).toBeVisible();
+    expect(screen.getByText("spaces.board")).toBeVisible();
+    expect(screen.queryByText("spaces.toolbar")).toBeNull();
     expect(screen.queryByText("Spaces toolbar")).toBeNull();
 
     fireEvent.pointerLeave(document.documentElement);

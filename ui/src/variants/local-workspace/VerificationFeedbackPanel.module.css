@@ -65,7 +65,7 @@
   font-weight: 650;
 }
 
-.form select,
+.form [data-select-trigger],
 .form textarea {
   box-sizing: border-box;
   width: 100%;

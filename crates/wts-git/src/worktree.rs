@@ -708,6 +708,31 @@ impl GitWorktreeService {
         })
     }
 
+    /// Count current worktree changes without resolving repository history.
+    /// Use this before an operation that only requires a clean worktree.
+    pub fn changed_file_count(&self, trusted_path: impl AsRef<Path>) -> Result<u32, GitError> {
+        let repository = inspect_repository(trusted_path.as_ref())?;
+        let status = crate::command::git(
+            Some(&repository.worktree_root),
+            ["status", "--porcelain=v1", "-z", "--untracked-files=all"],
+        )?;
+        if !status.status.success() {
+            return Err(status.command_error(GitOperation::InspectWorktreeChanges));
+        }
+        if status.stdout_truncated {
+            return Err(GitError::OutputTooLarge {
+                operation: GitOperation::InspectWorktreeChanges,
+            });
+        }
+        status
+            .stdout
+            .split(|byte| *byte == 0)
+            .filter(|entry| !entry.is_empty())
+            .count()
+            .try_into()
+            .map_err(|_| GitError::InvalidRepositoryMetadata)
+    }
+
     /// Observe whether the current branch is represented by its cached
     /// tracking branch. This method performs no network IO.
     pub fn inspect_branch_publication(
@@ -805,6 +830,42 @@ impl GitWorktreeService {
             behind,
             changed_file_count,
         })
+    }
+
+    /// Publish the current branch to the remote that owns the requested base.
+    /// The repository path and base come from trusted workspace state.
+    pub fn publish_branch(
+        &self,
+        trusted_path: impl AsRef<Path>,
+        requested_base: &str,
+        requested_branch_name: Option<&str>,
+    ) -> Result<BranchPublicationInspection, GitError> {
+        let repository = inspect_repository(trusted_path.as_ref())?;
+        let local_branch_name = repository
+            .current_branch_full_ref
+            .as_deref()
+            .and_then(|value| value.strip_prefix("refs/heads/"))
+            .filter(|value| !value.is_empty())
+            .ok_or(GitError::InvalidRepositoryMetadata)?
+            .to_owned();
+        validate_branch_name(&repository, &local_branch_name)?;
+        let published_branch_name = requested_branch_name.unwrap_or(&local_branch_name);
+        validate_branch_name(&repository, published_branch_name)?;
+        let tracking = resolve_tracking_remote(&repository, requested_base)?;
+        let refspec = format!("HEAD:refs/heads/{published_branch_name}");
+        let push = crate::command::git(
+            Some(&repository.worktree_root),
+            [
+                "push",
+                "--set-upstream",
+                tracking.name.as_str(),
+                refspec.as_str(),
+            ],
+        )?;
+        if !push.status.success() {
+            return Err(push.command_error(GitOperation::PublishBranch));
+        }
+        self.inspect_branch_publication(&repository.worktree_root)
     }
 
     pub fn inspect_branch_change_inventory(

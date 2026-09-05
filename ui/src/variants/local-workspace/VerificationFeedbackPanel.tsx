@@ -5,6 +5,7 @@ import type {
   WorkspaceReviewThread,
 } from "../../lib/wtsClient";
 import styles from "./VerificationFeedbackPanel.module.css";
+import { SelectMenu } from "../../components/SelectMenu";
 
 interface FailedCheck {
   checkId: string;
@@ -209,8 +210,9 @@ export function VerificationFeedbackPanel({
             >
               <label>
                 Failed check
-                <select
-                  onChange={(event) => setSelectedCheckId(event.target.value)}
+                <SelectMenu
+                  aria-label="Failed check"
+                  onChange={setSelectedCheckId}
                   value={selectedCheckId}
                 >
                   {failedChecks.map((check) => (
@@ -218,7 +220,7 @@ export function VerificationFeedbackPanel({
                       {check.label}
                     </option>
                   ))}
-                </select>
+                </SelectMenu>
               </label>
               <label>
                 Context for the agent

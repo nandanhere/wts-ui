@@ -27,7 +27,7 @@ describe("compact secondary-panel control cascade", () => {
       /\.tab\s*\{[^}]*min-height:\s*36px/,
     );
     expect(agentSessionsCss).toMatch(
-      /\.assignment select\s*\{[^}]*height:\s*36px/,
+      /\.assignment \[data-select-trigger\]\s*\{[^}]*height:\s*36px/,
     );
     expect(userJourneysCss).toMatch(
       /\.runButton\s*\{[^}]*min-height:\s*32px/,
@@ -49,7 +49,7 @@ describe("compact secondary-panel control cascade", () => {
       /\.ignoredToggle:active:not\(:disabled\),[\s\S]*?\.activitySource button:active:not\(:disabled\)\s*\{/,
     );
     expect(agentSessionsCss).toMatch(
-      /\.assignment select:disabled\s*\{/,
+      /\.assignment \[data-select-trigger\]\[data-disabled\]\s*\{/,
     );
 
     expect(userJourneysCss).toMatch(

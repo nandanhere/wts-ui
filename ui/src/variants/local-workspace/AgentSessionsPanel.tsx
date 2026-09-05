@@ -46,6 +46,7 @@ import {
   type TimeReviewIntervalHours,
 } from "./timeReviewSchedule";
 import styles from "./AgentSessionsPanel.module.css";
+import { SelectMenu } from "../../components/SelectMenu";
 
 const REFRESH_INTERVAL_MS = 5_000;
 const MAX_AUTOMATIC_REFRESHES = 120;
@@ -695,10 +696,10 @@ export function AgentSessionsPanel({
               <div className={styles.reviewActions}>
                 <label className={styles.scheduleControl}>
                   <span>Summary</span>
-                  <select
+                  <SelectMenu
                     aria-label="Automatic summary interval"
-                    onChange={(event) => {
-                      const value = Number(event.target.value);
+                    onChange={(selectedValue) => {
+                      const value = Number(selectedValue);
                       if (value === 0) {
                         updateReviewSchedule({ enabled: false });
                         return;
@@ -716,7 +717,7 @@ export function AgentSessionsPanel({
                         Every {hours} hours
                       </option>
                     ))}
-                  </select>
+                  </SelectMenu>
                 </label>
                 <button
                   aria-pressed={reviewSchedule.notificationsEnabled}
@@ -1059,15 +1060,15 @@ export function AgentSessionsPanel({
                             ? ` · ${selectedSuggestion.confidence}% match`
                             : ""}
                         </span>
-                        <select
+                        <SelectMenu
                           aria-label={`Jira ticket for ${
                             session.activityEvidence ?? session.description
                           }`}
                           disabled={jiraState !== "ready"}
-                          onChange={(event) =>
+                          onChange={(value) =>
                             setAssignments((current) => ({
                               ...current,
-                              [session.id]: event.target.value,
+                              [session.id]: value,
                             }))
                           }
                           value={selectedKey}
@@ -1078,7 +1079,7 @@ export function AgentSessionsPanel({
                               {issue.issueKey} · {issue.summary}
                             </option>
                           ))}
-                        </select>
+                        </SelectMenu>
                         {(selectedSuggestion || selectedIssue) && (
                           <small>
                             {selectedSuggestion?.reason ?? selectedIssue?.status}

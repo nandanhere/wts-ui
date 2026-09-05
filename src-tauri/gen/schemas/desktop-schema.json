@@ -177,6 +177,12 @@
       "description": "Permission identifier",
       "oneOf": [
         {
+          "description": "Enables the add_workspace_repository command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-add-workspace-repository",
+          "markdownDescription": "Enables the add_workspace_repository command without any pre-configured scope."
+        },
+        {
           "description": "Enables the align_workspace_repository command without any pre-configured scope.",
           "type": "string",
           "const": "allow-align-workspace-repository",
@@ -525,6 +531,12 @@
           "markdownDescription": "Enables the preflight_workspace_removal command without any pre-configured scope."
         },
         {
+          "description": "Enables the preflight_workspace_repository_addition command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-preflight-workspace-repository-addition",
+          "markdownDescription": "Enables the preflight_workspace_repository_addition command without any pre-configured scope."
+        },
+        {
           "description": "Enables the preflight_workspace_repository_alignment command without any pre-configured scope.",
           "type": "string",
           "const": "allow-preflight-workspace-repository-alignment",
@@ -567,6 +579,12 @@
           "markdownDescription": "Enables the publish_gitlab_review_comment command without any pre-configured scope."
         },
         {
+          "description": "Enables the publish_workspace_change_request_branch command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-publish-workspace-change-request-branch",
+          "markdownDescription": "Enables the publish_workspace_change_request_branch command without any pre-configured scope."
+        },
+        {
           "description": "Enables the read_workspace_planning_document command without any pre-configured scope.",
           "type": "string",
           "const": "allow-read-workspace-planning-document",
@@ -595,6 +613,12 @@
           "type": "string",
           "const": "allow-remove-workspace",
           "markdownDescription": "Enables the remove_workspace command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the remove_workspace_repository command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-remove-workspace-repository",
+          "markdownDescription": "Enables the remove_workspace_repository command without any pre-configured scope."
         },
         {
           "description": "Enables the rename_workspace command without any pre-configured scope.",
@@ -703,6 +727,12 @@
           "type": "string",
           "const": "allow-write-workspace-agent-brief",
           "markdownDescription": "Enables the write_workspace_agent_brief command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the add_workspace_repository command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-add-workspace-repository",
+          "markdownDescription": "Denies the add_workspace_repository command without any pre-configured scope."
         },
         {
           "description": "Denies the align_workspace_repository command without any pre-configured scope.",
@@ -1053,6 +1083,12 @@
           "markdownDescription": "Denies the preflight_workspace_removal command without any pre-configured scope."
         },
         {
+          "description": "Denies the preflight_workspace_repository_addition command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-preflight-workspace-repository-addition",
+          "markdownDescription": "Denies the preflight_workspace_repository_addition command without any pre-configured scope."
+        },
+        {
           "description": "Denies the preflight_workspace_repository_alignment command without any pre-configured scope.",
           "type": "string",
           "const": "deny-preflight-workspace-repository-alignment",
@@ -1095,6 +1131,12 @@
           "markdownDescription": "Denies the publish_gitlab_review_comment command without any pre-configured scope."
         },
         {
+          "description": "Denies the publish_workspace_change_request_branch command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-publish-workspace-change-request-branch",
+          "markdownDescription": "Denies the publish_workspace_change_request_branch command without any pre-configured scope."
+        },
+        {
           "description": "Denies the read_workspace_planning_document command without any pre-configured scope.",
           "type": "string",
           "const": "deny-read-workspace-planning-document",
@@ -1123,6 +1165,12 @@
           "type": "string",
           "const": "deny-remove-workspace",
           "markdownDescription": "Denies the remove_workspace command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the remove_workspace_repository command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-remove-workspace-repository",
+          "markdownDescription": "Denies the remove_workspace_repository command without any pre-configured scope."
         },
         {
           "description": "Denies the rename_workspace command without any pre-configured scope.",
