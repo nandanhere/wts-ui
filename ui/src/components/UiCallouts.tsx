@@ -209,10 +209,10 @@ export function UiCallouts() {
   const shortcut = navigator.userAgent.includes("Mac") ? "⌘⇧L" : "Ctrl+Shift+L";
   const rect = callout?.rect;
   const labelLeft = rect
-    ? Math.max(4, Math.min(rect.left, window.innerWidth - 220))
+    ? Math.max(4, Math.min(rect.left, window.innerWidth - 328))
     : 0;
   const labelTop = rect
-    ? Math.max(4, Math.min(rect.top, window.innerHeight - 28))
+    ? Math.max(4, Math.min(rect.top, window.innerHeight - 48))
     : 0;
 
   return createPortal(
@@ -238,12 +238,13 @@ export function UiCallouts() {
             role="status"
             style={{ left: labelLeft, top: labelTop }}
           >
-            {callout.label}
+            <span>{callout.label}</span>
+            <code>{callout.id}</code>
           </div>
         </>
       )}
       <div className={styles.control}>
-        <span>Hover over a UI region. Say its label to Codex.</span>
+        <span>Hover over a region. Say its name or ID to Codex.</span>
         <kbd>{shortcut}</kbd>
         <button
           className={styles.exit}

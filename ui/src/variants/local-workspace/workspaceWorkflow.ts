@@ -138,7 +138,7 @@ export function gitlabReviewForWorkspace(
 export function gitlabReviewTargetForWorkspace(
   workspace: ReviewWorkspaceSignalSource,
   reviews: readonly GitlabReview[],
-): GitlabReviewTarget | undefined {
+): (GitlabReviewTarget & Partial<GitlabReview>) | undefined {
   const current = gitlabReviewForWorkspace(workspace, reviews);
   if (current) return current;
   const reference = gitlabReviewReferenceForWorkspace(workspace);

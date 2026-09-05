@@ -16,9 +16,10 @@ use crate::{
     OpenWorkspaceWorkItemRequest, OpenWorkspaceWorkItemResult, PreflightBlocker,
     PreflightBlockerCode, PreflightRepository, PrepareWorkspaceChangeRequest,
     PreviewWorkspaceJiraLinkRequest, ProcessBrowserJourneyAdapter, ProcessExternalLauncher,
-    ProcessWorkspaceAdapter, RefreshRepositoryBranchesRequest, RefreshRepositoryBranchesResult,
-    RemovalBlocker, RemovalBlockerCode, RemovalProtectedFilePreview, RemovalProtectedPath,
-    RemovalWorktreeSummary, RemoveWorkspaceResult, RepositoryAvailableBranch, RepositoryBaseTarget,
+    ProcessWorkspaceAdapter, PublishWorkspaceChangeRequestBranch, RefreshRepositoryBranchesRequest,
+    RefreshRepositoryBranchesResult, RemovalBlocker, RemovalBlockerCode,
+    RemovalProtectedFilePreview, RemovalProtectedPath, RemovalWorktreeSummary,
+    RemoveWorkspaceResult, RepositoryAvailableBranch, RepositoryBaseTarget,
     RepositoryBranchSummary, RepositoryCatalog, RepositoryRecommendation,
     RepositoryRecommendationSource, RepositorySummary, ResolveWorkspaceReviewThreadRequest,
     ReviewAnchorState, ReviewAuthor, ReviewCodeSide, ReviewComment, ReviewTarget,
@@ -27,18 +28,20 @@ use crate::{
     TestRunState, TestRunSummary, UnlinkWorkspaceWorkItemRequest,
     UpdateWorkspacePlanningDocumentRequest, VerificationCheck, VerificationCheckKind,
     VerificationCheckResult, VerificationCheckStatus, VerificationStatus,
-    WORKSPACE_EVIDENCE_SCHEMA_VERSION, WorkspaceAgentBriefResult, WorkspaceChangeRequestDraft,
-    WorkspaceCliLaunchResult, WorkspaceEvidence, WorkspaceEvidenceContext,
-    WorkspaceGraphEvidenceStatus, WorkspaceGraphManifest, WorkspaceMaterialization,
-    WorkspacePlanningDocument, WorkspacePlanningDocumentDescriptor, WorkspacePlanningDocumentId,
-    WorkspacePlanningDocumentList, WorkspacePreflight, WorkspaceRemovalKind,
-    WorkspaceRemovalPreflight, WorkspaceRepositoryAlignmentPreflight,
+    WORKSPACE_EVIDENCE_SCHEMA_VERSION, WorkspaceAgentBriefResult, WorkspaceBranchPublicationResult,
+    WorkspaceChangeRequestDraft, WorkspaceCliLaunchResult, WorkspaceEvidence,
+    WorkspaceEvidenceContext, WorkspaceGraphEvidenceStatus, WorkspaceGraphManifest,
+    WorkspaceMaterialization, WorkspacePlanningDocument, WorkspacePlanningDocumentDescriptor,
+    WorkspacePlanningDocumentId, WorkspacePlanningDocumentList, WorkspacePreflight,
+    WorkspaceRemovalKind, WorkspaceRemovalPreflight, WorkspaceRepositoryAdditionPreflight,
+    WorkspaceRepositoryAdditionResult, WorkspaceRepositoryAlignmentPreflight,
     WorkspaceRepositoryAlignmentResult, WorkspaceRepositoryDiff, WorkspaceRepositoryFileReview,
-    WorkspaceRepositoryReviewGraph, WorkspaceRepositoryReviewLink, WorkspaceRepositoryReviewNode,
-    WorkspaceRepositorySyncResult, WorkspaceReviewThread, WorkspaceReviewThreadList,
-    WorkspaceVerificationPlan, WorkspaceVerificationResult, WorkspaceWorkItemLink,
-    WorkspaceWorkItemLinkList, WorkspaceWorkItemLinkPreview, WorkspaceWorkItemProvider,
-    WorkspaceWorkItemRole, WorkspaceWorkItemSnapshot, WorkspaceWorkItemUnlinkResult,
+    WorkspaceRepositoryRemovalResult, WorkspaceRepositoryReviewGraph,
+    WorkspaceRepositoryReviewLink, WorkspaceRepositoryReviewNode, WorkspaceRepositorySyncResult,
+    WorkspaceReviewThread, WorkspaceReviewThreadList, WorkspaceVerificationPlan,
+    WorkspaceVerificationResult, WorkspaceWorkItemLink, WorkspaceWorkItemLinkList,
+    WorkspaceWorkItemLinkPreview, WorkspaceWorkItemProvider, WorkspaceWorkItemRole,
+    WorkspaceWorkItemSnapshot, WorkspaceWorkItemUnlinkResult,
     agent_observation::CodexSessionObserver,
     agent_session_details::AgentSessionDetailStore,
     agent_sessions::{AgentSessionStore, AgentSessionStoreError},
@@ -69,10 +72,11 @@ use thiserror::Error;
 use url::Url;
 use uuid::Uuid;
 use wts_core::workspace::{
-    CreateWorkspaceRequest, FollowWorkspaceAgentRequest, PlaceWorkspaceOnBoardRequest,
-    RenameWorkspaceRequest, RuntimePlanSelection, TransitionWorkspaceWorkflowRequest,
-    WorkspaceIntent, WorkspaceMaterializationState, WorkspacePlanningFolder,
-    WorkspacePlanningFormat, WorkspacePlanningSelection,
+    AddWorkspaceRepositoryRequest, CreateWorkspaceRequest, FollowWorkspaceAgentRequest,
+    PlaceWorkspaceOnBoardRequest, RenameWorkspaceRequest, RuntimePlanSelection,
+    TransitionWorkspaceWorkflowRequest, WorkspaceIntent, WorkspaceMaterializationState,
+    WorkspacePlanningFolder, WorkspacePlanningFormat, WorkspacePlanningSelection,
+    WorkspaceRepositoryRequest,
 };
 use wts_git::{
     GitError, GitWorktreeService, RepositoryInspection, RepositoryRequest,
@@ -110,6 +114,7 @@ const MAX_REVIEW_INBOX_THREADS: usize = 64;
 const MAX_REVIEW_INBOX_BYTES: usize = 240 * 1024;
 const GRAPHIFY_DIRECTORY: &str = "graphify-out";
 const MAX_GENERATED_FILE_BYTES: usize = 256 * 1024;
+const MAX_DISCOVERED_PLANNING_DOCUMENTS: usize = 100;
 const MAX_REMOVAL_TREE_ENTRIES: usize = 100_000;
 const MAX_REMOVAL_TREE_DEPTH: usize = 64;
 const MAX_AGENT_PROMPT_BYTES: usize = 16 * 1024;
@@ -189,6 +194,16 @@ pub enum LocalWtsError {
     RepositoryCatalogUnavailable,
     #[error("repository was not found")]
     RepositoryNotFound,
+    #[error("the workspace already contains this repository")]
+    RepositoryAlreadyInWorkspace,
+    #[error("the repository addition changed; review it again")]
+    RepositoryAdditionStale,
+    #[error("the repository could not be added to the workspace")]
+    RepositoryAdditionFailed { cleanup_complete: bool },
+    #[error("repository removal is blocked")]
+    RepositoryRemovalBlocked,
+    #[error("the repository could not be removed from the workspace")]
+    RepositoryRemovalFailed,
     #[error("the repository file path is invalid")]
     InvalidRepositoryFilePath,
     #[error("the repository file is unavailable")]
@@ -221,6 +236,16 @@ pub enum LocalWtsError {
     BrowserLaunchRejected,
     #[error("the current branch has not been published to a tracking remote")]
     ChangeRequestBranchNotPublished,
+    #[error("the current branch could not be published")]
+    ChangeRequestBranchPublishFailed,
+    #[error("the branch name is invalid")]
+    InvalidChangeRequestBranchName,
+    #[error("Git authentication failed while publishing the branch")]
+    ChangeRequestBranchAuthenticationFailed,
+    #[error("the Git remote is unavailable")]
+    ChangeRequestBranchNetworkFailed,
+    #[error("the Git remote rejected the branch update")]
+    ChangeRequestBranchRejected,
     #[error("the published branch does not match the current local commit")]
     ChangeRequestRemoteMismatch,
     #[error("commit or discard local changes before preparing a change request")]
@@ -404,6 +429,12 @@ struct PreparedPreflight {
     view: WorkspaceView,
     plan: Option<WorktreePlan>,
     public: WorkspacePreflight,
+}
+
+struct PreparedRepositoryAddition {
+    request: WorkspaceRepositoryRequest,
+    plan: WorktreePlan,
+    public: WorkspaceRepositoryAdditionPreflight,
 }
 
 struct PreparedRemoval {
@@ -1266,15 +1297,21 @@ impl LocalWtsService {
         &self,
         workspace_id: Uuid,
     ) -> Result<WorkspacePlanningDocumentList, LocalWtsError> {
-        let (_, planning) = self.trusted_planning_home(workspace_id)?;
-        let documents = planning_document_ids(planning.format)
+        let (planning_home, planning) = self.trusted_planning_home(workspace_id)?;
+        let mut documents: Vec<_> = planning_document_ids(planning.format)
             .iter()
-            .copied()
+            .cloned()
             .map(|document_id| WorkspacePlanningDocumentDescriptor {
+                file_name: fixed_planning_document_file_name(&document_id)
+                    .expect("configured planning document must have a fixed file name")
+                    .to_owned(),
                 document_id,
-                file_name: planning_document_file_name(document_id).to_owned(),
             })
             .collect();
+        documents.extend(discover_generated_planning_documents(
+            &planning_home,
+            planning.format,
+        )?);
         Ok(WorkspacePlanningDocumentList {
             workspace_id,
             documents,
@@ -1287,8 +1324,9 @@ impl LocalWtsService {
         document_id: WorkspacePlanningDocumentId,
     ) -> Result<WorkspacePlanningDocument, LocalWtsError> {
         let (planning_home, planning) = self.trusted_planning_home(workspace_id)?;
-        validate_planning_document_selection(planning.format, document_id)?;
-        read_planning_document(workspace_id, &planning_home, document_id)
+        let file_name =
+            resolve_planning_document_file_name(&planning_home, planning.format, &document_id)?;
+        read_planning_document(workspace_id, &planning_home, document_id, &file_name)
     }
 
     pub fn update_workspace_planning_document(
@@ -1309,17 +1347,23 @@ impl LocalWtsService {
             .lock()
             .map_err(|_| LocalWtsError::InvalidPlanningDocument)?;
         let (planning_home, planning) = self.trusted_planning_home(workspace_id)?;
-        validate_planning_document_selection(planning.format, document_id)?;
-        let current = read_planning_document(workspace_id, &planning_home, document_id)?;
+        let file_name =
+            resolve_planning_document_file_name(&planning_home, planning.format, &document_id)?;
+        let current = read_planning_document(
+            workspace_id,
+            &planning_home,
+            document_id.clone(),
+            &file_name,
+        )?;
         if current.sha256 != request.expected_sha256 {
             return Err(LocalWtsError::PlanningDocumentConflict);
         }
-        let path = planning_home.join(planning_document_file_name(document_id));
+        let path = planning_home.join(&file_name);
         atomic_replace_bytes(&path, request.contents.as_bytes())?;
         Ok(WorkspacePlanningDocument {
             workspace_id,
             document_id,
-            file_name: planning_document_file_name(document_id).to_owned(),
+            file_name,
             sha256: sha256_bytes(request.contents.as_bytes()),
             contents: request.contents,
         })
@@ -1377,7 +1421,8 @@ impl LocalWtsService {
                 {
                     return Err(LocalWtsError::InvalidReviewThread);
                 }
-                let current = self.read_workspace_planning_document(workspace_id, document_id)?;
+                let current =
+                    self.read_workspace_planning_document(workspace_id, document_id.clone())?;
                 if current.sha256 != document_sha256 {
                     return Err(LocalWtsError::PlanningDocumentConflict);
                 }
@@ -1389,7 +1434,7 @@ impl LocalWtsService {
                     return Err(LocalWtsError::InvalidReviewThread);
                 }
                 StoredReviewTarget::PlanningDocument {
-                    document_id: planning_document_wire_id(document_id).to_owned(),
+                    document_id: document_id.wire_id().to_owned(),
                     document_sha256,
                     line,
                 }
@@ -1528,10 +1573,10 @@ impl LocalWtsService {
                     document_sha256,
                     line,
                 } => {
-                    let document_id = planning_document_id_from_wire(&document_id)
+                    let document_id = WorkspacePlanningDocumentId::from_wire(&document_id)
                         .ok_or(LocalWtsError::InvalidReviewThread)?;
                     let current_document_sha256 = self
-                        .read_workspace_planning_document(thread.workspace_id, document_id)
+                        .read_workspace_planning_document(thread.workspace_id, document_id.clone())
                         .ok()
                         .map(|document| document.sha256);
                     let anchor_state = match current_document_sha256.as_deref() {
@@ -2824,7 +2869,7 @@ impl LocalWtsService {
             forge: source_identity.forge(),
             host: source_identity.host().to_owned(),
             source_remote_name: publication.upstream_remote_name,
-            source_branch: publication.branch_name,
+            source_branch: publication.upstream_branch_name,
             source_head_commit_oid: publication.head_commit_oid,
             target_branch: plan.base_ref.clone(),
             commit_subject,
@@ -2850,6 +2895,67 @@ impl LocalWtsService {
         };
         draft.effect_digest = change_request_effect_digest(&draft)?;
         Ok(draft)
+    }
+
+    pub fn publish_workspace_change_request_branch(
+        &self,
+        workspace_id: Uuid,
+        request: PublishWorkspaceChangeRequestBranch,
+    ) -> Result<WorkspaceBranchPublicationResult, LocalWtsError> {
+        if request.repository_id.trim() != request.repository_id
+            || request.repository_id.is_empty()
+            || request.repository_id.len() > 160
+        {
+            return Err(LocalWtsError::InvalidChangeRequestDraft);
+        }
+        let (workspace_path, materialization) = self.read_materialization_receipt(workspace_id)?;
+        let worktree = materialization
+            .worktrees
+            .iter()
+            .find(|worktree| worktree.repository_id == request.repository_id)
+            .ok_or(LocalWtsError::RepositoryNotFound)?;
+        self.inspect_materialized_worktree(&workspace_path, worktree)?;
+        let view = self
+            .inner
+            .registry
+            .get(workspace_id)?
+            .ok_or(LocalWtsError::WorkspaceNotFound)?;
+        let plan = view
+            .repositories
+            .iter()
+            .find(|repository| {
+                repository.repository_id.as_deref() == Some(request.repository_id.as_str())
+                    || repository.label.eq_ignore_ascii_case(&worktree.label)
+            })
+            .ok_or(LocalWtsError::RepositoryNotFound)?;
+        let target_path = Path::new(&worktree.target_display_path);
+        let changed_file_count = self
+            .inner
+            .git
+            .changed_file_count(target_path)
+            .map_err(|_| LocalWtsError::ChangeRequestBranchPublishFailed)?;
+        if changed_file_count != 0 {
+            return Err(LocalWtsError::ChangeRequestWorktreeDirty);
+        }
+        let requested_branch_name = request.branch_name.as_deref();
+        if requested_branch_name
+            .is_some_and(|name| name.trim() != name || name.is_empty() || name.len() > 240)
+        {
+            return Err(LocalWtsError::InvalidChangeRequestBranchName);
+        }
+        let publication = self
+            .inner
+            .git
+            .publish_branch(target_path, &plan.base_ref, requested_branch_name)
+            .map_err(map_change_request_publish_error)?;
+        Ok(WorkspaceBranchPublicationResult {
+            workspace_id,
+            repository_id: request.repository_id,
+            repository_label: worktree.label.clone(),
+            remote_name: publication.upstream_remote_name,
+            branch_name: publication.upstream_branch_name,
+            head_commit_oid: publication.head_commit_oid,
+        })
     }
 
     pub fn open_workspace_change_request_draft(
@@ -2939,6 +3045,485 @@ impl LocalWtsService {
             Err(LocalWtsError::NotMaterialized) => Ok(None),
             Err(error) => Err(error),
         }
+    }
+
+    pub fn preflight_workspace_repository_addition(
+        &self,
+        workspace_id: Uuid,
+        request: AddWorkspaceRepositoryRequest,
+    ) -> Result<WorkspaceRepositoryAdditionPreflight, LocalWtsError> {
+        let _guard = self.inner.materialization_lock.lock().map_err(|_| {
+            LocalWtsError::RepositoryAdditionFailed {
+                cleanup_complete: true,
+            }
+        })?;
+        self.prepare_repository_addition(workspace_id, &request)
+            .map(|prepared| prepared.public)
+    }
+
+    pub fn add_workspace_repository(
+        &self,
+        workspace_id: Uuid,
+        request: AddWorkspaceRepositoryRequest,
+        expected_effect_digest: &str,
+    ) -> Result<WorkspaceRepositoryAdditionResult, LocalWtsError> {
+        if !valid_sha256(expected_effect_digest) {
+            return Err(LocalWtsError::RepositoryAdditionStale);
+        }
+        let _verification_guard = self
+            .inner
+            .verification_lock
+            .try_lock()
+            .map_err(|_| LocalWtsError::RepositorySyncBusy)?;
+        let _materialization_guard = self.inner.materialization_lock.lock().map_err(|_| {
+            LocalWtsError::RepositoryAdditionFailed {
+                cleanup_complete: true,
+            }
+        })?;
+        let _adapter_guard = self
+            .inner
+            .adapter_lock
+            .try_lock()
+            .map_err(|_| LocalWtsError::RepositorySyncBusy)?;
+        self.ensure_repository_operation_idle(workspace_id)?;
+
+        if let Ok(materialization) = self.validate_materialization(workspace_id)
+            && materialization.effect_digest == expected_effect_digest
+            && let Some(worktree) = materialization
+                .worktrees
+                .iter()
+                .find(|worktree| worktree.repository_id == request.repository_id)
+        {
+            return Ok(WorkspaceRepositoryAdditionResult {
+                workspace_id,
+                repository_id: worktree.repository_id.clone(),
+                repository_label: worktree.label.clone(),
+                replayed: true,
+                graph_refreshed: materialization.graph.status == GraphWorkspaceStatus::Ready,
+                graph_detail: materialization.graph.detail.clone(),
+                materialization,
+            });
+        }
+
+        let prepared = self.prepare_repository_addition(workspace_id, &request)?;
+        if prepared.public.effect_digest != expected_effect_digest {
+            return Err(LocalWtsError::RepositoryAdditionStale);
+        }
+        let (workspace_path, mut materialization) =
+            self.read_materialization_receipt(workspace_id)?;
+        let receipt = self.inner.git.materialize(prepared.plan).map_err(|error| {
+            LocalWtsError::RepositoryAdditionFailed {
+                cleanup_complete: error.rollback.failures.is_empty()
+                    && error.rollback.workspace_root_removal_error.is_none(),
+            }
+        })?;
+        let rollback_addition = || {
+            let rollback = self.inner.git.rollback(&receipt);
+            LocalWtsError::RepositoryAdditionFailed {
+                cleanup_complete: rollback.failures.is_empty()
+                    && rollback.workspace_root_removal_error.is_none(),
+            }
+        };
+        let created = receipt.worktrees.first().ok_or_else(&rollback_addition)?;
+        let inspection = self
+            .inner
+            .git
+            .inspect_repository(&created.target_path)
+            .map_err(|_| LocalWtsError::RepositoryAdditionFailed {
+                cleanup_complete: self.inner.git.rollback(&receipt).failures.is_empty(),
+            })?;
+        let tracking_remote_url = self
+            .inner
+            .git
+            .tracking_remote_url(&created.source_repository, &prepared.request.base_ref)
+            .ok()
+            .flatten();
+        let added_worktree = MaterializedWorktree {
+            repository_id: created.repository_id.as_str().to_owned(),
+            label: created.repository_label.clone(),
+            target_display_path: display_path(&created.target_path)
+                .map_err(|_| rollback_addition())?,
+            branch_name: created.branch_name.clone(),
+            base_commit_oid: created.base_commit_oid.clone(),
+            git_state: Some(MaterializedGitState {
+                head_commit_oid: created.base_commit_oid.clone(),
+                origin_url: tracking_remote_url.or(inspection.origin_url),
+                upstream_full_ref: inspection.upstream_full_ref,
+            }),
+            activity: Some(crate::MaterializedWorktreeActivity {
+                changed_file_count: 0,
+                commits_ahead: 0,
+            }),
+        };
+        materialization.worktrees.push(added_worktree.clone());
+        materialization.worktrees.sort_by(|left, right| {
+            left.label
+                .to_lowercase()
+                .cmp(&right.label.to_lowercase())
+                .then(left.repository_id.cmp(&right.repository_id))
+        });
+        materialization.effect_digest = expected_effect_digest.to_owned();
+        materialization.graph = graph_summary();
+
+        let evidence_store =
+            EvidenceStore::open(&workspace_path).map_err(|_| rollback_addition())?;
+        let mut evidence = evidence_store.read().map_err(|_| rollback_addition())?;
+        evidence.context.repositories.push(EvidenceRepository {
+            repository_id: added_worktree.repository_id.clone(),
+            label: added_worktree.label.clone(),
+            requested_base_ref: prepared.public.base_ref.clone(),
+            resolved_base_ref: prepared.public.resolved_base_ref.clone(),
+            base_commit_oid: added_worktree.base_commit_oid.clone(),
+            worktree_display_path: added_worktree.target_display_path.clone(),
+        });
+        evidence.context.repositories.sort_by(|left, right| {
+            left.label
+                .to_lowercase()
+                .cmp(&right.label.to_lowercase())
+                .then(left.repository_id.cmp(&right.repository_id))
+        });
+        evidence.context.allowed_repository_ids = evidence
+            .context
+            .repositories
+            .iter()
+            .map(|repository| repository.repository_id.clone())
+            .collect();
+        evidence.graph_manifest = WorkspaceGraphManifest {
+            schema_version: WORKSPACE_EVIDENCE_SCHEMA_VERSION,
+            workspace_id,
+            status: WorkspaceGraphEvidenceStatus::NotStarted,
+            graph_display_path: None,
+            graph_sha256: None,
+            indexed_at_unix_ms: None,
+            indexed_repositories: Vec::new(),
+            detail: "The repository set changed. Rebuild the workspace graph.".to_owned(),
+        };
+        evidence.verification_plan.revision = evidence
+            .verification_plan
+            .revision
+            .checked_add(1)
+            .ok_or_else(&rollback_addition)?;
+        evidence.verification_plan.updated_at_unix_ms = now_unix_ms();
+        evidence.verification_plan.checks = default_verification_checks(&materialization);
+        evidence.verification_result = WorkspaceVerificationResult {
+            schema_version: WORKSPACE_EVIDENCE_SCHEMA_VERSION,
+            workspace_id,
+            plan_revision: evidence.verification_plan.revision,
+            status: VerificationStatus::NotRun,
+            started_at_unix_ms: None,
+            completed_at_unix_ms: None,
+            duration_ms: None,
+            checks: Vec::new(),
+            warnings: vec!["The repository set changed. Run verification again.".to_owned()],
+        };
+
+        let code_workspace_path = PathBuf::from(&materialization.code_workspace_display_path);
+        let manifest_path = workspace_path.join(MATERIALIZATION_MANIFEST_FILE);
+        let wts_guide_path = workspace_path.join(WTS_GUIDE_FILE);
+        let evidence_paths = [
+            workspace_path.join(EVIDENCE_DIRECTORY).join("context.json"),
+            workspace_path
+                .join(EVIDENCE_DIRECTORY)
+                .join("graph-manifest.json"),
+            workspace_path
+                .join(EVIDENCE_DIRECTORY)
+                .join("verification-plan.json"),
+            workspace_path
+                .join(EVIDENCE_DIRECTORY)
+                .join("verification-result.json"),
+        ];
+        let backup_paths = [
+            code_workspace_path.clone(),
+            manifest_path.clone(),
+            wts_guide_path.clone(),
+            evidence_paths[0].clone(),
+            evidence_paths[1].clone(),
+            evidence_paths[2].clone(),
+            evidence_paths[3].clone(),
+        ];
+        let backups = backup_regular_files(&backup_paths).map_err(|_| rollback_addition())?;
+        let persist_result = (|| {
+            atomic_replace_json(
+                &code_workspace_path,
+                &CodeWorkspace {
+                    folders: code_workspace_folders(&materialization)?,
+                },
+            )?;
+            evidence_store
+                .write_context(&evidence.context)
+                .map_err(map_evidence_failure)?;
+            evidence_store
+                .write_graph(&evidence.graph_manifest)
+                .map_err(map_evidence_failure)?;
+            evidence_store
+                .write_verification_plan(&evidence.verification_plan)
+                .map_err(map_evidence_failure)?;
+            evidence_store
+                .write_verification_result(&evidence.verification_result)
+                .map_err(map_evidence_failure)?;
+            atomic_replace_bytes(
+                &wts_guide_path,
+                workspace_agent_guide(&evidence.context).as_bytes(),
+            )?;
+            atomic_replace_json(&manifest_path, &materialization)?;
+            self.inner
+                .registry
+                .add_repository(workspace_id, prepared.request.clone())?;
+            Ok::<(), LocalWtsError>(())
+        })();
+        if persist_result.is_err() {
+            let files_restored = restore_file_backups(&backups);
+            let rollback = self.inner.git.rollback(&receipt);
+            return Err(LocalWtsError::RepositoryAdditionFailed {
+                cleanup_complete: files_restored
+                    && rollback.failures.is_empty()
+                    && rollback.workspace_root_removal_error.is_none(),
+            });
+        }
+        if let Ok(worktree_count) = materialization.worktrees.len().try_into() {
+            let _ = self.inner.registry.observe_lifecycle(
+                workspace_id,
+                WorkspaceMaterializationState::Materialized,
+                worktree_count,
+            );
+        }
+        let _ = self.publish_workspace_review_inbox(&materialization);
+
+        let graph_outcome = self
+            .inner
+            .adapter
+            .index_graph(workspace_id, &workspace_path);
+        let (graph_refreshed, graph_detail) = match graph_outcome {
+            Ok(result) if self.record_graph_evidence(&materialization, &result).is_ok() => {
+                (true, result.detail)
+            }
+            Ok(_) => (
+                false,
+                "The repository was added, but WTS could not save the rebuilt graph evidence. Re-index the graph before you start an agent."
+                    .to_owned(),
+            ),
+            Err(failure) => {
+                let _ = self.record_graph_failure(&materialization, failure);
+                (
+                    false,
+                    "The repository was added, but WTS could not rebuild the workspace graph. Re-index the graph before you start an agent."
+                        .to_owned(),
+                )
+            }
+        };
+        let materialization = self.validate_materialization(workspace_id)?;
+        Ok(WorkspaceRepositoryAdditionResult {
+            workspace_id,
+            repository_id: added_worktree.repository_id,
+            repository_label: added_worktree.label,
+            replayed: false,
+            graph_refreshed,
+            graph_detail,
+            materialization,
+        })
+    }
+
+    pub fn remove_workspace_repository(
+        &self,
+        workspace_id: Uuid,
+        repository_id: &str,
+    ) -> Result<WorkspaceRepositoryRemovalResult, LocalWtsError> {
+        let repository_id = repository_id.trim();
+        if repository_id.is_empty() || repository_id.len() > 512 {
+            return Err(LocalWtsError::RepositoryNotFound);
+        }
+        let _verification_guard = self
+            .inner
+            .verification_lock
+            .try_lock()
+            .map_err(|_| LocalWtsError::RepositorySyncBusy)?;
+        let _materialization_guard = self
+            .inner
+            .materialization_lock
+            .lock()
+            .map_err(|_| LocalWtsError::RepositoryRemovalFailed)?;
+        let _adapter_guard = self
+            .inner
+            .adapter_lock
+            .try_lock()
+            .map_err(|_| LocalWtsError::RepositorySyncBusy)?;
+        self.ensure_repository_operation_idle(workspace_id)?;
+
+        let (workspace_path, mut materialization) =
+            self.read_materialization_receipt(workspace_id)?;
+        if materialization.worktrees.len() <= 1 {
+            return Err(LocalWtsError::RepositoryRemovalBlocked);
+        }
+        let removed_worktree = materialization
+            .worktrees
+            .iter()
+            .find(|worktree| worktree.repository_id == repository_id)
+            .cloned()
+            .ok_or(LocalWtsError::RepositoryNotFound)?;
+        let catalog = self.repository_catalog()?;
+        let source = catalog
+            .repositories
+            .iter()
+            .find(|repository| repository.id == repository_id)
+            .ok_or(LocalWtsError::RepositoryNotFound)?;
+        let removal = WorktreeRemovalRequest::new(
+            PathBuf::from(&source.display_path),
+            &workspace_path,
+            PathBuf::from(&removed_worktree.target_display_path),
+            repository_id,
+            &removed_worktree.branch_name,
+        );
+        let inspection = self
+            .inner
+            .git
+            .inspect_worktree_removal(&removal)
+            .map_err(|_| LocalWtsError::RepositoryRemovalFailed)?;
+        if inspection.has_changes || inspection.has_ignored_files || !inspection.present {
+            return Err(LocalWtsError::RepositoryRemovalBlocked);
+        }
+
+        materialization
+            .worktrees
+            .retain(|worktree| worktree.repository_id != repository_id);
+        materialization.effect_digest = format!(
+            "sha256:{}",
+            Sha256::digest(
+                serde_json::to_vec(&(workspace_id, repository_id, &materialization.worktrees,))
+                    .map_err(|_| LocalWtsError::RepositoryRemovalFailed)?,
+            )
+            .encode_hex::<String>()
+        );
+        materialization.graph = graph_summary();
+
+        let evidence_store = EvidenceStore::open(&workspace_path)
+            .map_err(|_| LocalWtsError::RepositoryRemovalFailed)?;
+        let mut evidence = evidence_store
+            .read()
+            .map_err(|_| LocalWtsError::RepositoryRemovalFailed)?;
+        evidence
+            .context
+            .repositories
+            .retain(|repository| repository.repository_id != repository_id);
+        evidence.context.allowed_repository_ids = evidence
+            .context
+            .repositories
+            .iter()
+            .map(|repository| repository.repository_id.clone())
+            .collect();
+        evidence.graph_manifest = WorkspaceGraphManifest {
+            schema_version: WORKSPACE_EVIDENCE_SCHEMA_VERSION,
+            workspace_id,
+            status: WorkspaceGraphEvidenceStatus::NotStarted,
+            graph_display_path: None,
+            graph_sha256: None,
+            indexed_at_unix_ms: None,
+            indexed_repositories: Vec::new(),
+            detail: "The repository set changed. Rebuild the workspace graph.".to_owned(),
+        };
+        evidence.verification_plan.revision = evidence
+            .verification_plan
+            .revision
+            .checked_add(1)
+            .ok_or(LocalWtsError::RepositoryRemovalFailed)?;
+        evidence.verification_plan.updated_at_unix_ms = now_unix_ms();
+        evidence.verification_plan.checks = default_verification_checks(&materialization);
+        evidence.verification_result = WorkspaceVerificationResult {
+            schema_version: WORKSPACE_EVIDENCE_SCHEMA_VERSION,
+            workspace_id,
+            plan_revision: evidence.verification_plan.revision,
+            status: VerificationStatus::NotRun,
+            started_at_unix_ms: None,
+            completed_at_unix_ms: None,
+            duration_ms: None,
+            checks: Vec::new(),
+            warnings: vec!["The repository set changed. Run verification again.".to_owned()],
+        };
+
+        let code_workspace_path = PathBuf::from(&materialization.code_workspace_display_path);
+        let manifest_path = workspace_path.join(MATERIALIZATION_MANIFEST_FILE);
+        let wts_guide_path = workspace_path.join(WTS_GUIDE_FILE);
+        let backup_paths = [
+            code_workspace_path.clone(),
+            manifest_path.clone(),
+            wts_guide_path.clone(),
+            workspace_path.join(EVIDENCE_DIRECTORY).join("context.json"),
+            workspace_path
+                .join(EVIDENCE_DIRECTORY)
+                .join("graph-manifest.json"),
+            workspace_path
+                .join(EVIDENCE_DIRECTORY)
+                .join("verification-plan.json"),
+            workspace_path
+                .join(EVIDENCE_DIRECTORY)
+                .join("verification-result.json"),
+        ];
+        let backups = backup_regular_files(&backup_paths)
+            .map_err(|_| LocalWtsError::RepositoryRemovalFailed)?;
+        self.inner
+            .git
+            .remove_worktree(&removal)
+            .map_err(|_| LocalWtsError::RepositoryRemovalFailed)?;
+        let persist_result = (|| {
+            atomic_replace_json(
+                &code_workspace_path,
+                &CodeWorkspace {
+                    folders: code_workspace_folders(&materialization)?,
+                },
+            )?;
+            evidence_store
+                .write_context(&evidence.context)
+                .map_err(map_evidence_failure)?;
+            evidence_store
+                .write_graph(&evidence.graph_manifest)
+                .map_err(map_evidence_failure)?;
+            evidence_store
+                .write_verification_plan(&evidence.verification_plan)
+                .map_err(map_evidence_failure)?;
+            evidence_store
+                .write_verification_result(&evidence.verification_result)
+                .map_err(map_evidence_failure)?;
+            atomic_replace_bytes(
+                &wts_guide_path,
+                workspace_agent_guide(&evidence.context).as_bytes(),
+            )?;
+            atomic_replace_json(&manifest_path, &materialization)?;
+            self.inner
+                .registry
+                .remove_repository(workspace_id, repository_id)?;
+            Ok::<(), LocalWtsError>(())
+        })();
+        if persist_result.is_err() {
+            let _ = restore_file_backups(&backups);
+            return Err(LocalWtsError::RepositoryRemovalFailed);
+        }
+        let _ = self.publish_workspace_review_inbox(&materialization);
+        let graph_outcome = self
+            .inner
+            .adapter
+            .index_graph(workspace_id, &workspace_path);
+        let (graph_refreshed, graph_detail) = match graph_outcome {
+            Ok(result)
+                if self
+                    .record_graph_evidence(&materialization, &result)
+                    .is_ok() =>
+            {
+                (true, result.detail)
+            }
+            _ => (
+                false,
+                "The repository was removed. Re-index the graph before you start an agent."
+                    .to_owned(),
+            ),
+        };
+        let materialization = self.validate_materialization(workspace_id)?;
+        Ok(WorkspaceRepositoryRemovalResult {
+            workspace_id,
+            repository_id: repository_id.to_owned(),
+            repository_label: removed_worktree.label,
+            graph_refreshed,
+            graph_detail,
+            materialization,
+        })
     }
 
     pub fn workspace_repository_diff(
@@ -5926,6 +6511,133 @@ impl LocalWtsService {
         Ok(Some(materialization))
     }
 
+    fn prepare_repository_addition(
+        &self,
+        workspace_id: Uuid,
+        request: &AddWorkspaceRepositoryRequest,
+    ) -> Result<PreparedRepositoryAddition, LocalWtsError> {
+        let repository_id = request.repository_id.trim();
+        let base_ref = request.base_ref.trim();
+        if repository_id.is_empty()
+            || repository_id != request.repository_id
+            || repository_id.len() > 512
+            || base_ref.is_empty()
+            || base_ref != request.base_ref
+        {
+            return Err(LocalWtsError::InvalidRepositoryBase);
+        }
+        let view = self
+            .inner
+            .registry
+            .get(workspace_id)?
+            .ok_or(LocalWtsError::WorkspaceNotFound)?;
+        let (_, materialization) = self.read_materialization_receipt(workspace_id)?;
+        if view
+            .repositories
+            .iter()
+            .any(|repository| repository.repository_id.as_deref() == Some(repository_id))
+            || materialization
+                .worktrees
+                .iter()
+                .any(|worktree| worktree.repository_id == repository_id)
+        {
+            return Err(LocalWtsError::RepositoryAlreadyInWorkspace);
+        }
+        let catalog = self.repository_catalog()?;
+        let catalog_repository = catalog
+            .repositories
+            .iter()
+            .find(|repository| repository.id == repository_id)
+            .ok_or(LocalWtsError::RepositoryNotFound)?;
+        if view.repositories.iter().any(|repository| {
+            repository
+                .label
+                .eq_ignore_ascii_case(&catalog_repository.label)
+        }) {
+            return Err(LocalWtsError::RepositoryAlreadyInWorkspace);
+        }
+        let mut repository_requests = view
+            .repositories
+            .iter()
+            .map(|repository| WorkspaceRepositoryRequest {
+                repository_id: repository.repository_id.clone(),
+                label: repository.label.clone(),
+                base_ref: repository.base_ref.clone(),
+            })
+            .collect::<Vec<_>>();
+        repository_requests.push(WorkspaceRepositoryRequest {
+            repository_id: Some(catalog_repository.id.clone()),
+            label: catalog_repository.label.clone(),
+            base_ref: base_ref.to_owned(),
+        });
+        let normalized = CreateWorkspaceRequest {
+            intent: view.intent.clone(),
+            title: view.title.clone(),
+            preferred_provider: view.preferred_provider,
+            repositories: repository_requests,
+            runtime: view.runtime.clone(),
+            planning: view.planning,
+        }
+        .normalize()
+        .map_err(WorkspaceStoreError::from)
+        .map_err(LocalWtsError::Store)?;
+        let repository_request = normalized
+            .repositories
+            .into_iter()
+            .find(|repository| repository.repository_id.as_deref() == Some(repository_id))
+            .ok_or(LocalWtsError::RepositoryNotFound)?;
+        let source_path = PathBuf::from(&catalog_repository.display_path);
+        let source = self
+            .inner
+            .git
+            .inspect_repository(&source_path)
+            .map_err(|_| LocalWtsError::RepositoryChanged)?;
+        if source.id.as_str() != repository_id {
+            return Err(LocalWtsError::RepositoryChanged);
+        }
+        let git_request = WorkspaceWorktreeRequest::new(
+            PathBuf::from(&materialization.workspace_display_path),
+            materialization.branch_name.clone(),
+            vec![
+                RepositoryRequest::new(source_path)
+                    .with_base_ref(repository_request.base_ref.clone()),
+            ],
+        );
+        let plan = self.inner.git.preflight(&git_request).map_err(|error| {
+            LocalWtsError::PreflightBlocked {
+                blockers: vec![blocker_for_repository_git(
+                    error,
+                    &repository_request.label,
+                    repository_id,
+                    &repository_request.base_ref,
+                )],
+            }
+        })?;
+        let planned =
+            plan.repositories()
+                .first()
+                .ok_or(LocalWtsError::RepositoryAdditionFailed {
+                    cleanup_complete: true,
+                })?;
+        let mut public = WorkspaceRepositoryAdditionPreflight {
+            workspace_id,
+            repository_id: repository_id.to_owned(),
+            repository_label: repository_request.label.clone(),
+            base_ref: repository_request.base_ref.clone(),
+            resolved_base_ref: planned.base.full_ref.clone(),
+            base_commit_oid: planned.base.commit_oid.clone(),
+            target_display_path: display_path(&planned.target_path)?,
+            branch_name: materialization.branch_name,
+            effect_digest: String::new(),
+        };
+        public.effect_digest = repository_addition_effect_digest(&public)?;
+        Ok(PreparedRepositoryAddition {
+            request: repository_request,
+            plan,
+            public,
+        })
+    }
+
     fn prepare_preflight(&self, workspace_id: Uuid) -> Result<PreparedPreflight, LocalWtsError> {
         let view = self
             .inner
@@ -6433,6 +7145,49 @@ impl LocalWtsService {
                 upstream_full_ref: inspection.upstream_full_ref,
             },
         ))
+    }
+}
+
+fn map_change_request_publish_error(error: GitError) -> LocalWtsError {
+    match error {
+        GitError::InvalidBranchName => LocalWtsError::InvalidChangeRequestBranchName,
+        GitError::WorktreeHasChanges => LocalWtsError::ChangeRequestWorktreeDirty,
+        GitError::CommandFailed { detail, .. } => {
+            let detail = detail.to_ascii_lowercase();
+            if [
+                "authentication failed",
+                "permission denied",
+                "publickey",
+                "could not read username",
+                "terminal prompts disabled",
+                "access denied",
+            ]
+            .iter()
+            .any(|needle| detail.contains(needle))
+            {
+                LocalWtsError::ChangeRequestBranchAuthenticationFailed
+            } else if [
+                "could not resolve host",
+                "failed to connect",
+                "connection timed out",
+                "network is unreachable",
+                "connection refused",
+                "connection reset",
+            ]
+            .iter()
+            .any(|needle| detail.contains(needle))
+            {
+                LocalWtsError::ChangeRequestBranchNetworkFailed
+            } else if ["[rejected]", "non-fast-forward", "fetch first"]
+                .iter()
+                .any(|needle| detail.contains(needle))
+            {
+                LocalWtsError::ChangeRequestBranchRejected
+            } else {
+                LocalWtsError::ChangeRequestBranchPublishFailed
+            }
+        }
+        _ => LocalWtsError::ChangeRequestBranchPublishFailed,
     }
 }
 
@@ -7802,6 +8557,7 @@ fn operational_failure_category(error: &LocalWtsError) -> &'static str {
         LocalWtsError::StaleRuntimeAnalysis => "stale_runtime_analysis",
         LocalWtsError::InvalidRuntimeSelection => "invalid_runtime_selection",
         LocalWtsError::RepositoryForgeUnsupported => "repository_forge_unsupported",
+        LocalWtsError::ChangeRequestBranchPublishFailed => "change_request_branch_publish_failed",
         LocalWtsError::BrowserUnavailable => "browser_unavailable",
         LocalWtsError::BrowserLaunchRejected => "browser_launch_rejected",
         LocalWtsError::JiraBrowserUrlUnavailable => "jira_browser_url_unavailable",
@@ -8335,6 +9091,22 @@ fn repository_alignment_effect_digest(
     ))
 }
 
+fn repository_addition_effect_digest(
+    preflight: &WorkspaceRepositoryAdditionPreflight,
+) -> Result<String, LocalWtsError> {
+    let mut unsigned = preflight.clone();
+    unsigned.effect_digest.clear();
+    let bytes =
+        serde_json::to_vec(&unsigned).map_err(|_| LocalWtsError::RepositoryAdditionStale)?;
+    let mut hasher = Sha256::new();
+    hasher.update(b"wts-repository-addition-v1\0");
+    hasher.update(bytes);
+    Ok(format!(
+        "sha256:{}",
+        hasher.finalize().encode_hex::<String>()
+    ))
+}
+
 fn removal_git_blocker(error: GitError, repository_label: &str) -> RemovalBlocker {
     let (code, message) = match error {
         GitError::WorktreeHasChanges => (
@@ -8560,35 +9332,104 @@ fn planning_document_ids(
     }
 }
 
-fn planning_document_file_name(document_id: WorkspacePlanningDocumentId) -> &'static str {
+fn fixed_planning_document_file_name(
+    document_id: &WorkspacePlanningDocumentId,
+) -> Option<&'static str> {
     match document_id {
-        WorkspacePlanningDocumentId::Readme => "README.md",
-        WorkspacePlanningDocumentId::Plan => "PLAN.md",
-        WorkspacePlanningDocumentId::Findings => "FINDINGS.md",
-        WorkspacePlanningDocumentId::Kanban => "KANBAN.md",
-        WorkspacePlanningDocumentId::ProgramBacklog => "PROGRAM-BACKLOG.md",
+        WorkspacePlanningDocumentId::Readme => Some("README.md"),
+        WorkspacePlanningDocumentId::Plan => Some("PLAN.md"),
+        WorkspacePlanningDocumentId::Findings => Some("FINDINGS.md"),
+        WorkspacePlanningDocumentId::Kanban => Some("KANBAN.md"),
+        WorkspacePlanningDocumentId::ProgramBacklog => Some("PROGRAM-BACKLOG.md"),
+        WorkspacePlanningDocumentId::Generated(_) => None,
     }
 }
 
-fn planning_document_wire_id(document_id: WorkspacePlanningDocumentId) -> &'static str {
-    match document_id {
-        WorkspacePlanningDocumentId::Readme => "readme",
-        WorkspacePlanningDocumentId::Plan => "plan",
-        WorkspacePlanningDocumentId::Findings => "findings",
-        WorkspacePlanningDocumentId::Kanban => "kanban",
-        WorkspacePlanningDocumentId::ProgramBacklog => "programBacklog",
-    }
+fn generated_planning_document_id(file_name: &str) -> WorkspacePlanningDocumentId {
+    let mut hasher = Sha256::new();
+    hasher.update(b"wts-planning-document-v1\0");
+    hasher.update(file_name.as_bytes());
+    WorkspacePlanningDocumentId::Generated(format!(
+        "generated-{}",
+        hasher.finalize().encode_hex::<String>()
+    ))
 }
 
-fn planning_document_id_from_wire(value: &str) -> Option<WorkspacePlanningDocumentId> {
-    match value {
-        "readme" => Some(WorkspacePlanningDocumentId::Readme),
-        "plan" => Some(WorkspacePlanningDocumentId::Plan),
-        "findings" => Some(WorkspacePlanningDocumentId::Findings),
-        "kanban" => Some(WorkspacePlanningDocumentId::Kanban),
-        "programBacklog" => Some(WorkspacePlanningDocumentId::ProgramBacklog),
-        _ => None,
+fn supported_generated_planning_file(file_name: &str) -> bool {
+    Path::new(file_name)
+        .extension()
+        .and_then(OsStr::to_str)
+        .is_some_and(|extension| {
+            matches!(
+                extension.to_ascii_lowercase().as_str(),
+                "md" | "csv" | "txt" | "mmd" | "mermaid"
+            )
+        })
+}
+
+fn discover_generated_planning_documents(
+    planning_home: &Path,
+    format: WorkspacePlanningFormat,
+) -> Result<Vec<WorkspacePlanningDocumentDescriptor>, LocalWtsError> {
+    let fixed_file_names: BTreeSet<_> = planning_document_ids(format)
+        .iter()
+        .filter_map(fixed_planning_document_file_name)
+        .collect();
+    let entries =
+        fs::read_dir(planning_home).map_err(|_| LocalWtsError::InvalidPlanningDocument)?;
+    let mut documents = Vec::new();
+    for entry in entries {
+        let Ok(entry) = entry else { continue };
+        let file_name = entry.file_name();
+        let Some(file_name) = file_name.to_str() else {
+            continue;
+        };
+        if fixed_file_names.contains(file_name) || !supported_generated_planning_file(file_name) {
+            continue;
+        }
+        let path = entry.path();
+        let Ok(metadata) = path.symlink_metadata() else {
+            continue;
+        };
+        if metadata.file_type().is_symlink()
+            || !metadata.is_file()
+            || metadata.len() as usize > MAX_PLANNING_DOCUMENT_BYTES
+            || path.parent() != Some(planning_home)
+            || path.canonicalize().ok().as_deref() != Some(path.as_path())
+        {
+            continue;
+        }
+        documents.push(WorkspacePlanningDocumentDescriptor {
+            document_id: generated_planning_document_id(file_name),
+            file_name: file_name.to_owned(),
+        });
     }
+    documents.sort_by(|left, right| {
+        left.file_name
+            .to_ascii_lowercase()
+            .cmp(&right.file_name.to_ascii_lowercase())
+            .then_with(|| left.file_name.cmp(&right.file_name))
+    });
+    documents.truncate(MAX_DISCOVERED_PLANNING_DOCUMENTS);
+    Ok(documents)
+}
+
+fn resolve_planning_document_file_name(
+    planning_home: &Path,
+    format: WorkspacePlanningFormat,
+    document_id: &WorkspacePlanningDocumentId,
+) -> Result<String, LocalWtsError> {
+    if let Some(file_name) = fixed_planning_document_file_name(document_id) {
+        return planning_document_ids(format)
+            .contains(document_id)
+            .then(|| file_name.to_owned())
+            .ok_or(LocalWtsError::PlanningDocumentUnavailable);
+    }
+    discover_generated_planning_documents(planning_home, format)?
+        .into_iter()
+        .find(|document| &document.document_id == document_id)
+        .map(|document| document.file_name)
+        .ok_or(LocalWtsError::PlanningDocumentUnavailable)
 }
 
 fn review_author_to_store(author: ReviewAuthor) -> StoredReviewAuthor {
@@ -8608,23 +9449,12 @@ fn map_review_store_error(error: WorkspaceStoreError) -> LocalWtsError {
     }
 }
 
-fn validate_planning_document_selection(
-    format: WorkspacePlanningFormat,
-    document_id: WorkspacePlanningDocumentId,
-) -> Result<(), LocalWtsError> {
-    if planning_document_ids(format).contains(&document_id) {
-        Ok(())
-    } else {
-        Err(LocalWtsError::PlanningDocumentUnavailable)
-    }
-}
-
 fn read_planning_document(
     workspace_id: Uuid,
     planning_home: &Path,
     document_id: WorkspacePlanningDocumentId,
+    file_name: &str,
 ) -> Result<WorkspacePlanningDocument, LocalWtsError> {
-    let file_name = planning_document_file_name(document_id);
     let path = planning_home.join(file_name);
     let metadata = match path.symlink_metadata() {
         Ok(metadata) => metadata,
@@ -9239,6 +10069,33 @@ fn atomic_replace_json(path: &Path, value: &impl Serialize) -> Result<(), LocalW
     atomic_replace_bytes(path, &bytes)
 }
 
+fn backup_regular_files(paths: &[PathBuf]) -> Result<Vec<(PathBuf, Vec<u8>)>, LocalWtsError> {
+    paths
+        .iter()
+        .map(|path| {
+            let metadata = path
+                .symlink_metadata()
+                .map_err(|_| LocalWtsError::InvalidWorkspaceEvidence)?;
+            if metadata.file_type().is_symlink()
+                || !metadata.is_file()
+                || metadata.len() as usize > MAX_GENERATED_FILE_BYTES
+            {
+                return Err(LocalWtsError::InvalidWorkspaceEvidence);
+            }
+            let bytes = fs::read(path).map_err(|_| LocalWtsError::InvalidWorkspaceEvidence)?;
+            Ok((path.clone(), bytes))
+        })
+        .collect()
+}
+
+fn restore_file_backups(backups: &[(PathBuf, Vec<u8>)]) -> bool {
+    let mut restored = true;
+    for (path, bytes) in backups {
+        restored &= atomic_replace_bytes(path, bytes).is_ok();
+    }
+    restored
+}
+
 fn atomic_upsert_managed_bytes(path: &Path, bytes: &[u8]) -> Result<(), LocalWtsError> {
     match path.symlink_metadata() {
         Ok(_) => atomic_replace_bytes(path, bytes),
@@ -9739,10 +10596,10 @@ mod tests {
         built_in_test_journey, code_workspace_file_name, default_verification_checks,
         discover_repositories, git_patch_header_path, graph_summary, has_npm_test_script,
         is_workspace_code_file, jira_keys_in_text, load_code_review_snapshots,
-        materialization_matches_repository_plans, merge_observed_repository_recommendations,
-        patch_contains_changed_line, planning_starter_files, repository_recommendations,
-        should_record_graph_failure, utc_date_for_unix_ms, validate_runtime_selection,
-        workspace_jira_link_preview,
+        map_change_request_publish_error, materialization_matches_repository_plans,
+        merge_observed_repository_recommendations, patch_contains_changed_line,
+        planning_starter_files, repository_recommendations, should_record_graph_failure,
+        utc_date_for_unix_ms, validate_runtime_selection, workspace_jira_link_preview,
     };
     use crate::{
         GraphWorkspaceStatus, MaterializedWorktree, RepositoryBranchSummary,
@@ -9757,7 +10614,7 @@ mod tests {
         RuntimePlanSelection, RuntimePortPolicy, RuntimePortSelection, RuntimeServiceSelection,
         WorkspaceIntent, WorkspacePlanningFormat,
     };
-    use wts_git::GitWorktreeService;
+    use wts_git::{GitError, GitOperation, GitWorktreeService};
     use wts_integrations::JiraIssue;
     use wts_store::{
         StoredReviewTarget, StoredReviewThread, StoredReviewThreadState, WorkspaceRepositoryPlan,
@@ -9783,6 +10640,29 @@ mod tests {
             updated_at_unix_ms: 1,
             resolved_at_unix_ms: None,
         }
+    }
+
+    #[test]
+    fn classifies_branch_publish_diagnostics_without_exposing_git_output() {
+        let error = |detail: &str| GitError::CommandFailed {
+            operation: GitOperation::PublishBranch,
+            status: Some(128),
+            detail: detail.to_owned(),
+            truncated: false,
+        };
+
+        assert!(matches!(
+            map_change_request_publish_error(error("Permission denied (publickey).")),
+            super::LocalWtsError::ChangeRequestBranchAuthenticationFailed
+        ));
+        assert!(matches!(
+            map_change_request_publish_error(error("Could not resolve host: example.test")),
+            super::LocalWtsError::ChangeRequestBranchNetworkFailed
+        ));
+        assert!(matches!(
+            map_change_request_publish_error(error("! [rejected] HEAD -> feature (fetch first)")),
+            super::LocalWtsError::ChangeRequestBranchRejected
+        ));
     }
 
     #[test]

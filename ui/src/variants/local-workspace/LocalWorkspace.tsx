@@ -59,6 +59,7 @@ import {
   type GitlabReview,
   type GitlabReviewTarget,
   type JiraIssueImport,
+  type MaterializedWorktree,
   type OpenProjectWorkPackageImport,
   type RemoveWorkspaceResult,
   type WorkspaceRemovalPreflight,
@@ -78,6 +79,9 @@ import {
   type WorkspacePreflight,
   type WorkspaceRepositoryAlignmentPreflight,
   type WorkspaceRepositoryAlignmentResult,
+  type WorkspaceRepositoryAdditionPreflight,
+  type WorkspaceRepositoryAdditionResult,
+  type WorkspaceRepositoryRemovalResult,
   type WorkspaceRepositorySyncResult,
   type WorkspaceClient,
   type WorkspaceChangeRequestDraft,
@@ -90,6 +94,7 @@ import {
 } from "../../lib/wtsClient";
 import { useTheme } from "../../theme";
 import { useVisiblePolling } from "../../lib/useVisiblePolling";
+import { SelectMenu } from "../../components/SelectMenu";
 import { SetupSheet } from "./SetupSheet";
 import { VerificationPanel } from "./VerificationPanel";
 import { AgentSessionsPanel } from "./AgentSessionsPanel";
@@ -1145,6 +1150,23 @@ function forgeDisplayName(forge: RepositoryForgeTarget["forge"]) {
   return forge === "github" ? "GitHub" : "GitLab";
 }
 
+function repositoryCatalogIdentity(repository: RepositorySummary): string {
+  const origin = repository.originUrl?.trim();
+  if (!origin) return repository.checkoutLeaf;
+  let path = "";
+  try {
+    if (/^[a-z][a-z0-9+.-]*:\/\//i.test(origin)) {
+      path = new URL(origin).pathname;
+    } else {
+      path = origin.match(/^(?:[^@/:\\]+@)?[^/:\\]+:(.+)$/)?.[1] ?? "";
+    }
+  } catch {
+    return repository.checkoutLeaf;
+  }
+  const project = path.replace(/^\/+|\/+$/g, "").replace(/\.git$/i, "");
+  return project.includes("/") ? project : repository.checkoutLeaf;
+}
+
 function newIdempotencyKey() {
   const crypto = globalThis.crypto;
   if (crypto?.randomUUID) return crypto.randomUUID();
@@ -1670,7 +1692,7 @@ function historySwipeBlockedTarget(target: EventTarget | null) {
   if (!(target instanceof Element)) return false;
   return Boolean(
     target.closest(
-      'input, textarea, select, button, a, [contenteditable="true"], [role="textbox"], [role="slider"]',
+      'input, textarea, select, button, a, [contenteditable="true"], [role="textbox"], [role="slider"], [data-history-swipe-block]',
     ),
   );
 }
@@ -3968,13 +3990,12 @@ function NewWorkspaceDialog({
                     {!isRevisionMode && (
                       <div className={styles.inputWithIcon}>
                         <Glyph name="copy" size={17} />
-                        <select
+                        <SelectMenu
                           autoFocus
                           aria-label="Saved plan to copy"
                           disabled={!workspaces.length}
                           value={templateWorkspaceId}
-                          onChange={(event) => {
-                            const workspaceId = event.target.value;
+                          onChange={(workspaceId) => {
                             const template = workspaces.find(
                               (workspace) => workspace.id === workspaceId,
                             );
@@ -3998,7 +4019,7 @@ function NewWorkspaceDialog({
                               {workspace.key} · {workspace.title}
                             </option>
                           ))}
-                        </select>
+                        </SelectMenu>
                       </div>
                     )}
                     <small>
@@ -4145,17 +4166,13 @@ function NewWorkspaceDialog({
                                 <div className={styles.workspaceFolderPicker}>
                                   <label>
                                     <span>Local repository</span>
-                                    <select
+                                    <SelectMenu
                                       aria-label="Repository to add to copied plan"
                                       disabled={
                                         availableCodeWorkspaceRepositories.length ===
                                         0
                                       }
-                                      onChange={(event) =>
-                                        setCodeWorkspaceRepositoryToAdd(
-                                          event.target.value,
-                                        )
-                                      }
+                                      onChange={setCodeWorkspaceRepositoryToAdd}
                                       value={codeWorkspaceRepositoryToAdd}
                                     >
                                       <option value="">
@@ -4174,7 +4191,7 @@ function NewWorkspaceDialog({
                                           </option>
                                         ),
                                       )}
-                                    </select>
+                                    </SelectMenu>
                                   </label>
                                   <button
                                     className={styles.addWorkspaceFolderButton}
@@ -4545,17 +4562,15 @@ function NewWorkspaceDialog({
                               <div className={styles.workspaceFolderPicker}>
                                 <label>
                                   <span>Local repository</span>
-                                  <select
+                                  <SelectMenu
                                     aria-label="Add local repository folder"
                                     disabled={
                                       availableCodeWorkspaceRepositories.length ===
                                       0
                                     }
                                     value={codeWorkspaceRepositoryToAdd}
-                                    onChange={(event) => {
-                                      setCodeWorkspaceRepositoryToAdd(
-                                        event.target.value,
-                                      );
+                                    onChange={(value) => {
+                                      setCodeWorkspaceRepositoryToAdd(value);
                                       setCodeWorkspaceExportState("idle");
                                     }}
                                   >
@@ -4575,7 +4590,7 @@ function NewWorkspaceDialog({
                                         </option>
                                       ),
                                     )}
-                                  </select>
+                                  </SelectMenu>
                                 </label>
                                 <button
                                   className={styles.addWorkspaceFolderButton}
@@ -4842,17 +4857,13 @@ function NewWorkspaceDialog({
                           <div className={styles.workspaceFolderPicker}>
                             <label>
                               <span>Local repository</span>
-                              <select
+                              <SelectMenu
                                 aria-label="Repository to add"
                                 disabled={
                                   availableCodeWorkspaceRepositories.length ===
                                   0
                                 }
-                                onChange={(event) =>
-                                  setCodeWorkspaceRepositoryToAdd(
-                                    event.target.value,
-                                  )
-                                }
+                                onChange={setCodeWorkspaceRepositoryToAdd}
                                 value={codeWorkspaceRepositoryToAdd}
                               >
                                 <option value="">
@@ -4871,7 +4882,7 @@ function NewWorkspaceDialog({
                                     </option>
                                   ),
                                 )}
-                              </select>
+                              </SelectMenu>
                             </label>
                             <button
                               className={styles.addWorkspaceFolderButton}
@@ -5335,11 +5346,10 @@ function NewWorkspaceDialog({
                                 </span>
                               </InfoTooltip>
                               {!catalogRepository && localRemoteChoices.length > 0 ? (
-                                <select
+                                <SelectMenu
                                   aria-label={`Select local remote for ${repository.label}`}
                                   className={styles.sourceRepositorySelect}
-                                  onChange={(event) => {
-                                    const repositoryId = event.target.value;
+                                  onChange={(repositoryId) => {
                                     repositoryEditRevisionRef.current += 1;
                                     setIssueRepositoryLocalMatches((current) => {
                                       const key = repository.label.toLocaleLowerCase();
@@ -5358,7 +5368,7 @@ function NewWorkspaceDialog({
                                       {candidate.label} — {candidate.originUrl}
                                     </option>
                                   ))}
-                                </select>
+                                </SelectMenu>
                               ) : !catalogRepository &&
                                 allLocalRemoteChoices.length > 0 ? (
                                 <Button
@@ -5678,11 +5688,11 @@ function NewWorkspaceDialog({
                           <label className={styles.compactSelect}>
                             <span>Base branch</span>
                             <InfoTooltip content={!repo.included ? "Include repository to choose a base branch" : repo.base}>
-                              <select
+                              <SelectMenu
                                 value={repo.base}
-                                onChange={(event) =>
+                                onChange={(value) =>
                                   updateRepo(repo.key, {
-                                    base: event.target.value,
+                                    base: value,
                                   })
                                 }
                                 disabled={!repo.included || opening}
@@ -5708,7 +5718,7 @@ function NewWorkspaceDialog({
                                           : ""}
                                   </option>
                                 ))}
-                              </select>
+                              </SelectMenu>
                             </InfoTooltip>
                           </label>
                           <div className={styles.baseReviewActions}>
@@ -6101,15 +6111,14 @@ function NewWorkspaceDialog({
                                         </label>
                                         <label>
                                           <span>Allocation</span>
-                                          <select
+                                          <SelectMenu
                                             aria-label={`Port allocation policy for ${service.displayName} ${port.portId}`}
-                                            onChange={(event) =>
+                                            onChange={(value) =>
                                               updateRuntimePort(
                                                 service.candidateId,
                                                 port.portId,
                                                 {
-                                                  policy: event.currentTarget
-                                                    .value as RuntimePortPolicy,
+                                                  policy: value as RuntimePortPolicy,
                                                 },
                                               )
                                             }
@@ -6121,7 +6130,7 @@ function NewWorkspaceDialog({
                                             <option value="fixed">
                                               Fixed; block if occupied
                                             </option>
-                                          </select>
+                                          </SelectMenu>
                                         </label>
                                         <span
                                           className={
@@ -6318,13 +6327,12 @@ function NewWorkspaceDialog({
                       <div className={styles.planningSettings}>
                         <label>
                           <span>Folder</span>
-                          <select
+                          <SelectMenu
                             aria-label="Planning folder"
                             value={planningFolder}
-                            onChange={(event) =>
+                            onChange={(value) =>
                               setPlanningFolder(
-                                event.target
-                                  .value as WorkspacePlanningSelection["folder"],
+                                value as WorkspacePlanningSelection["folder"],
                               )
                             }
                           >
@@ -6332,17 +6340,16 @@ function NewWorkspaceDialog({
                               plans-and-kanban
                             </option>
                             <option value="plans">plans</option>
-                          </select>
+                          </SelectMenu>
                         </label>
                         <label>
                           <span>Starter</span>
-                          <select
+                          <SelectMenu
                             aria-label="Planning starter"
                             value={planningFormat}
-                            onChange={(event) =>
+                            onChange={(value) =>
                               setPlanningFormat(
-                                event.target
-                                  .value as WorkspacePlanningSelection["format"],
+                                value as WorkspacePlanningSelection["format"],
                               )
                             }
                           >
@@ -6350,7 +6357,7 @@ function NewWorkspaceDialog({
                               Plan, findings &amp; Kanban
                             </option>
                             <option value="notes">Plan &amp; findings</option>
-                          </select>
+                          </SelectMenu>
                         </label>
                         <p>
                           WTS creates these files once. They remain editable
@@ -6774,6 +6781,213 @@ function NewWorkspaceDialog({
   );
 }
 
+function AddWorkspaceRepositoryDialog({
+  open,
+  onOpenChange,
+  onComplete,
+  client,
+  workspace,
+  repositoryCatalog,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onComplete: (result: WorkspaceRepositoryAdditionResult) => void;
+  client: WorkspaceClient;
+  workspace: Workspace;
+  repositoryCatalog: RepositoryCatalog | null;
+}) {
+  const availableRepositories = useMemo(() => {
+    const currentIds = new Set(
+      workspace.repositoryPlans.flatMap((repository) =>
+        repository.repositoryId ? [repository.repositoryId] : [],
+      ),
+    );
+    const currentLabels = new Set(
+      workspace.repositoryPlans.map((repository) => repository.label.toLowerCase()),
+    );
+    return (repositoryCatalog?.repositories ?? []).filter(
+      (repository) =>
+        !currentIds.has(repository.id) &&
+        !currentLabels.has(repository.label.toLowerCase()),
+    );
+  }, [repositoryCatalog, workspace.repositoryPlans]);
+  const [repositoryId, setRepositoryId] = useState("");
+  const [baseRef, setBaseRef] = useState("");
+  const [preflight, setPreflight] =
+    useState<WorkspaceRepositoryAdditionPreflight | null>(null);
+  const [state, setState] = useState<"idle" | "reviewing" | "ready" | "adding">("idle");
+  const [error, setError] = useState("");
+  const selectedRepository = availableRepositories.find(
+    (repository) => repository.id === repositoryId,
+  );
+
+  useEffect(() => {
+    if (!open) return;
+    const repository = availableRepositories[0];
+    setRepositoryId(repository?.id ?? "");
+    setBaseRef(repository?.defaultBranch.name ?? "");
+    setPreflight(null);
+    setState("idle");
+    setError("");
+  }, [open, availableRepositories]);
+
+  const review = async () => {
+    if (!repositoryId || !baseRef || state !== "idle") return;
+    setState("reviewing");
+    setError("");
+    try {
+      const result = await client.preflightWorkspaceRepositoryAddition(
+        workspace.id,
+        repositoryId,
+        baseRef,
+      );
+      if (result.workspaceId !== workspace.id || result.repositoryId !== repositoryId) {
+        throw new Error("WTS returned a repository review for another workspace.");
+      }
+      setPreflight(result);
+      setState("ready");
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "WTS could not review this repository.");
+      setState("idle");
+    }
+  };
+
+  const add = async () => {
+    if (!preflight || state !== "ready") return;
+    setState("adding");
+    setError("");
+    try {
+      const result = await client.addWorkspaceRepository(
+        workspace.id,
+        preflight.repositoryId,
+        preflight.baseRef,
+        preflight.effectDigest,
+      );
+      if (result.workspaceId !== workspace.id) {
+        throw new Error("WTS added the repository to another workspace.");
+      }
+      onComplete(result);
+      onOpenChange(false);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "WTS could not add this repository.");
+      setState("ready");
+    }
+  };
+
+  return (
+    <Dialog.Root open={open} onOpenChange={(next) => state !== "adding" && onOpenChange(next)}>
+      <Dialog.Portal>
+        <Dialog.Overlay className={styles.dialogOverlay} />
+        <Dialog.Content
+          aria-describedby="add-workspace-repository-description"
+          className={`${styles.portalSurface} ${styles.createDialog} ${styles.addRepositoryDialog}`}
+          data-ui="workspace.add-repository-dialog"
+          data-ui-label="Add repository dialog"
+        >
+          <div className={styles.dialogHeader}>
+            <div>
+              <span className={styles.dialogEyebrow}>CURRENT WORKSPACE</span>
+              <Dialog.Title className={styles.dialogTitle}>
+                Add repository to {workspace.key}
+              </Dialog.Title>
+              <Dialog.Description className={styles.dialogDescription} id="add-workspace-repository-description">
+                WTS adds one managed worktree here. Existing work and local changes stay in place.
+              </Dialog.Description>
+            </div>
+            <Dialog.Close aria-label="Close add repository" className={styles.iconButton} disabled={state === "adding"}>
+              <Glyph name="close" />
+            </Dialog.Close>
+          </div>
+          <div className={styles.dialogBody}>
+            <form className={styles.sourceForm} onSubmit={(event) => { event.preventDefault(); void review(); }}>
+              <div className={styles.field}>
+                <Label>Repository</Label>
+                <div className={styles.inputWithIcon}>
+                  <Glyph name="folder" size={16} />
+                  <SelectMenu
+                    aria-label="Repository to add"
+                    disabled={availableRepositories.length === 0 || state !== "idle"}
+                    onChange={(nextRepositoryId) => {
+                      const repository = availableRepositories.find((item) => item.id === nextRepositoryId);
+                      setRepositoryId(nextRepositoryId);
+                      setBaseRef(repository?.defaultBranch.name ?? "");
+                      setPreflight(null);
+                      setError("");
+                    }}
+                    searchable
+                    searchPlaceholder="Search repositories"
+                    value={repositoryId}
+                  >
+                    {availableRepositories.length === 0 && <option value="">No repositories available</option>}
+                    {availableRepositories.map((repository) => (
+                      <option key={repository.id} value={repository.id}>
+                        {repositoryCatalogIdentity(repository)} · {repository.defaultBranch.name} · {repository.checkoutLeaf}
+                      </option>
+                    ))}
+                  </SelectMenu>
+                </div>
+              </div>
+              {selectedRepository && (
+                <dl className={styles.repositoryIdentityReview}>
+                  <div><dt>Namespace</dt><dd>{repositoryCatalogIdentity(selectedRepository)}</dd></div>
+                  <div><dt>Checkout</dt><dd>{selectedRepository.checkoutLeaf}</dd></div>
+                  <div><dt>Selected branch</dt><dd>{baseRef}</dd></div>
+                  <div><dt>Remote</dt><dd>{selectedRepository.originUrl ?? "No remote reported"}</dd></div>
+                </dl>
+              )}
+              <div className={styles.field}>
+                <Label>Base branch</Label>
+                <div className={styles.inputWithIcon}>
+                  <Glyph name="branch" size={16} />
+                  <SelectMenu
+                    aria-label="Base branch"
+                    disabled={!selectedRepository || state !== "idle"}
+                    onChange={(value) => { setBaseRef(value); setPreflight(null); setError(""); }}
+                    value={baseRef}
+                  >
+                    {(selectedRepository?.availableBranches?.length
+                      ? selectedRepository.availableBranches
+                      : selectedRepository ? [selectedRepository.defaultBranch] : []
+                    ).map((branch) => (
+                      <option key={branch.fullRef} value={branch.name}>
+                        {branch.name} · {"remote" in branch && branch.remote ? "remote" : "local"} · {branch.commitOid.slice(0, 8)}
+                      </option>
+                    ))}
+                  </SelectMenu>
+                </div>
+              </div>
+              {preflight && (
+                <div className={styles.repositoryAdditionReview} role="status">
+                  <strong>{preflight.repositoryLabel}</strong>
+                  <span>{preflight.resolvedBaseRef}</span>
+                  <small>New managed worktree · {preflight.branchName}</small>
+                </div>
+              )}
+              {availableRepositories.length === 0 && <p>No additional local repositories are available.</p>}
+              {error && <p className={styles.sourceImportMessage} data-error>{error}</p>}
+            </form>
+          </div>
+          <div className={styles.dialogFooter}>
+            <span className={styles.dialogFootnote}><Glyph name="check" size={13} /> The workspace ID and existing worktrees do not change.</span>
+            <span className={styles.dialogActions}>
+              <Dialog.Close className={styles.secondaryButton} disabled={state === "adding"}>Cancel</Dialog.Close>
+              {!preflight ? (
+                <Button className={styles.primaryButton} isDisabled={!repositoryId || !baseRef || state !== "idle"} onPress={() => void review()}>
+                  {state === "reviewing" ? "Reviewing…" : "Review repository"}
+                </Button>
+              ) : (
+                <Button className={styles.primaryButton} isDisabled={state !== "ready"} onPress={() => void add()}>
+                  {state === "adding" ? "Adding…" : "Add to workspace"}
+                </Button>
+              )}
+            </span>
+          </div>
+        </Dialog.Content>
+      </Dialog.Portal>
+    </Dialog.Root>
+  );
+}
+
 function WorkspaceActionsMenu({
   busy,
   materialized = false,
@@ -7141,10 +7355,10 @@ function BaseReferenceRecovery({
       <div className={styles.baseRecoveryControls}>
         <label>
           <span>Existing base</span>
-          <select
+          <SelectMenu
             aria-label={`Replacement base for ${repository?.label ?? "repository"}`}
             disabled={busy || branches.length === 0}
-            onChange={(event) => setSelectedBaseRef(event.target.value)}
+            onChange={setSelectedBaseRef}
             value={selectedBaseRef}
           >
             {branches.length === 0 ? (
@@ -7157,7 +7371,7 @@ function BaseReferenceRecovery({
                 </option>
               ))
             )}
-          </select>
+          </SelectMenu>
         </label>
         <InfoTooltip
           content={
@@ -7466,6 +7680,30 @@ function WorkspaceProvisionPanel({
   );
 }
 
+export function suggestedJiraIssueKeyForReview(
+  review: Partial<Pick<GitlabReview, "sourceBranch" | "title">>,
+): string | undefined {
+  const keys = new Set<string>();
+  const jiraKey = /[A-Z0-9_]{1,32}-[0-9]{1,16}/g;
+  for (const value of [review.title, review.sourceBranch]) {
+    if (!value) continue;
+    for (const match of value.matchAll(jiraKey)) {
+      const start = match.index ?? 0;
+      const end = start + match[0].length;
+      const previous = value[start - 1];
+      const next = value[end];
+      if (
+        (previous && /[A-Za-z0-9_]/.test(previous)) ||
+        (next && /[A-Za-z0-9_]/.test(next))
+      ) {
+        continue;
+      }
+      keys.add(match[0]);
+    }
+  }
+  return keys.size === 1 ? [...keys][0] : undefined;
+}
+
 function DraftOverviewPanel({
   client,
   workspace,
@@ -7480,6 +7718,8 @@ function DraftOverviewPanel({
   onFetchBranches,
   onReviseBase,
   onCreateRevisedCopy,
+  onAddRepositories,
+  onRemoveRepository,
   onReconcile,
   onSyncRepository,
   onAlignRepository,
@@ -7502,6 +7742,8 @@ function DraftOverviewPanel({
   onFetchBranches: (repositoryId: string) => void;
   onReviseBase: (repositoryId: string, baseRef: string) => void;
   onCreateRevisedCopy: () => void;
+  onAddRepositories: () => void;
+  onRemoveRepository: (repositoryId: string) => Promise<WorkspaceRepositoryRemovalResult>;
   onReconcile: () => void;
   onSyncRepository: (
     repositoryId: string,
@@ -7524,9 +7766,38 @@ function DraftOverviewPanel({
   const [syncingRepositoryId, setSyncingRepositoryId] = useState<string | null>(null);
   const [repositoryNotice, setRepositoryNotice] = useState("");
   const [repositoryNoticeError, setRepositoryNoticeError] = useState(false);
+  const [changeRequestPublishRepositoryId, setChangeRequestPublishRepositoryId] =
+    useState<string | null>(null);
+  const [changeRequestBranchName, setChangeRequestBranchName] = useState("");
+  const [publishingChangeRequestId, setPublishingChangeRequestId] =
+    useState<string | null>(null);
+  const [changeRequestProposalRepositoryId, setChangeRequestProposalRepositoryId] =
+    useState<string | null>(null);
+  const [requestingChangeRequestProposalId, setRequestingChangeRequestProposalId] =
+    useState<string | null>(null);
+  const [repositoryToRemove, setRepositoryToRemove] = useState<MaterializedWorktree | null>(null);
+  const [removingRepositoryId, setRemovingRepositoryId] = useState<string | null>(null);
   const [syncBlockedRepositoryId, setSyncBlockedRepositoryId] = useState<
     string | null
   >(null);
+  const removeRepository = async () => {
+    if (!repositoryToRemove || removingRepositoryId) return;
+    setRemovingRepositoryId(repositoryToRemove.repositoryId);
+    setRepositoryNotice("");
+    try {
+      const result = await onRemoveRepository(repositoryToRemove.repositoryId);
+      setRepositoryNotice(`${result.repositoryLabel} was removed from this workspace.`);
+      setRepositoryNoticeError(false);
+      setRepositoryToRemove(null);
+    } catch (cause) {
+      setRepositoryNotice(
+        cause instanceof Error ? cause.message : "WTS could not remove this repository.",
+      );
+      setRepositoryNoticeError(true);
+    } finally {
+      setRemovingRepositoryId(null);
+    }
+  };
   const [changeRequestDraft, setChangeRequestDraft] =
     useState<WorkspaceChangeRequestDraft | null>(null);
   const [preparingChangeRequestId, setPreparingChangeRequestId] = useState<string | null>(null);
@@ -7563,6 +7834,39 @@ function DraftOverviewPanel({
           worktree.label === gitlabReview.repository.split("/").at(-1),
       )
     : undefined;
+  const suggestedJiraIssueKey = gitlabReview
+    ? suggestedJiraIssueKeyForReview(gitlabReview)
+    : undefined;
+  const reviewStatusLabel = gitlabReview
+    ? !gitlabReview.status
+      ? "Status unavailable"
+      : gitlabReview.status === "merged"
+      ? "Merged"
+      : gitlabReview.status === "closed"
+        ? "Closed"
+        : gitlabReview.reviewState === "changesAfterApproval"
+          ? "New changes"
+          : gitlabReview.reviewState === "approved"
+            ? "Approved"
+            : gitlabReview.draft
+              ? "Draft"
+              : "Review requested"
+    : "";
+  const reviewStatusDetail = gitlabReview
+    ? !gitlabReview.status
+      ? "GitLab no longer returns the current review status."
+      : gitlabReview.status === "merged"
+      ? "GitLab merged this change. No review action remains."
+      : gitlabReview.status === "closed"
+        ? "GitLab closed this change. No review action remains."
+        : gitlabReview.reviewState === "changesAfterApproval"
+          ? "The author added commits after your approval."
+          : gitlabReview.reviewState === "approved"
+            ? "Your approval is recorded. GitLab has not merged this change."
+            : gitlabReview.draft
+              ? "This merge request is a draft."
+              : "GitLab requests your review."
+    : "";
   const isCheckingRecordedMaterialization =
     !materialization &&
     actionState === "checking" &&
@@ -7686,7 +7990,7 @@ function DraftOverviewPanel({
   };
   const openGitlabMergeRequest = async (
     created: WorkspaceMaterialization["worktrees"][number],
-    mergeRequest: GitlabMergeRequest,
+    mergeRequest: Pick<GitlabMergeRequest, "iid">,
   ) => {
     if (openingGitlabMergeRequestId) return;
     setOpeningGitlabMergeRequestId(created.repositoryId);
@@ -7726,6 +8030,8 @@ function DraftOverviewPanel({
     setPreparingChangeRequestId(created.repositoryId);
     setRepositoryNotice("");
     setRepositoryNoticeError(false);
+    setChangeRequestPublishRepositoryId(null);
+    setChangeRequestProposalRepositoryId(null);
     try {
       const draft = await client.prepareWorkspaceChangeRequest(
         workspace.id,
@@ -7735,6 +8041,20 @@ function DraftOverviewPanel({
       setChangeRequestDraft(draft);
     } catch (cause) {
       setRepositoryNoticeError(true);
+      if (
+        cause instanceof WorkspaceClientError &&
+        (cause.code === "change_request_branch_not_published" ||
+          cause.code === "change_request_remote_mismatch")
+      ) {
+        setChangeRequestPublishRepositoryId(created.repositoryId);
+        setChangeRequestBranchName(created.branchName);
+      }
+      if (
+        cause instanceof WorkspaceClientError &&
+        cause.code === "change_request_agent_proposal_unavailable"
+      ) {
+        setChangeRequestProposalRepositoryId(created.repositoryId);
+      }
       setRepositoryNotice(
         cause instanceof Error
           ? cause.message
@@ -7742,6 +8062,97 @@ function DraftOverviewPanel({
       );
     } finally {
       setPreparingChangeRequestId(null);
+    }
+  };
+  const publishChangeRequestBranch = async () => {
+    if (!changeRequestPublishRepositoryId || publishingChangeRequestId) return;
+    const created = materialization?.worktrees.find(
+      (worktree) => worktree.repositoryId === changeRequestPublishRepositoryId,
+    );
+    if (!created) return;
+    setPublishingChangeRequestId(created.repositoryId);
+    setRepositoryNoticeError(false);
+    setRepositoryNotice(`${created.label} · publishing branch…`);
+    let published = false;
+    try {
+      const publication = await client.publishWorkspaceChangeRequestBranch(
+        workspace.id,
+        created.repositoryId,
+        changeRequestBranchName.trim() || undefined,
+      );
+      setRepositoryNotice(
+        `${publication.repositoryLabel} · published to ${publication.remoteName}/${publication.branchName}. Preparing change request…`,
+      );
+      published = true;
+      setChangeRequestPublishRepositoryId(null);
+      setChangeRequestBranchName("");
+      const draft = await client.prepareWorkspaceChangeRequest(
+        workspace.id,
+        created.repositoryId,
+      );
+      setChangeRequestError("");
+      setChangeRequestDraft(draft);
+      setRepositoryNotice(`${publication.repositoryLabel} · branch published.`);
+      onNotice("Branch published");
+    } catch (cause) {
+      if (
+        !published &&
+        cause instanceof WorkspaceClientError &&
+        cause.code === "change_request_worktree_dirty"
+      ) {
+        setChangeRequestPublishRepositoryId(null);
+        setSyncBlockedRepositoryId(created.repositoryId);
+      }
+      setRepositoryNoticeError(true);
+      setRepositoryNotice(
+        `${published ? "Branch published. " : ""}${
+          cause instanceof Error
+            ? cause.message
+            : "WTS could not publish this branch."
+        }`,
+      );
+    } finally {
+      setPublishingChangeRequestId(null);
+    }
+  };
+  const requestChangeRequestProposal = async () => {
+    if (!changeRequestProposalRepositoryId || requestingChangeRequestProposalId) return;
+    const created = materialization?.worktrees.find(
+      (worktree) => worktree.repositoryId === changeRequestProposalRepositoryId,
+    );
+    if (!created) return;
+    const provider = preferredAgentProvider(workspace.provider) ?? "codex";
+    setRequestingChangeRequestProposalId(created.repositoryId);
+    setRepositoryNoticeError(false);
+    setRepositoryNotice(`${created.label} · starting agent…`);
+    try {
+      await client.launchAgentSession(workspace.id, {
+        provider,
+        category: "review",
+        prompt: [
+          `Prepare a change-request proposal for repository ${created.repositoryId} at its current published HEAD.`,
+          "Read WTS.md and the trusted workspace context before you start.",
+          "Inspect the complete branch change. Do not modify repository files.",
+          "Report the complete change-request proposal in your final response using the exact WTS_CHANGE_REQUEST_PROPOSAL format from WTS.md.",
+          "Include only linked Jira issues that this repository change directly serves.",
+        ].join(" "),
+      });
+      const agentName =
+        provider === "codex" ? "Codex" : provider === "openCode" ? "OpenCode" : "Hermes";
+      setChangeRequestProposalRepositoryId(null);
+      setRepositoryNotice(
+        `${created.label} · ${agentName} started. Prepare the change request again after the agent finishes.`,
+      );
+      onNotice(`${agentName} started change-request preparation`);
+    } catch (cause) {
+      setRepositoryNoticeError(true);
+      setRepositoryNotice(
+        cause instanceof Error
+          ? cause.message
+          : "WTS could not start the change-request agent.",
+      );
+    } finally {
+      setRequestingChangeRequestProposalId(null);
     }
   };
   const openChangeRequest = async (title: string, body: string) => {
@@ -7929,60 +8340,164 @@ function DraftOverviewPanel({
       <div className={styles.mainColumn}>
         {gitlabReview && reviewWorktree && (
           <section
+            aria-label="Workspace review action"
             className={styles.reviewWorkspaceCallout}
+            data-status={gitlabReview.status}
             data-ui="workspace-overview.review"
             data-ui-label="Workspace review action"
           >
-            <span className={styles.reviewWorkspaceIcon} aria-hidden="true">
-              <Glyph name="code" size={17} />
-            </span>
-            <span>
-              <small>GITLAB MR !{gitlabReview.number}</small>
-              <h2>
-                {gitlabReview.reviewState === "changesAfterApproval"
-                  ? "Review the new changes"
-                  : gitlabReview.reviewState === "approved"
-                    ? "Review complete"
-                    : "Your review is requested"}
-              </h2>
-              <p>
+            <div className={styles.reviewWorkspaceSummary}>
+              <span className={styles.reviewWorkspaceMeta}>
+                <button
+                  aria-label={`Open merge request !${gitlabReview.number} in GitLab`}
+                  className={styles.reviewWorkspaceLink}
+                  disabled={openingGitlabMergeRequestId !== null}
+                  onClick={() =>
+                    void openGitlabMergeRequest(reviewWorktree, {
+                      iid: gitlabReview.number,
+                    })
+                  }
+                  role="link"
+                  type="button"
+                >
+                  GITLAB MR !{gitlabReview.number}
+                  <Glyph name="external" size={10} />
+                </button>
+                <span
+                  className={styles.reviewWorkspaceStatus}
+                  data-status={gitlabReview.status}
+                >
+                  {reviewStatusLabel}
+                </span>
+              </span>
+              <h2>{gitlabReview.title ?? `Review ${gitlabReview.repository}`}</h2>
+              <p className={styles.reviewWorkspaceOutcome}>{reviewStatusDetail}</p>
+              <p className={styles.reviewWorkspaceByline}>
                 {gitlabReview.repository}
-                {gitlabReview.authorLogin ? ` · Requested by ${gitlabReview.authorLogin}` : ""}
+                {gitlabReview.authorLogin ? ` · ${gitlabReview.authorLogin}` : ""}
               </p>
-            </span>
-            <button
-              onClick={() => onReviewChanges(reviewWorktree.repositoryId)}
-              type="button"
-            >
-              Review changes
-              <Glyph name="arrow" size={12} />
-            </button>
+              {gitlabReview.sourceBranch && gitlabReview.targetBranch && (
+                <p className={styles.reviewWorkspaceBranches}>
+                  <code>{gitlabReview.sourceBranch}</code>
+                  <Glyph name="arrow" size={11} />
+                  <code>{gitlabReview.targetBranch}</code>
+                </p>
+              )}
+            </div>
+            <div className={styles.reviewWorkspaceActions}>
+              <button
+                className={styles.reviewWorkspaceSecondaryAction}
+                disabled={openingGitlabMergeRequestId !== null}
+                onClick={() =>
+                  void openGitlabMergeRequest(reviewWorktree, {
+                    iid: gitlabReview.number,
+                  })
+                }
+                type="button"
+              >
+                Open in GitLab
+                <Glyph name="external" size={11} />
+              </button>
+              <button
+                className={styles.reviewWorkspacePrimaryAction}
+                onClick={() => onReviewChanges(reviewWorktree.repositoryId)}
+                type="button"
+              >
+                {gitlabReview.reviewState === "changesAfterApproval"
+                  ? "Review new changes"
+                  : gitlabReview.status === "merged"
+                    ? "View merged changes"
+                    : "Review changes"}
+                <Glyph name="arrow" size={12} />
+              </button>
+            </div>
           </section>
         )}
-        <WorkspaceProvisionPanel
-          workspace={workspace}
-          state={actionState}
-          commandBusy={commandBusy}
-          preflight={preflight}
-          materialization={materialization}
-          repositoryCatalog={repositoryCatalog}
-          error={actionError}
-          driftDetected={driftDetected}
-          onReview={onReview}
-          onFetchBranches={onFetchBranches}
-          onReviseBase={onReviseBase}
-          onCreateRevisedCopy={onCreateRevisedCopy}
-          onReconcile={onReconcile}
-          onMaterialize={onMaterialize}
-        />
-        <WorkspaceWorkItemsPanel
-          client={client}
-          deliveryLabel={workItemDeliveryLabel}
-          workspaceId={workspace.id}
-          workspaceKey={workspace.key}
-          onNotice={onNotice}
-        />
-        <section
+        {gitlabReview && reviewWorktree ? (
+          <>
+            {suggestedJiraIssueKey && (
+              <section
+                aria-label="Review issue context"
+                className={styles.reviewContextPanel}
+                data-ui="workspace-overview.review-context"
+                data-ui-label="Review issue context"
+              >
+                <span className={styles.reviewContextIcon} aria-hidden="true">
+                  <Glyph name="issue" size={15} />
+                </span>
+                <span>
+                  <small>LINKED WORK</small>
+                  <strong>{suggestedJiraIssueKey}</strong>
+                </span>
+                <p>Detected in the merge request title or source branch.</p>
+              </section>
+            )}
+            <section
+              aria-label="Review scope"
+              className={styles.reviewScopePanel}
+              data-ui="workspace-overview.review-scope"
+              data-ui-label="Review scope"
+            >
+              <header>
+                <span>
+                  <small>REVIEW SCOPE</small>
+                  <h2>Repository changes</h2>
+                </span>
+              </header>
+              <div className={styles.reviewScopeRow}>
+                <span className={styles.reviewScopeRepository}>
+                  <span className={styles.repoGlyph} aria-hidden="true">
+                    <Glyph name="branch" size={15} />
+                  </span>
+                  <span>
+                    <strong>{reviewWorktree.label}</strong>
+                    <small>
+                      {gitlabReview?.sourceBranch ?? reviewWorktree.branchName}
+                      {gitlabReview?.targetBranch
+                        ? ` → ${gitlabReview.targetBranch}`
+                        : ""}
+                    </small>
+                  </span>
+                </span>
+                <span className={styles.reviewScopeWork}>
+                  {localWorkSummary(reviewWorktree)}
+                </span>
+                <button
+                  onClick={() => onReviewChanges(reviewWorktree.repositoryId)}
+                  type="button"
+                >
+                  View changes
+                  <Glyph name="arrow" size={11} />
+                </button>
+              </div>
+            </section>
+          </>
+        ) : (
+          <>
+            <WorkspaceProvisionPanel
+              workspace={workspace}
+              state={actionState}
+              commandBusy={commandBusy}
+              preflight={preflight}
+              materialization={materialization}
+              repositoryCatalog={repositoryCatalog}
+              error={actionError}
+              driftDetected={driftDetected}
+              onReview={onReview}
+              onFetchBranches={onFetchBranches}
+              onReviseBase={onReviseBase}
+              onCreateRevisedCopy={onCreateRevisedCopy}
+              onReconcile={onReconcile}
+              onMaterialize={onMaterialize}
+            />
+            <WorkspaceWorkItemsPanel
+              client={client}
+              deliveryLabel={workItemDeliveryLabel}
+              workspaceId={workspace.id}
+              workspaceKey={workspace.key}
+              onNotice={onNotice}
+            />
+            <section
           className={styles.panel}
           data-ui="workspace-overview.repositories"
           data-ui-label="Workspace repositories"
@@ -7996,7 +8511,7 @@ function DraftOverviewPanel({
             </span>
             <button
               className={styles.panelInlineAction}
-              onClick={onCreateRevisedCopy}
+              onClick={onAddRepositories}
               type="button"
             >
               <Glyph name="plus" size={12} />
@@ -8083,6 +8598,17 @@ function DraftOverviewPanel({
                       ) : (
                         <b>{repository.label}</b>
                       )}
+                      {created && (materialization?.worktrees.length ?? 0) > 1 && (
+                        <button
+                          aria-label={`Remove ${repository.label} from this workspace`}
+                          className={styles.repoRemoveButton}
+                          disabled={commandBusy || removingRepositoryId !== null}
+                          onClick={() => setRepositoryToRemove(created)}
+                          type="button"
+                        >
+                          <Glyph name="trash" size={11} />
+                        </button>
+                      )}
                     </span>
                     <span className={styles.repoBase} role="cell">
                       <code>{repository.baseRef}</code>
@@ -8141,15 +8667,37 @@ function DraftOverviewPanel({
                         </span>
                       )}
                       {created && reviewForRepository ? (
-                        <button
-                          aria-label={`Review merge request !${reviewForRepository.number} changes in ${repository.label}`}
-                          className={styles.repoDeliveryLink}
-                          onClick={() => void reviewRepositoryChanges(created)}
-                          type="button"
-                        >
-                          <Glyph name="code" size={11} />
-                          MR !{reviewForRepository.number} · Review changes
-                        </button>
+                        <span className={styles.repoReviewLinks}>
+                          <button
+                            aria-label={`Open merge request !${reviewForRepository.number} in GitLab`}
+                            className={styles.repoDeliveryLink}
+                            disabled={openingGitlabMergeRequestId !== null}
+                            onClick={() =>
+                              void openGitlabMergeRequest(created, {
+                                iid: reviewForRepository.number,
+                              })
+                            }
+                            role="link"
+                            type="button"
+                          >
+                            <Glyph name="external" size={11} />
+                            MR !{reviewForRepository.number} ·{
+                              reviewForRepository.status === "merged"
+                                ? " Merged"
+                                : reviewForRepository.status === "closed"
+                                  ? " Closed"
+                                  : " Open"
+                            }
+                          </button>
+                          <button
+                            aria-label={`Review merge request !${reviewForRepository.number} changes in ${repository.label}`}
+                            className={styles.repoReviewChangesLink}
+                            onClick={() => void reviewRepositoryChanges(created)}
+                            type="button"
+                          >
+                            Review changes
+                          </button>
+                        </span>
                       ) : created &&
                       workSummary !== "Clean" &&
                       forgeTarget?.forge === "github" ? (
@@ -8179,29 +8727,39 @@ function DraftOverviewPanel({
                                       created.gitState.headCommitOid,
                                 );
                                 return (
-                                  <button
+                                  <a
                                     aria-label={`Open ${repository.label} merge request !${mergeRequest.iid} on GitLab: ${mergeRequest.title}`}
                                     className={styles.repoDeliveryLink}
-                                    disabled={
-                                      commandBusy ||
-                                      openingGitlabMergeRequestId !== null
+                                    aria-disabled={
+                                      commandBusy || openingGitlabMergeRequestId !== null
                                     }
+                                    data-status={mergeRequest.status}
+                                    href={mergeRequest.webUrl}
                                     key={mergeRequest.id}
-                                    onClick={() =>
-                                      void openGitlabMergeRequest(
-                                        created,
-                                        mergeRequest,
-                                      )
-                                    }
-                                    type="button"
+                                    onClick={(event) => {
+                                      event.preventDefault();
+                                      if (
+                                        commandBusy ||
+                                        openingGitlabMergeRequestId !== null
+                                      ) return;
+                                      void openGitlabMergeRequest(created, mergeRequest);
+                                    }}
+                                    rel="noreferrer"
+                                    target="_blank"
                                   >
                                     <Glyph name="external" size={11} />
                                     {openingGitlabMergeRequestId ===
                                     created.repositoryId
                                       ? "Opening MR…"
-                                      : `${mergeRequest.draft ? "Draft " : ""}MR !${mergeRequest.iid} · Open`}
+                                      : `${mergeRequest.draft ? "Draft " : ""}MR !${mergeRequest.iid} · ${
+                                          mergeRequest.status === "merged"
+                                            ? "Merged"
+                                            : mergeRequest.status === "closed"
+                                              ? "Closed"
+                                              : "Open"
+                                        }`}
                                     {hasNewLocalWork ? " · New local work" : ""}
-                                  </button>
+                                  </a>
                                 );
                               })}
                             </span>
@@ -8231,6 +8789,20 @@ function DraftOverviewPanel({
               })(),
             )}
           </div>
+          {repositoryToRemove && (
+            <div className={styles.repositoryRemoveConfirm} role="alertdialog" aria-label={`Remove ${repositoryToRemove.label} from this workspace`}>
+              <span>
+                <strong>Remove {repositoryToRemove.label}?</strong>
+                <small>WTS removes its clean managed worktree. The source checkout and retained branch stay on disk.</small>
+              </span>
+              <span>
+                <Button className={styles.secondaryButton} isDisabled={removingRepositoryId !== null} onPress={() => setRepositoryToRemove(null)}>Cancel</Button>
+                <Button className={styles.dangerButton} isDisabled={removingRepositoryId !== null} onPress={() => void removeRepository()}>
+                  {removingRepositoryId ? "Removing…" : "Remove repository"}
+                </Button>
+              </span>
+            </div>
+          )}
           {repositoryNotice && (
             <div
               className={styles.repositoryNotice}
@@ -8260,15 +8832,67 @@ function DraftOverviewPanel({
                   </Button>
                 </span>
               )}
+              {changeRequestPublishRepositoryId && (
+                <span className={styles.repositoryNoticeActions}>
+                  <Label className={styles.publishBranchField}>
+                    <span>Branch name</span>
+                    <Input
+                      autoCapitalize="none"
+                      autoComplete="off"
+                      className={styles.publishBranchInput}
+                      maxLength={240}
+                      spellCheck={false}
+                      value={changeRequestBranchName}
+                      onChange={(event) => setChangeRequestBranchName(event.target.value)}
+                    />
+                  </Label>
+                  <Button
+                    className={styles.primaryButton}
+                    isDisabled={publishingChangeRequestId !== null}
+                    onPress={() => void publishChangeRequestBranch()}
+                  >
+                    <Glyph name="branch" size={11} />
+                    {publishingChangeRequestId ? "Publishing…" : "Publish branch"}
+                  </Button>
+                  <Button
+                    className={styles.secondaryButton}
+                    onPress={onOpenWorkspace}
+                  >
+                    Open workspace
+                  </Button>
+                </span>
+              )}
+              {changeRequestProposalRepositoryId && (
+                <span className={styles.repositoryNoticeActions}>
+                  <Button
+                    className={styles.primaryButton}
+                    isDisabled={requestingChangeRequestProposalId !== null}
+                    onPress={() => void requestChangeRequestProposal()}
+                  >
+                    <Glyph name="play" size={11} />
+                    {requestingChangeRequestProposalId
+                      ? "Starting agent…"
+                      : "Ask agent to prepare"}
+                  </Button>
+                  <Button
+                    className={styles.secondaryButton}
+                    onPress={onOpenWorkspace}
+                  >
+                    Open workspace
+                  </Button>
+                </span>
+              )}
             </div>
           )}
-        </section>
-        <AgentStatePrototype
-          client={client}
-          materialized={Boolean(materialization)}
-          provider={preferredAgentProvider(workspace.provider) ?? "codex"}
-          workspaceId={workspace.id}
-        />
+            </section>
+            <AgentStatePrototype
+              client={client}
+              materialized={Boolean(materialization)}
+              provider={preferredAgentProvider(workspace.provider) ?? "codex"}
+              workspaceId={workspace.id}
+            />
+          </>
+        )}
       </div>
       <RepositoryAlignmentDialog
         error={alignmentError}
@@ -9479,6 +10103,7 @@ export function LocalWorkspace({
   const [workspaceGitlabInboxes, setWorkspaceGitlabInboxes] = useState(
     () => new Map<string, GitlabMergeRequestInbox>(),
   );
+  const [boardStatusRevision, setBoardStatusRevision] = useState(0);
   const [workspaceNameEditing, setWorkspaceNameEditing] = useState(false);
   const [workspaceNameDraft, setWorkspaceNameDraft] = useState("");
   const [workspaceNameSaving, setWorkspaceNameSaving] = useState(false);
@@ -9499,6 +10124,7 @@ export function LocalWorkspace({
   const [searchExpanded, setSearchExpanded] = useState(false);
   const [filter, setFilter] = useState<Filter>("all");
   const [createOpen, setCreateOpen] = useState(initialCreateOpen);
+  const [addRepositoryOpen, setAddRepositoryOpen] = useState(false);
   const [createTemplateWorkspaceId, setCreateTemplateWorkspaceId] =
     useState("");
   const [createRepositoryBaseOverrides, setCreateRepositoryBaseOverrides] =
@@ -9512,6 +10138,12 @@ export function LocalWorkspace({
   const [openingAssignedReviewId, setOpeningAssignedReviewId] = useState("");
   const [reviewWorkspaceErrors, setReviewWorkspaceErrors] = useState(
     () => new Map<string, string>(),
+  );
+  const preparingReviewIdRef = useRef("");
+  const reviewWorkspaceHydrationSkipsRef = useRef(new Set<string>());
+  const reviewWorkspaceCreationKeysRef = useRef(new Map<string, string>());
+  const reviewWorkspaceMaterializationKeysRef = useRef(
+    new Map<string, string>(),
   );
   const [guideOpen, setGuideOpen] = useState(false);
   const [commandOpen, setCommandOpen] = useState(false);
@@ -10036,7 +10668,14 @@ export function LocalWorkspace({
       current = false;
       window.clearInterval(refreshTimer);
     };
-  }, [client, registryState, view, workspaceIdsKey, workspaces]);
+  }, [
+    boardStatusRevision,
+    client,
+    registryState,
+    view,
+    workspaceIdsKey,
+    workspaces,
+  ]);
 
   useEffect(() => {
     const inbox = myReviews.gitlabInbox;
@@ -10265,6 +10904,9 @@ export function LocalWorkspace({
       !selectedWorkspace ||
       !selectedWorkspaceIsReady
     ) {
+      return;
+    }
+    if (reviewWorkspaceHydrationSkipsRef.current.delete(selectedWorkspace.id)) {
       return;
     }
     let current = true;
@@ -11047,6 +11689,66 @@ export function LocalWorkspace({
     setCreateOpen(true);
   };
 
+  const completeRepositoryAddition = async (
+    result: WorkspaceRepositoryAdditionResult,
+  ) => {
+    materializationCache.set(result.workspaceId, result.materialization);
+    setWorkspaceMaterialization(result.materialization);
+    setWorkspaceActionState("materialized");
+    setWorkspacePreflight(null);
+    setNotice(`${result.repositoryLabel} added to ${selectedWorkspace?.key ?? "the workspace"}`);
+    try {
+      const view = await client.getWorkspace(result.workspaceId);
+      if (view.workspaceId !== result.workspaceId) return;
+      const refreshed = workspaceFromView(view);
+      setWorkspaces((current) =>
+        current.map((workspace) =>
+          workspace.id === result.workspaceId ? refreshed : workspace,
+        ),
+      );
+    } catch {
+      setNotice("The repository was added. Refresh the workspace to update its saved plan.", "error");
+    }
+  };
+
+  const removeSelectedWorkspaceRepository = async (
+    repositoryId: string,
+  ): Promise<WorkspaceRepositoryRemovalResult> => {
+    if (!selectedWorkspace || workspaceCommandState !== "idle") {
+      throw new Error("WTS cannot remove a repository while another workspace command is running.");
+    }
+    const workspaceId = selectedWorkspace.id;
+    const result = await client.removeWorkspaceRepository(workspaceId, repositoryId);
+    if (
+      result.workspaceId !== workspaceId ||
+      result.repositoryId !== repositoryId
+    ) {
+      throw new Error("WTS returned a repository removal for another workspace.");
+    }
+    materializationCache.set(workspaceId, result.materialization);
+    setWorkspaceMaterialization(result.materialization);
+    setWorkspaceActionState("materialized");
+    setWorkspacePreflight(null);
+    try {
+      const view = await client.getWorkspace(workspaceId);
+      if (view.workspaceId !== workspaceId) {
+        throw new Error("WTS returned status for another workspace.");
+      }
+      const refreshed = workspaceFromView(view);
+      setWorkspaces((current) =>
+        current.map((workspace) =>
+          workspace.id === workspaceId ? refreshed : workspace,
+        ),
+      );
+    } catch {
+      setNotice(
+        "The repository was removed. Refresh the workspace to update its saved plan.",
+        "error",
+      );
+    }
+    return result;
+  };
+
   const createPlanningHome = () => {
     if (!selectedWorkspace) return;
     setReviewWorkspaceSeed(null);
@@ -11066,7 +11768,7 @@ export function LocalWorkspace({
   };
 
   const startGitlabReviewWorkspace = async (review: GitlabReview) => {
-    if (preparingReviewId) return;
+    if (preparingReviewId || preparingReviewIdRef.current) return;
     const existingWorkspace = workspaces.find(
       (workspace) => gitlabReviewForWorkspace(workspace, [review]) !== undefined,
     );
@@ -11089,12 +11791,14 @@ export function LocalWorkspace({
       );
       return;
     }
+    preparingReviewIdRef.current = review.id;
     setPreparingReviewId(review.id);
     setReviewWorkspaceErrors((current) => {
       const next = new Map(current);
       next.delete(review.id);
       return next;
     });
+    let createdWorkspaceId = "";
     try {
       const preparation = await client.prepareGitlabReviewRepository(
         review.repositoryId,
@@ -11110,23 +11814,146 @@ export function LocalWorkspace({
         ],
         skippedEntries: current?.skippedEntries ?? 0,
       }));
-      setReviewWorkspaceSeed({ preparation, review });
-      setCreatePlanningEnabled(true);
-      setCreateTemplateWorkspaceId("");
-      setCreateRepositoryBaseOverrides({
-        [preparation.repository.id]: review.sourceBranch,
-      });
-      setCreateOpen(true);
+      const reviewLabel = `Review ${review.repository} !${review.number}`;
+      const creationKey =
+        reviewWorkspaceCreationKeysRef.current.get(review.id) ??
+        newIdempotencyKey();
+      reviewWorkspaceCreationKeysRef.current.set(review.id, creationKey);
+      const created = await client.createWorkspace(
+        {
+          intent: { type: "repositorySet", label: reviewLabel },
+          title: reviewLabel,
+          preferredProvider: "codex",
+          repositories: [
+            {
+              repositoryId: preparation.repository.id,
+              label: preparation.repository.label,
+              baseRef: review.sourceBranch,
+            },
+          ],
+          planning: { folder: "plansAndKanban", format: "kanban" },
+        },
+        creationKey,
+      );
+      const returnedRepository = created.workspace.repositories.find(
+        (repository) => repository.repositoryId === preparation.repository.id,
+      );
+      if (
+        created.workspace.intent.type !== "repositorySet" ||
+        created.workspace.intent.label !== reviewLabel ||
+        returnedRepository?.baseRef !== review.sourceBranch
+      ) {
+        throw new Error("WTS saved a different review workspace.");
+      }
+
+      const workspace = workspaceFromView(created.workspace);
+      createdWorkspaceId = workspace.id;
+      reviewWorkspaceHydrationSkipsRef.current.add(workspace.id);
+      setWorkspaces((current) => [
+        ...current.filter((candidate) => candidate.id !== workspace.id),
+        workspace,
+      ]);
+      invalidateDeepLinkLookup();
+      setSelectedId(workspace.id);
+      setReviewRepositoryId(preparation.repository.id);
+      setWorkspaceCommandState("idle");
+      setWorkspaceActionError("");
+      setWorkspaceMaterialization(null);
+      setView("workbench");
+      setActiveTab("overview");
+      pushNavigationPath(`/sessions/${encodeURIComponent(workspace.id)}`);
+      setNotice(`${workspace.key} · WTS checks the review workspace`);
+
+      setWorkspaceActionState("checking");
+      const preflight = await client.preflightWorkspace(workspace.id);
+      if (preflight.workspaceId !== workspace.id) {
+        throw new Error("WTS returned setup effects for another workspace.");
+      }
+      setWorkspacePreflight(preflight);
+      if (!preflight.ready) {
+        setWorkspaceActionState("blocked");
+        setNotice(
+          `${workspace.key} needs ${preflight.blockers.length} local setup decision${preflight.blockers.length === 1 ? "" : "s"}`,
+        );
+        return;
+      }
+
+      setWorkspaceActionState("materializing");
+      const materializationKey =
+        reviewWorkspaceMaterializationKeysRef.current.get(
+          `${workspace.id}:${preflight.effectDigest}`,
+        ) ?? newIdempotencyKey();
+      reviewWorkspaceMaterializationKeysRef.current.set(
+        `${workspace.id}:${preflight.effectDigest}`,
+        materializationKey,
+      );
+      const materialized = await client.materializeWorkspace(
+        workspace.id,
+        preflight.effectDigest,
+        materializationKey,
+      );
+      if (materialized.materialization.workspaceId !== workspace.id) {
+        throw new Error("WTS returned materialization for another workspace.");
+      }
+      materializationCache.set(workspace.id, materialized.materialization);
+      workspaceActionGenerationRef.current += 1;
+      setWorkspaceMaterialization(materialized.materialization);
+      setWorkspaceActionState("materialized");
+      setWorkspaces((current) =>
+        current.map((candidate) =>
+          candidate.id === workspace.id
+            ? {
+                ...candidate,
+                lane: "planned",
+                summary: `${worktreeCount(materialized.materialization.worktrees.length)} ready`,
+              }
+            : candidate,
+        ),
+      );
+      setActiveTab("changes");
+      pushNavigationPath(
+        `/sessions/${encodeURIComponent(workspace.id)}/changes?repository=${encodeURIComponent(preparation.repository.id)}`,
+      );
+      setNotice(`${workspace.key} ready · Codex starts the initial review`);
+
+      try {
+        await client.launchAgentSession(workspace.id, {
+          provider: "codex",
+          category: "review",
+          prompt: [
+            `Review GitLab merge request ${review.repository} !${review.number}.`,
+            `Compare source branch ${review.sourceBranch} with target branch ${review.targetBranch}.`,
+            "Read WTS.md and the trusted workspace context before you start.",
+            "Inspect the complete change and identify defects, risks, missing tests, and unclear behavior.",
+            "Do not modify source files.",
+            "Write the durable initial review into the workspace planning home.",
+            "Include file paths and line numbers for each finding.",
+          ].join(" "),
+        });
+      } catch (error) {
+        setNotice(
+          error instanceof Error
+            ? `The review workspace is ready. Codex did not start: ${error.message}`
+            : "The review workspace is ready. Codex did not start.",
+          "error",
+        );
+      }
     } catch (error) {
       const message =
         error instanceof Error
           ? error.message
           : "WTS could not prepare this review repository.";
+      if (createdWorkspaceId) {
+        setActiveTab("overview");
+        setWorkspaceActionState("error");
+        setWorkspaceActionError(message);
+      }
       setReviewWorkspaceErrors((current) =>
         new Map(current).set(review.id, message),
       );
       setNotice(`${review.repository} !${review.number} · ${message}`, "error");
     } finally {
+      preparingReviewIdRef.current = "";
       setPreparingReviewId("");
     }
   };
@@ -11163,6 +11990,36 @@ export function LocalWorkspace({
       setNotice(`${review.repository} !${review.number} · ${message}`, "error");
     } finally {
       setOpeningAssignedReviewId("");
+    }
+  };
+
+  const openWorkspaceGitlabMergeRequest = async (
+    mergeRequest: GitlabMergeRequest,
+  ) => {
+    try {
+      const result = await client.openGitlabMergeRequest(
+        mergeRequest.repositoryId,
+        mergeRequest.iid,
+      );
+      if (
+        !result.accepted ||
+        result.repositoryId !== mergeRequest.repositoryId ||
+        result.iid !== mergeRequest.iid
+      ) {
+        throw new Error("WTS returned a different merge-request handoff.");
+      }
+      setNotice(
+        `${mergeRequest.projectPath} !${mergeRequest.iid} · GitLab opened`,
+      );
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : "WTS could not open this merge request.";
+      setNotice(
+        `${mergeRequest.projectPath} !${mergeRequest.iid} · ${message}`,
+        "error",
+      );
     }
   };
 
@@ -12456,6 +13313,18 @@ export function LocalWorkspace({
         )}
         <div className={styles.boardToolbarActions}>
           <Button
+            aria-label="Refresh review status"
+            className={styles.secondaryButton}
+            onPress={() => {
+              myReviews.refresh();
+              setBoardStatusRevision((revision) => revision + 1);
+              setNotice("WTS refreshes review status");
+            }}
+          >
+            <Glyph name="refresh" size={13} />
+            Refresh status
+          </Button>
+          <Button
             className={styles.secondaryButton}
             onPress={openTimeReview}
           >
@@ -12586,6 +13455,13 @@ export function LocalWorkspace({
                       mergeRequests={
                         workspaceGitlabInboxes.get(workspace.id)?.mergeRequests
                       }
+                      gitlabReview={gitlabReviewForWorkspace(
+                        workspace,
+                        myReviews.gitlabInbox?.reviews ?? [],
+                      )}
+                      onOpenMergeRequest={(mergeRequest) =>
+                        void openWorkspaceGitlabMergeRequest(mergeRequest)
+                      }
                       placementLabel={
                         workspace.workflowPlacementMode === "pinned"
                           ? "Pinned"
@@ -12612,6 +13488,11 @@ export function LocalWorkspace({
                           openWorkspace(workspace.id);
                         }
                       }}
+                      onOpenWorkspace={
+                        workspace.lifecycleState === "materialized"
+                          ? () => focusWorkspaceInVscode(workspace.id)
+                          : undefined
+                      }
                       issueAction={
                         workspace.intent.type === "jira"
                           ? {
@@ -12728,18 +13609,45 @@ export function LocalWorkspace({
     </main>
   );
 
+  const selectedGitlabReview = selectedWorkspace
+    ? gitlabReviewTargetForWorkspace(
+        selectedWorkspace,
+        myReviews.gitlabInbox?.reviews ?? [],
+      )
+    : undefined;
+  useEffect(() => {
+    if (!selectedGitlabReview || activeTab !== "verification") return;
+    const nextTab = workspaceMaterialization ? "changes" : "overview";
+    setActiveTab(nextTab);
+    pushNavigationPath(
+      `/sessions/${encodeURIComponent(selectedWorkspace!.id)}${nextTab === "changes" ? "/changes" : ""}`,
+    );
+  }, [activeTab, selectedGitlabReview, selectedWorkspace, workspaceMaterialization]);
   const selectedWorkspaceHasKnownMaterialization =
     Boolean(workspaceMaterialization) ||
     (selectedWorkspace?.lifecycleState === "materialized" &&
       workspaceActionState === "checking");
+  const selectedReviewStatusLabel = selectedGitlabReview?.status === "merged"
+    ? "Merged"
+    : selectedGitlabReview?.status === "closed"
+      ? "Closed"
+      : selectedGitlabReview?.reviewState === "changesAfterApproval"
+        ? "New changes"
+        : selectedGitlabReview?.reviewState === "approved"
+          ? "Approved"
+          : selectedGitlabReview?.draft
+            ? "Draft"
+            : selectedGitlabReview?.status === "open"
+              ? "Review requested"
+              : undefined;
   const selectedWorkspaceLifecycleLabel =
-    selectedWorkspaceHasKnownMaterialization
+    selectedReviewStatusLabel ?? (selectedWorkspaceHasKnownMaterialization
       ? "Ready"
       : selectedWorkspace?.lifecycleState === "needsAttention"
         ? "Needs attention"
         : selectedWorkspace?.lifecycleState === "unknown"
           ? "Not checked"
-          : "Needs setup";
+          : "Needs setup");
   const workbenchRecoveryIsError =
     registryState === "error" || deepLinkState === "error";
   const workbenchRecoveryIsLoading =
@@ -12913,12 +13821,20 @@ export function LocalWorkspace({
               data-ui-label="Workspace tabs"
             >
               <Tabs.List aria-label="Workspace views">
-                <Tabs.Trigger value="overview">Workspace</Tabs.Trigger>
-                <Tabs.Trigger value="planning">Plans</Tabs.Trigger>
+                <Tabs.Trigger value="overview">
+                  {selectedGitlabReview ? "Review" : "Workspace"}
+                </Tabs.Trigger>
+                <Tabs.Trigger value="planning">
+                  {selectedGitlabReview ? "Agent review" : "Plans"}
+                </Tabs.Trigger>
                 {workspaceMaterialization && (
-                  <Tabs.Trigger value="changes">Changes</Tabs.Trigger>
+                  <Tabs.Trigger value="changes">
+                    {selectedGitlabReview ? "Code review" : "Changes"}
+                  </Tabs.Trigger>
                 )}
-                <Tabs.Trigger value="verification">Verify</Tabs.Trigger>
+                {!selectedGitlabReview && (
+                  <Tabs.Trigger value="verification">Verify</Tabs.Trigger>
+                )}
               </Tabs.List>
             </div>
             <div
@@ -12999,6 +13915,12 @@ export function LocalWorkspace({
                 }
                 onReviseBase={startBaseRevision}
                 onCreateRevisedCopy={startRevisedWorkspace}
+                onAddRepositories={() =>
+                  workspaceMaterialization
+                    ? setAddRepositoryOpen(true)
+                    : startRevisedWorkspace()
+                }
+                onRemoveRepository={removeSelectedWorkspaceRepository}
                 onReconcile={() => void reindexSelectedWorkspaceGraph()}
                 onSyncRepository={syncSelectedWorkspaceRepository}
                 onAlignRepository={alignSelectedWorkspaceRepository}
@@ -13006,10 +13928,7 @@ export function LocalWorkspace({
                 onReviewChanges={openRepositoryReview}
                 onOpenWorkspace={() => void openSelectedWorkspacePreferred()}
                 onNotice={setNotice}
-                gitlabReview={gitlabReviewTargetForWorkspace(
-                  selectedWorkspace,
-                  myReviews.gitlabInbox?.reviews ?? [],
-                )}
+                gitlabReview={selectedGitlabReview}
               />
             </Tabs.Content>
             <Tabs.Content value="planning">
@@ -13044,18 +13963,19 @@ export function LocalWorkspace({
                 >
                   <RepositoryReviewScreen
                     client={client}
-                    gitlabReview={gitlabReviewTargetForWorkspace(
-                      selectedWorkspace,
-                      myReviews.gitlabInbox?.reviews ?? [],
-                    )}
+                    gitlabReview={selectedGitlabReview}
                     initialRepositoryId={reviewRepositoryId}
                     materialization={workspaceMaterialization}
-                    onOpenVerification={() => {
-                      setActiveTab("verification");
-                      pushNavigationPath(
-                        `/sessions/${encodeURIComponent(selectedWorkspace.id)}/verification`,
-                      );
-                    }}
+                    onOpenVerification={
+                      selectedGitlabReview
+                        ? undefined
+                        : () => {
+                            setActiveTab("verification");
+                            pushNavigationPath(
+                              `/sessions/${encodeURIComponent(selectedWorkspace.id)}/verification`,
+                            );
+                          }
+                    }
                     onRepositoryChange={(repositoryId) => {
                       setReviewRepositoryId(repositoryId);
                       pushNavigationPath(
@@ -13067,51 +13987,56 @@ export function LocalWorkspace({
                 </Suspense>
               </Tabs.Content>
             )}
-            <Tabs.Content value="verification">
-              <VerificationPanel
-                client={client}
-                materialized={Boolean(workspaceMaterialization)}
-                onIndexGraph={indexSelectedWorkspaceGraph}
-                onNotice={setNotice}
-                onVerificationFailed={() => {
-                  if (selectedWorkspace.workflowState !== "parked") {
-                    void moveWorkspaceToLane(selectedWorkspace.id, "attention");
-                  }
-                }}
-                onPrepareCliTask={(prompt) => {
-                  const revision = ++cliDraftRevisionRef.current;
-                  setCliDraft({
-                    workspaceId: selectedWorkspace.id,
-                    prompt,
-                    revision,
-                    briefState: "saving",
-                  });
-                  void saveWorkspaceAgentBrief(
-                    selectedWorkspace.id,
-                    selectedWorkspace.key,
-                    prompt,
-                    revision,
-                  );
-                }}
-                workspaceId={selectedWorkspace.id}
-                workspaceKey={selectedWorkspace.key}
-              />
-              {cliDraft?.workspaceId === selectedWorkspace.id && (
-                <PreparedVerificationBrief
-                  draft={cliDraft}
-                  onOpen={() => setOpenWorkspaceLauncherOpen(true)}
-                  onRetry={() =>
+            {!selectedGitlabReview && (
+              <Tabs.Content value="verification">
+                <VerificationPanel
+                  client={client}
+                  materialized={Boolean(workspaceMaterialization)}
+                  onIndexGraph={indexSelectedWorkspaceGraph}
+                  onNotice={setNotice}
+                  onVerificationFailed={() => {
+                    if (selectedWorkspace.workflowState !== "parked") {
+                      void moveWorkspaceToLane(
+                        selectedWorkspace.id,
+                        "attention",
+                      );
+                    }
+                  }}
+                  onPrepareCliTask={(prompt) => {
+                    const revision = ++cliDraftRevisionRef.current;
+                    setCliDraft({
+                      workspaceId: selectedWorkspace.id,
+                      prompt,
+                      revision,
+                      briefState: "saving",
+                    });
                     void saveWorkspaceAgentBrief(
                       selectedWorkspace.id,
                       selectedWorkspace.key,
-                      cliDraft.prompt,
-                      cliDraft.revision,
-                    )
-                  }
-                  preferredProviderName={selectedPreferredProviderName}
+                      prompt,
+                      revision,
+                    );
+                  }}
+                  workspaceId={selectedWorkspace.id}
+                  workspaceKey={selectedWorkspace.key}
                 />
-              )}
-            </Tabs.Content>
+                {cliDraft?.workspaceId === selectedWorkspace.id && (
+                  <PreparedVerificationBrief
+                    draft={cliDraft}
+                    onOpen={() => setOpenWorkspaceLauncherOpen(true)}
+                    onRetry={() =>
+                      void saveWorkspaceAgentBrief(
+                        selectedWorkspace.id,
+                        selectedWorkspace.key,
+                        cliDraft.prompt,
+                        cliDraft.revision,
+                      )
+                    }
+                    preferredProviderName={selectedPreferredProviderName}
+                  />
+                )}
+              </Tabs.Content>
+            )}
           </div>
         </Tabs.Root>
         {workspaceMaterialization && (
@@ -13655,6 +14580,16 @@ export function LocalWorkspace({
           initialReviewWorkspace={reviewWorkspaceSeed ?? undefined}
           initialPlanningEnabled={createPlanningEnabled}
         />
+        {selectedWorkspace && (
+          <AddWorkspaceRepositoryDialog
+            client={client}
+            onComplete={(result) => void completeRepositoryAddition(result)}
+            onOpenChange={setAddRepositoryOpen}
+            open={addRepositoryOpen && Boolean(workspaceMaterialization)}
+            repositoryCatalog={repositoryCatalog}
+            workspace={selectedWorkspace}
+          />
+        )}
         <HowToGuide
           open={guideOpen}
           onOpenChange={setGuideOpen}

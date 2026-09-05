@@ -1206,6 +1206,7 @@ export function RepositoryPatchViewer({
         </div>
         <div
           className={styles.codeView}
+          data-history-swipe-block
           data-ui="changes.code"
           data-ui-label="Changed code"
         >

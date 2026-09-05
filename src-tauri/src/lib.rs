@@ -18,25 +18,27 @@ use wts_app::{
     OpenWorkspaceGitlabMergeRequestResult, OpenWorkspaceJiraPreviewRequest, OpenWorkspaceResult,
     OpenWorkspaceWorkItemRequest, OpenWorkspaceWorkItemResult, PrepareWorkspaceChangeRequest,
     PreviewWorkspaceJiraLinkRequest, PublishGitlabReviewCommentResult,
-    RefreshRepositoryBranchesRequest, RefreshRepositoryBranchesResult, RemoveWorkspaceResult,
-    RepositoryCatalog, ResolveWorkspaceReviewThreadRequest, RuntimeAnalysisRequest,
-    RuntimeAnalysisResult, TerminalProvider, TestRunList, TestRunResult, TestRunSummary,
-    UnlinkWorkspaceWorkItemRequest, UpdateWorkspacePlanningDocumentRequest,
-    WorkspaceAgentBriefResult, WorkspaceChangeRequestDraft, WorkspaceCliLaunchResult,
+    PublishWorkspaceChangeRequestBranch, RefreshRepositoryBranchesRequest,
+    RefreshRepositoryBranchesResult, RemoveWorkspaceResult, RepositoryCatalog,
+    ResolveWorkspaceReviewThreadRequest, RuntimeAnalysisRequest, RuntimeAnalysisResult,
+    TerminalProvider, TestRunList, TestRunResult, TestRunSummary, UnlinkWorkspaceWorkItemRequest,
+    UpdateWorkspacePlanningDocumentRequest, WorkspaceAgentBriefResult,
+    WorkspaceBranchPublicationResult, WorkspaceChangeRequestDraft, WorkspaceCliLaunchResult,
     WorkspaceEvidence, WorkspaceMaterialization, WorkspacePlanningDocument,
     WorkspacePlanningDocumentId, WorkspacePlanningDocumentList, WorkspacePreflight,
-    WorkspaceRemovalPreflight, WorkspaceRepositoryAlignmentPreflight,
+    WorkspaceRemovalPreflight, WorkspaceRepositoryAdditionPreflight,
+    WorkspaceRepositoryAdditionResult, WorkspaceRepositoryAlignmentPreflight,
     WorkspaceRepositoryAlignmentResult, WorkspaceRepositoryDiff, WorkspaceRepositoryFileReview,
-    WorkspaceRepositoryReviewGraph, WorkspaceRepositorySyncResult, WorkspaceReviewThread,
-    WorkspaceReviewThreadList, WorkspaceWorkItemLinkList, WorkspaceWorkItemLinkPreview,
-    WorkspaceWorkItemUnlinkResult,
+    WorkspaceRepositoryRemovalResult, WorkspaceRepositoryReviewGraph,
+    WorkspaceRepositorySyncResult, WorkspaceReviewThread, WorkspaceReviewThreadList,
+    WorkspaceWorkItemLinkList, WorkspaceWorkItemLinkPreview, WorkspaceWorkItemUnlinkResult,
 };
 use wts_core::{
     ActionEnvelope, BoundaryCompiler, BoundaryDraft, Capability, Effect, RepositoryPin,
     RuntimeLease, ServiceSpec, WorkspaceBoundary,
     workspace::{
-        CreateWorkspaceRequest, FollowWorkspaceAgentRequest, PlaceWorkspaceOnBoardRequest,
-        RenameWorkspaceRequest, TransitionWorkspaceWorkflowRequest,
+        AddWorkspaceRepositoryRequest, CreateWorkspaceRequest, FollowWorkspaceAgentRequest,
+        PlaceWorkspaceOnBoardRequest, RenameWorkspaceRequest, TransitionWorkspaceWorkflowRequest,
     },
 };
 use wts_integrations::{
@@ -848,6 +850,55 @@ async fn sync_workspace_repository(
 }
 
 #[tauri::command]
+async fn preflight_workspace_repository_addition(
+    workspace_id: String,
+    request: AddWorkspaceRepositoryRequest,
+    state: tauri::State<'_, LocalWtsService>,
+) -> Result<WorkspaceRepositoryAdditionPreflight, WorkspaceCommandError> {
+    let workspace_id = parse_workspace_id(&workspace_id)?;
+    let service = state.inner().clone();
+    run_blocking_command(move || {
+        service
+            .preflight_workspace_repository_addition(workspace_id, request)
+            .map_err(local_wts_command_error)
+    })
+    .await
+}
+
+#[tauri::command]
+async fn add_workspace_repository(
+    workspace_id: String,
+    request: AddWorkspaceRepositoryRequest,
+    effect_digest: String,
+    state: tauri::State<'_, LocalWtsService>,
+) -> Result<WorkspaceRepositoryAdditionResult, WorkspaceCommandError> {
+    let workspace_id = parse_workspace_id(&workspace_id)?;
+    let service = state.inner().clone();
+    run_blocking_command(move || {
+        service
+            .add_workspace_repository(workspace_id, request, &effect_digest)
+            .map_err(local_wts_command_error)
+    })
+    .await
+}
+
+#[tauri::command]
+async fn remove_workspace_repository(
+    workspace_id: String,
+    repository_id: String,
+    state: tauri::State<'_, LocalWtsService>,
+) -> Result<WorkspaceRepositoryRemovalResult, WorkspaceCommandError> {
+    let workspace_id = parse_workspace_id(&workspace_id)?;
+    let service = state.inner().clone();
+    run_blocking_command(move || {
+        service
+            .remove_workspace_repository(workspace_id, &repository_id)
+            .map_err(local_wts_command_error)
+    })
+    .await
+}
+
+#[tauri::command]
 async fn preflight_workspace_repository_alignment(
     workspace_id: String,
     repository_id: String,
@@ -1107,6 +1158,22 @@ async fn prepare_workspace_change_request(
     run_blocking_command(move || {
         service
             .prepare_workspace_change_request(workspace_id, request)
+            .map_err(local_wts_command_error)
+    })
+    .await
+}
+
+#[tauri::command]
+async fn publish_workspace_change_request_branch(
+    workspace_id: String,
+    request: PublishWorkspaceChangeRequestBranch,
+    state: tauri::State<'_, LocalWtsService>,
+) -> Result<WorkspaceBranchPublicationResult, WorkspaceCommandError> {
+    let workspace_id = parse_workspace_id(&workspace_id)?;
+    let service = state.inner().clone();
+    run_blocking_command(move || {
+        service
+            .publish_workspace_change_request_branch(workspace_id, request)
             .map_err(local_wts_command_error)
     })
     .await
@@ -2089,6 +2156,35 @@ fn local_wts_command_error(error: LocalWtsError) -> WorkspaceCommandError {
                 .to_owned(),
             retryable: true,
         },
+        LocalWtsError::ChangeRequestBranchPublishFailed => WorkspaceCommandError {
+            code: "change_request_branch_publish_failed",
+            message: "Git rejected the publish operation for an unknown reason. Open the workspace and run Git push to see the diagnostic."
+                .to_owned(),
+            retryable: true,
+        },
+        LocalWtsError::InvalidChangeRequestBranchName => WorkspaceCommandError {
+            code: "invalid_change_request_branch_name",
+            message: "Enter a valid Git branch name and retry.".to_owned(),
+            retryable: true,
+        },
+        LocalWtsError::ChangeRequestBranchAuthenticationFailed => WorkspaceCommandError {
+            code: "change_request_branch_authentication_failed",
+            message: "Git authentication failed. Unlock the SSH key or credential helper, then retry."
+                .to_owned(),
+            retryable: true,
+        },
+        LocalWtsError::ChangeRequestBranchNetworkFailed => WorkspaceCommandError {
+            code: "change_request_branch_network_failed",
+            message: "Git cannot reach the remote. Check the network connection, then retry."
+                .to_owned(),
+            retryable: true,
+        },
+        LocalWtsError::ChangeRequestBranchRejected => WorkspaceCommandError {
+            code: "change_request_branch_rejected",
+            message: "The remote rejected this branch update. Choose another branch name or synchronize the branch."
+                .to_owned(),
+            retryable: true,
+        },
         LocalWtsError::ChangeRequestRemoteMismatch => WorkspaceCommandError {
             code: "change_request_remote_mismatch",
             message: "The local and remote branch commits do not match. Publish the current commit and retry."
@@ -2109,7 +2205,7 @@ fn local_wts_command_error(error: LocalWtsError) -> WorkspaceCommandError {
         },
         LocalWtsError::ChangeRequestAgentProposalUnavailable => WorkspaceCommandError {
             code: "change_request_agent_proposal_unavailable",
-            message: "No agent session prepared a change request for this repository commit. Ask the agent to prepare and publish the branch first."
+            message: "No agent session prepared a change request for this repository commit. Select Ask agent to prepare."
                 .to_owned(),
             retryable: true,
         },
@@ -2301,6 +2397,44 @@ fn local_wts_command_error(error: LocalWtsError) -> WorkspaceCommandError {
                 "The managed worktrees changed since WTS last registered their Git state."
                     .to_owned(),
             retryable: false,
+        },
+        LocalWtsError::RepositoryAlreadyInWorkspace => WorkspaceCommandError {
+            code: "repository_already_in_workspace",
+            message: "This workspace already contains the selected repository.".to_owned(),
+            retryable: false,
+        },
+        LocalWtsError::RepositoryAdditionStale => WorkspaceCommandError {
+            code: "repository_addition_stale",
+            message: "The repository changed after review. Review the repository again."
+                .to_owned(),
+            retryable: false,
+        },
+        LocalWtsError::RepositoryAdditionFailed { cleanup_complete } => WorkspaceCommandError {
+            code: if cleanup_complete {
+                "repository_addition_failed"
+            } else {
+                "repository_addition_cleanup_failed"
+            },
+            message: if cleanup_complete {
+                "WTS could not add the repository. The current workspace is unchanged."
+                    .to_owned()
+            } else {
+                "WTS could not add the repository or complete cleanup. Review the workspace before you retry."
+                    .to_owned()
+            },
+            retryable: cleanup_complete,
+        },
+        LocalWtsError::RepositoryRemovalBlocked => WorkspaceCommandError {
+            code: "repository_removal_blocked",
+            message: "WTS cannot remove the only repository or a repository that has local files. Save or discard its local files first."
+                .to_owned(),
+            retryable: false,
+        },
+        LocalWtsError::RepositoryRemovalFailed => WorkspaceCommandError {
+            code: "repository_removal_failed",
+            message: "WTS could not remove the repository. Refresh the workspace before you retry."
+                .to_owned(),
+            retryable: true,
         },
         LocalWtsError::RepositorySyncBlocked => WorkspaceCommandError {
             code: "repository_sync_blocked",
@@ -2751,6 +2885,9 @@ pub fn run() {
             get_workspace_repository_file_review,
             get_workspace_repository_review_graph,
             sync_workspace_repository,
+            preflight_workspace_repository_addition,
+            add_workspace_repository,
+            remove_workspace_repository,
             preflight_workspace_repository_alignment,
             align_workspace_repository,
             materialize_workspace,
@@ -2767,6 +2904,7 @@ pub fn run() {
             stop_agent_session,
             open_repository_base,
             prepare_workspace_change_request,
+            publish_workspace_change_request_branch,
             open_workspace_change_request_draft,
             index_workspace_graph,
             reindex_workspace_graph,
@@ -3019,9 +3157,21 @@ mod tests {
         let stale = local_wts_command_error(LocalWtsError::StaleChangeRequestDraft);
         assert_eq!(stale.code, "stale_change_request_draft");
         assert!(stale.retryable);
+        let authentication =
+            local_wts_command_error(LocalWtsError::ChangeRequestBranchAuthenticationFailed);
+        assert_eq!(
+            authentication.code,
+            "change_request_branch_authentication_failed"
+        );
+        assert!(authentication.message.contains("authentication failed"));
+        let invalid_name = local_wts_command_error(LocalWtsError::InvalidChangeRequestBranchName);
+        assert_eq!(invalid_name.code, "invalid_change_request_branch_name");
         let capability = include_str!("../capabilities/default.json");
         let prepare =
             include_str!("../permissions/autogenerated/prepare_workspace_change_request.toml");
+        let publish = include_str!(
+            "../permissions/autogenerated/publish_workspace_change_request_branch.toml"
+        );
         let open =
             include_str!("../permissions/autogenerated/open_workspace_change_request_draft.toml");
         let github_reviews =
@@ -3039,8 +3189,10 @@ mod tests {
         let gitlab_review_prepare =
             include_str!("../permissions/autogenerated/prepare_gitlab_review_repository.toml");
         assert!(capability.contains("allow-prepare-workspace-change-request"));
+        assert!(capability.contains("allow-publish-workspace-change-request-branch"));
         assert!(capability.contains("allow-open-workspace-change-request-draft"));
         assert!(prepare.contains("commands.allow = [\"prepare_workspace_change_request\"]"));
+        assert!(publish.contains("commands.allow = [\"publish_workspace_change_request_branch\"]"));
         assert!(open.contains("commands.allow = [\"open_workspace_change_request_draft\"]"));
         assert!(capability.contains("allow-get-github-review-inbox"));
         assert!(capability.contains("allow-open-github-review"));

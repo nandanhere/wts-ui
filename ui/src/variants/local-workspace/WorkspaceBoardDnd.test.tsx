@@ -5,7 +5,7 @@ import {
   useSensors,
   type DragStartEvent,
 } from "@dnd-kit/core";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -120,6 +120,71 @@ describe("workspace board order fallback", () => {
       clientY: 28,
     });
     await waitFor(() => expect(onDragStart).toHaveBeenCalledOnce());
+  });
+
+  it("shows a merged merge request as a separate board link", () => {
+    const onOpenMergeRequest = vi.fn();
+    const workspace: Workspace = {
+      id: "ws-merged",
+      intent: { type: "repositorySet", label: "Review acme/api !22" },
+      key: "merged",
+      kind: "Repositories",
+      title: "Review acme/api !22",
+      lane: "attention",
+      workflowState: "review",
+      workflowRevision: 2,
+      workflowUpdatedAtUnixMs: 2,
+      workflowPersisted: true,
+      lifecycleState: "materialized",
+      knownWorktreeCount: 1,
+      observedAtUnixMs: 2,
+      provider: "VS Code",
+      repos: 1,
+      repositoryPlans: [],
+      observedWorkItems: [],
+      path: "/tmp/merged",
+      updated: "now",
+      updatedAtUnixMs: 2,
+      summary: "Review",
+    };
+    const mergeRequest = {
+      id: "mr-22",
+      repositoryId: "repo-api",
+      projectPath: "acme/api",
+      webUrl: "https://gitlab.example.com/acme/api/-/merge_requests/22",
+      iid: 22,
+      title: "Merge delivery",
+      sourceBranch: "feat/delivery",
+      targetBranch: "main",
+      authorUsername: "alice",
+      updatedAt: "2026-08-28T08:00:00Z",
+      draft: false,
+      status: "merged" as const,
+    };
+
+    render(
+      <DndContext>
+        <DraggableWorkspaceCard
+          displayLane="attention"
+          index={0}
+          mergeRequests={[mergeRequest]}
+          onOpen={vi.fn()}
+          onOpenMergeRequest={onOpenMergeRequest}
+          workspace={workspace}
+        />
+      </DndContext>,
+    );
+
+    const card = screen.getByRole("link", {
+      name: "Open merge request !22 in GitLab",
+    }).closest("article") as HTMLElement;
+    expect(within(card).getByText("Merged")).toBeVisible();
+    expect(within(card).getByRole("link", {
+      name: "Open merge request !22 in GitLab",
+    })).toHaveAttribute(
+      "href",
+      "https://gitlab.example.com/acme/api/-/merge_requests/22",
+    );
   });
 
   it("reorders a workspace within its lane", () => {

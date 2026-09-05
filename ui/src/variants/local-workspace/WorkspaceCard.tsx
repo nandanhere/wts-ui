@@ -2,7 +2,7 @@ import { memo } from "react";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import { Button, type ButtonProps } from "react-aria-components";
 import { Glyph } from "./Glyph";
-import type { GitlabMergeRequest } from "../../lib/wtsClient";
+import type { GitlabMergeRequest, GitlabReview } from "../../lib/wtsClient";
 import {
   type Workspace,
   type WorkspaceAgentSnapshot,
@@ -16,12 +16,15 @@ export interface WorkspaceCardProps {
   workspace: Workspace;
   agent?: WorkspaceAgentSnapshot;
   onOpen: (modified: boolean) => void;
+  onOpenWorkspace?: () => void;
   primaryActionLabel?: string;
   issueAction?: {
     label: string;
     onPress: () => void;
   };
   mergeRequests?: readonly GitlabMergeRequest[];
+  gitlabReview?: GitlabReview;
+  onOpenMergeRequest?: (mergeRequest: GitlabMergeRequest) => void;
   moveActions?: Array<{
     label: string;
     onPress: () => void;
@@ -34,9 +37,12 @@ export const WorkspaceCard = memo(function WorkspaceCard({
   workspace,
   agent,
   onOpen,
+  onOpenWorkspace,
   primaryActionLabel,
   issueAction,
   mergeRequests = [],
+  gitlabReview,
+  onOpenMergeRequest,
   moveActions = [],
   buttonRef,
   dragProps,
@@ -58,9 +64,22 @@ export const WorkspaceCard = memo(function WorkspaceCard({
     );
   });
   const primaryMergeRequest = orderedMergeRequests[0];
-  const mergeRequestLabel = primaryMergeRequest
-    ? `${primaryMergeRequest.draft ? "Draft " : ""}MR !${primaryMergeRequest.iid} · ${primaryMergeRequest.status[0]!.toUpperCase()}${primaryMergeRequest.status.slice(1)}`
+  const mergeRequestStatus = primaryMergeRequest
+    ? primaryMergeRequest.status === "merged"
+      ? "Merged"
+      : primaryMergeRequest.status === "closed"
+        ? "Closed"
+        : gitlabReview?.reviewState === "changesAfterApproval"
+          ? "New changes after approval"
+          : gitlabReview?.reviewState === "approved"
+            ? "Approved"
+            : primaryMergeRequest.draft
+              ? "Draft"
+              : "Open"
     : "";
+  const hasInlineAction = Boolean(
+    issueAction || (primaryMergeRequest && onOpenMergeRequest),
+  );
   const cardContents = (
     <>
       <span className={styles.cardHeader}>
@@ -100,7 +119,25 @@ export const WorkspaceCard = memo(function WorkspaceCard({
           data-status={primaryMergeRequest.status}
         >
           <Glyph name="branch" size={13} />
-          <b>{mergeRequestLabel}</b>
+          {onOpenMergeRequest ? (
+            <a
+              aria-label={`Open merge request !${primaryMergeRequest.iid} in GitLab`}
+              className={styles.cardMergeRequestLink}
+              href={primaryMergeRequest.webUrl}
+              onClick={(event) => {
+                event.preventDefault();
+                onOpenMergeRequest(primaryMergeRequest);
+              }}
+              rel="noreferrer"
+              target="_blank"
+            >
+              MR !{primaryMergeRequest.iid}
+              <Glyph name="external" size={11} />
+            </a>
+          ) : (
+            <b>MR !{primaryMergeRequest.iid}</b>
+          )}
+          <b className={styles.cardMergeRequestStatus}>{mergeRequestStatus}</b>
           {orderedMergeRequests.length > 1 && (
             <span>+{orderedMergeRequests.length - 1} more</span>
           )}
@@ -152,7 +189,7 @@ export const WorkspaceCard = memo(function WorkspaceCard({
       data-lane={workspace.lane}
       data-delivery-status={primaryMergeRequest?.status}
     >
-      {issueAction ? (
+      {hasInlineAction ? (
         <div className={styles.workspaceCard}>
           <Button
             {...dragProps}
@@ -184,6 +221,16 @@ export const WorkspaceCard = memo(function WorkspaceCard({
           className={styles.cardActions}
           role="group"
         >
+          {onOpenWorkspace && (
+            <Button
+              aria-label={`Open ${workspace.key} in VS Code`}
+              className={`${styles.cardActionButton} ${styles.cardOpenButton}`}
+              onPress={onOpenWorkspace}
+            >
+              Open workspace
+              <Glyph name="external" size={11} />
+            </Button>
+          )}
           {moveActions.length > 0 && (
             <DropdownMenu.Root>
               <DropdownMenu.Trigger asChild>

@@ -275,7 +275,7 @@ describe("AgentSessionsPanel", () => {
     expect(within(review).getByText("coding")).toBeVisible();
     expect(
       within(review).getAllByText("PLATFORM-42 · Retry duplicate captures"),
-    ).toHaveLength(2);
+    ).toHaveLength(3);
     expect(screen.getAllByText("1h 10m")).toHaveLength(3);
     expect(screen.getByText("2 blocks")).toBeVisible();
     const activityOverview = screen.getByRole("region", {
@@ -318,7 +318,10 @@ describe("AgentSessionsPanel", () => {
         "Activity context matches 2 distinctive words in the Jira summary",
       ),
     ).toBeVisible();
-    await user.selectOptions(assignment, "OPS-41");
+    await user.click(assignment);
+    await user.click(screen.getByRole("option", {
+      name: "OPS-41 · Repair CI environment",
+    }));
     expect(assignment).toHaveValue("OPS-41");
     expect(
       within(assignment.closest("label")!).getByText("Open"),
@@ -400,11 +403,10 @@ describe("AgentSessionsPanel", () => {
       screen.queryByText("No activity evidence matches an assigned ticket"),
     ).not.toBeInTheDocument();
     expect(screen.getByText("Jira")).toBeVisible();
-    expect(
-      within(assignment).getByRole("option", {
-        name: "PLATFORM-6264 · Under eval flow check and optimisation",
-      }),
-    ).toBeVisible();
+    await user.click(assignment);
+    expect(screen.getByRole("option", {
+      name: "PLATFORM-6264 · Under eval flow check and optimisation",
+    })).toBeVisible();
   });
 
   it("keeps loginwindow out of the review and agent brief until the user includes it", async () => {
@@ -600,7 +602,10 @@ describe("AgentSessionsPanel", () => {
     const assignment = await screen.findByRole("combobox", {
       name: "Jira ticket for Coding work",
     });
-    await user.selectOptions(assignment, "WTS-42");
+    await user.click(assignment);
+    await user.click(screen.getByRole("option", {
+      name: "WTS-42 · Persist time review",
+    }));
     await waitFor(() => {
       const values = Array.from({ length: localStorage.length }, (_, index) =>
         localStorage.getItem(localStorage.key(index) ?? ""),
@@ -750,12 +755,14 @@ describe("AgentSessionsPanel", () => {
     const interval = await screen.findByRole("combobox", {
       name: "Automatic summary interval",
     });
-    await user.selectOptions(interval, "0");
+    await user.click(interval);
+    await user.click(screen.getByRole("option", { name: "Manual" }));
     expect(
       JSON.parse(localStorage.getItem("wts.time-review-schedule.v1") ?? "{}"),
     ).toMatchObject({ enabled: false, intervalHours: 4 });
 
-    await user.selectOptions(interval, "6");
+    await user.click(interval);
+    await user.click(screen.getByRole("option", { name: "Every 6 hours" }));
     expect(
       JSON.parse(localStorage.getItem("wts.time-review-schedule.v1") ?? "{}"),
     ).toMatchObject({ enabled: true, intervalHours: 6 });

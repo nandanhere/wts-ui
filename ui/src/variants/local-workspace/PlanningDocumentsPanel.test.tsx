@@ -21,18 +21,11 @@ vi.mock("mermaid", () => ({
 const workspaceId = "ws_01J_PLANNING";
 
 beforeEach(() => {
+  localStorage.removeItem("wts.planning-file-states.v1");
   mermaidMocks.initialize.mockClear();
   mermaidMocks.render.mockReset();
   mermaidMocks.render.mockResolvedValue({
     svg: '<svg xmlns="http://www.w3.org/2000/svg"><text>Rendered</text></svg>',
-  });
-  Object.defineProperty(URL, "createObjectURL", {
-    configurable: true,
-    value: vi.fn(() => "blob:planning-diagram"),
-  });
-  Object.defineProperty(URL, "revokeObjectURL", {
-    configurable: true,
-    value: vi.fn(),
   });
 });
 
@@ -158,6 +151,10 @@ describe("PlanningDocumentsPanel", () => {
     const files = await screen.findByRole("navigation", {
       name: "Planning files",
     });
+    expect(files.closest('[data-ui="planning.files"]')).toHaveAttribute(
+      "data-ui-label",
+      "Planning file explorer",
+    );
     const buttons = within(files).getAllByRole("button");
     expect(buttons.map((button) => button.textContent)).toEqual([
       expect.stringContaining("PLAN.md"),
@@ -190,6 +187,201 @@ describe("PlanningDocumentsPanel", () => {
       "plan",
     );
     expect(screen.getByText("Read only")).toBeVisible();
+  });
+
+  it("lists generated files and opens CSV evidence by its opaque identifier", async () => {
+    const user = userEvent.setup();
+    const fake = planningClient();
+    const generatedId = `generated-${"b".repeat(64)}` as WorkspacePlanningDocument["documentId"];
+    fake.listWorkspacePlanningDocuments.mockResolvedValue({
+      workspaceId,
+      documents: [
+        { documentId: "plan", fileName: "PLAN.md" },
+        {
+          documentId: generatedId,
+          fileName: "mh1-bmc-credential-check-failures-2026-08-31.csv",
+        },
+      ],
+    });
+    fake.readWorkspacePlanningDocument.mockImplementation(
+      async (_workspaceId, documentId) =>
+        documentId === generatedId
+          ? {
+              workspaceId,
+              documentId,
+              fileName: "mh1-bmc-credential-check-failures-2026-08-31.csv",
+              contents: "host,status\nnode-1,failed\n",
+              sha256: `sha256:${"b".repeat(64)}`,
+            }
+          : planningDocument(documentId, "# Plan\n"),
+    );
+
+    render(
+      <PlanningDocumentsPanel
+        client={fake.client}
+        workspaceId={workspaceId}
+        workspaceKey="PLATFORM-42"
+      />,
+    );
+
+    const generatedFile = await screen.findByRole("button", {
+      name: /mh1-bmc-credential-check-failures-2026-08-31\.csv/i,
+    });
+    expect(generatedFile).toHaveAttribute(
+      "aria-description",
+      "Generated evidence data",
+    );
+    await user.click(generatedFile);
+
+    const preview = await screen.findByRole("article", {
+      name: "mh1-bmc-credential-check-failures-2026-08-31.csv preview",
+    });
+    expect(preview).toHaveTextContent("host,status");
+    expect(preview).toHaveTextContent("node-1,failed");
+    expect(fake.readWorkspacePlanningDocument).toHaveBeenLastCalledWith(
+      workspaceId,
+      generatedId,
+    );
+  });
+
+  it("filters the compact file list and keeps old file tags for the workspace", async () => {
+    const user = userEvent.setup();
+    const fake = planningClient();
+    const view = render(
+      <PlanningDocumentsPanel
+        client={fake.client}
+        workspaceId={workspaceId}
+        workspaceKey="PLATFORM-42"
+      />,
+    );
+
+    const files = await screen.findByRole("navigation", {
+      name: "Planning files",
+    });
+    await user.type(screen.getByRole("searchbox", { name: "Search planning files" }), "kan");
+    expect(within(files).getByRole("button", { name: "KANBAN.md" })).toBeVisible();
+    expect(within(files).queryByRole("button", { name: "PLAN.md" })).toBeNull();
+
+    await user.clear(screen.getByRole("searchbox", { name: "Search planning files" }));
+    await user.click(within(files).getByRole("button", { name: "KANBAN.md" }));
+    await screen.findByRole("article", { name: "KANBAN.md preview" });
+    await user.click(screen.getByRole("button", { name: "Mark KANBAN.md as old" }));
+
+    expect(within(files).queryByRole("button", { name: "KANBAN.md" })).toBeNull();
+    expect(JSON.parse(localStorage.getItem("wts.planning-file-states.v1") ?? "{}"))
+      .toEqual({ [workspaceId]: ["kanban"] });
+
+    view.unmount();
+    render(
+      <PlanningDocumentsPanel
+        client={fake.client}
+        workspaceId={workspaceId}
+        workspaceKey="PLATFORM-42"
+      />,
+    );
+    const restoredFiles = await screen.findByRole("navigation", {
+      name: "Planning files",
+    });
+    expect(within(restoredFiles).queryByRole("button", { name: "KANBAN.md" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Old" }));
+    expect(within(restoredFiles).getByRole("button", { name: /KANBAN\.md/i })).toHaveTextContent("Old");
+  });
+
+  it("selects multiple visible files and marks them old as one action", async () => {
+    const user = userEvent.setup();
+    const fake = planningClient();
+    const onNotice = vi.fn();
+    render(
+      <PlanningDocumentsPanel
+        client={fake.client}
+        onNotice={onNotice}
+        workspaceId={workspaceId}
+        workspaceKey="PLATFORM-42"
+      />,
+    );
+
+    const files = await screen.findByRole("navigation", {
+      name: "Planning files",
+    });
+    await screen.findByRole("article", { name: "PLAN.md preview" });
+    await user.click(
+      within(files).getByRole("checkbox", { name: "Select PLAN.md" }),
+    );
+    await user.click(
+      within(files).getByRole("checkbox", { name: "Select KANBAN.md" }),
+    );
+
+    expect(
+      screen.getByRole("checkbox", {
+        name: "Select all visible planning files",
+      }),
+    ).toHaveAttribute("aria-checked", "mixed");
+    const actions = screen.getByRole("toolbar", {
+      name: "Planning file selection actions",
+    });
+    expect(actions).toHaveAttribute(
+      "data-ui",
+      "planning.file-selection-actions",
+    );
+    expect(
+      actions.compareDocumentPosition(files) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(within(actions).getByText("2 selected")).toBeVisible();
+    await user.click(within(actions).getByRole("button", { name: "Mark old" }));
+
+    expect(within(files).queryByRole("button", { name: "PLAN.md" })).toBeNull();
+    expect(within(files).queryByRole("button", { name: "KANBAN.md" })).toBeNull();
+    expect(
+      JSON.parse(localStorage.getItem("wts.planning-file-states.v1") ?? "{}"),
+    ).toEqual({ [workspaceId]: ["plan", "kanban"] });
+    expect(onNotice).toHaveBeenCalledWith("2 planning files marked old");
+
+    await user.click(screen.getByRole("button", { name: "Old" }));
+    await user.click(
+      screen.getByRole("checkbox", {
+        name: "Select all visible planning files",
+      }),
+    );
+    expect(
+      screen.getByRole("checkbox", {
+        name: "Select all visible planning files",
+      }),
+    ).toBeChecked();
+    await user.click(screen.getByRole("button", { name: "Mark current" }));
+    expect(onNotice).toHaveBeenLastCalledWith(
+      "2 planning files marked current",
+    );
+  });
+
+  it("shows both available actions for a mixed planning file selection", async () => {
+    const user = userEvent.setup();
+    const fake = planningClient();
+    localStorage.setItem(
+      "wts.planning-file-states.v1",
+      JSON.stringify({ [workspaceId]: ["kanban"] }),
+    );
+    render(
+      <PlanningDocumentsPanel
+        client={fake.client}
+        workspaceId={workspaceId}
+        workspaceKey="PLATFORM-42"
+      />,
+    );
+
+    await screen.findByRole("article", { name: "PLAN.md preview" });
+    await user.click(screen.getByRole("button", { name: "All" }));
+    await user.click(screen.getByRole("checkbox", { name: "Select PLAN.md" }));
+    await user.click(
+      screen.getByRole("checkbox", { name: "Select KANBAN.md" }),
+    );
+
+    const actions = screen.getByRole("toolbar", {
+      name: "Planning file selection actions",
+    });
+    expect(within(actions).getByRole("button", { name: "Mark old" })).toBeVisible();
+    expect(
+      within(actions).getByRole("button", { name: "Mark current" }),
+    ).toBeVisible();
   });
 
   it("uses arrow, Home, and End keys to select an exact file", async () => {
@@ -732,8 +924,11 @@ describe("PlanningDocumentsPanel", () => {
     expect(preview).not.toHaveTextContent("onerror");
   });
 
-  it("renders a Mermaid fence as a strict blob image", async () => {
+  it("renders a Mermaid fence as sanitized inline SVG", async () => {
     const fake = planningClient();
+    mermaidMocks.render.mockResolvedValueOnce({
+      svg: '<svg xmlns="http://www.w3.org/2000/svg" onload="alert(1)"><script>alert(1)</script><a href="https://example.com"><text>Rendered</text></a></svg>',
+    });
     fake.readWorkspacePlanningDocument.mockResolvedValue(
       planningDocument(
         "plan",
@@ -750,7 +945,12 @@ describe("PlanningDocumentsPanel", () => {
     );
 
     const image = await screen.findByRole("img", { name: "Mermaid diagram" });
-    expect(image).toHaveAttribute("src", "blob:planning-diagram");
+    const svg = image.querySelector("svg");
+    expect(svg).not.toBeNull();
+    expect(svg).not.toHaveAttribute("onload");
+    expect(svg?.querySelector("script")).toBeNull();
+    expect(svg?.querySelector("a")).not.toHaveAttribute("href");
+    expect(image).toHaveTextContent("Rendered");
     expect(mermaidMocks.initialize).toHaveBeenCalledWith(
       expect.objectContaining({
         securityLevel: "strict",
@@ -761,10 +961,173 @@ describe("PlanningDocumentsPanel", () => {
       expect.stringMatching(/^planning-mermaid-/),
       "flowchart LR\n  Start --> Done",
     );
-    expect(URL.createObjectURL).toHaveBeenCalledWith(expect.any(Blob));
-
     view.unmount();
-    expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:planning-diagram");
+  });
+
+  it("keeps a rendered diagram and its zoom during planning screen updates", async () => {
+    const user = userEvent.setup();
+    const fake = planningClient();
+    fake.readWorkspacePlanningDocument.mockResolvedValue(
+      planningDocument(
+        "plan",
+        "# Flow\n\n```mermaid\nflowchart LR\n  Start --> Done\n```",
+      ),
+    );
+    const panel = (
+      <PlanningDocumentsPanel
+        client={fake.client}
+        workspaceId={workspaceId}
+        workspaceKey="PLATFORM-42"
+      />
+    );
+    const view = render(panel);
+
+    const image = await screen.findByRole("img", { name: "Mermaid diagram" });
+    const imageMarkup = image.innerHTML;
+    await user.click(screen.getByRole("button", { name: "Zoom in" }));
+    await user.click(screen.getByRole("button", { name: "Zoom in" }));
+    expect(screen.getByLabelText("Diagram zoom")).toHaveTextContent("156%");
+    expect(image.style.transform).toContain("scale(1.5625)");
+
+    view.rerender(panel);
+    await user.type(
+      screen.getByRole("searchbox", { name: "Search planning files" }),
+      "plan",
+    );
+
+    await waitFor(() => expect(mermaidMocks.render).toHaveBeenCalledOnce());
+    expect(fake.listWorkspacePlanningDocuments).toHaveBeenCalledOnce();
+    expect(fake.readWorkspacePlanningDocument).toHaveBeenCalledOnce();
+    expect(screen.getByLabelText("Diagram zoom")).toHaveTextContent("156%");
+    expect(image.style.transform).toContain("scale(1.5625)");
+    expect(image.innerHTML).toBe(imageMarkup);
+
+    await user.click(
+      screen.getByRole("button", { name: "Reset diagram zoom" }),
+    );
+    expect(screen.getByLabelText("Diagram zoom")).toHaveTextContent("100%");
+    expect(image.style.transform).toBe("translate(0px, 0px) scale(1)");
+  });
+
+  it("zooms a Mermaid diagram with a trackpad pinch gesture", async () => {
+    const fake = planningClient();
+    fake.readWorkspacePlanningDocument.mockResolvedValue(
+      planningDocument(
+        "plan",
+        "# Flow\n\n```mermaid\nflowchart LR\n  Start --> Done\n```",
+      ),
+    );
+
+    render(
+      <PlanningDocumentsPanel
+        client={fake.client}
+        workspaceId={workspaceId}
+        workspaceKey="PLATFORM-42"
+      />,
+    );
+
+    const image = await screen.findByRole("img", { name: "Mermaid diagram" });
+    const canvas = screen.getByRole("region", {
+      name: "Mermaid diagram canvas",
+    });
+
+    fireEvent.wheel(canvas, { ctrlKey: false, deltaX: 5_000, deltaY: -3_000 });
+    expect(screen.getByLabelText("Diagram zoom")).toHaveTextContent("100%");
+    expect(image.style.transform).toBe(
+      "translate(-5000px, 3000px) scale(1)",
+    );
+
+    fireEvent.wheel(canvas, { ctrlKey: true, deltaY: -25 });
+    const wheelZoom = Number.parseInt(
+      screen.getByLabelText("Diagram zoom").textContent ?? "0",
+      10,
+    );
+    expect(wheelZoom).toBeGreaterThan(100);
+    expect(image.style.transform).toMatch(/scale\(1\.[0-9]+\)$/);
+
+    fireEvent(canvas, new Event("gesturestart", { cancelable: true }));
+    const gestureChange = new Event("gesturechange", { cancelable: true });
+    Object.defineProperty(gestureChange, "scale", { value: 2 });
+    fireEvent(canvas, gestureChange);
+    const gestureZoom = Number.parseInt(
+      screen.getByLabelText("Diagram zoom").textContent ?? "0",
+      10,
+    );
+    expect(gestureZoom).toBeGreaterThan(wheelZoom * 1.9);
+  });
+
+  it("renders a Mermaid architecture diagram with encoded indentation", async () => {
+    const fake = planningClient();
+    mermaidMocks.render
+      .mockRejectedValueOnce(new Error("Invalid encoded architecture diagram"))
+      .mockResolvedValueOnce({
+        svg: '<svg xmlns="http://www.w3.org/2000/svg"><text>Rendered</text></svg>',
+      });
+    const encodedDiagram = [
+      "flowchart LR",
+      '   Operator["Operator or API client"] -->|"direct FixRoutine"| Policy',
+      "",
+      '   subgraph SenzuBox["Senzu — explicit opt-in"]',
+      '       Policy{"firmwareAction"}',
+      '       Existing["Existing audit or upgradeIfSafe flow"]',
+      '       Boot["bootInstaller coordinator"]',
+      '       Policy -->|"audit / upgradeIfSafe"| Existing',
+      '       Policy -->|"bootInstaller"| Boot',
+      "   end",
+      "",
+      '   Boot -->|"1. Verify live BMC identity"| Jellyfish',
+      '   Boot -->|"2. POST /api/v1/installer/boot"| Arm',
+      '   Boot -->|"3. One-time PXE boot"| Jellyfish',
+      "",
+      '   subgraph NimbusBox["Nimbus API — default off"]',
+      '       Gate{"enableBootProfiles"}',
+      '       Arm["Arm boot-profile endpoint"]',
+      '       Intent[("BootProfileIntent\\nauxiliary table")]',
+      '       Chain["Existing /api/v1/chain endpoint"]',
+      '       Legacy[("GeneratedInstallerData\\nlegacy table")]',
+      "",
+      '       Gate -->|"true"| Arm',
+      "       Arm --> Intent",
+      '       Intent -->|"pending override"| Chain',
+      '       Legacy -->|"unchanged fallback"| Chain',
+      "   end",
+      "",
+      '   Jellyfish["Jellyfish / Redfish"] --> Machine["Spare server"]',
+      '   Machine -->|"PXE chain request"| Chain',
+      '   Chain -->|"one request only"| SmartBoot["Vendor Smart Boot iPXE"]',
+      '   Chain -->|"no pending auxiliary intent"| LegacyBoot["Existing OS installer or PIOUS"]',
+    ].join("\n");
+    const encodedIndentation = encodedDiagram.replace(/^ +/gm, (spaces) =>
+      "&#x20;".repeat(spaces.length),
+    );
+    fake.readWorkspacePlanningDocument.mockResolvedValue(
+      planningDocument(
+        "plan",
+        `## Architecture and isolation boundary\n\n\`\`\`mermaid\n${encodedIndentation}\n\`\`\``,
+      ),
+    );
+
+    render(
+      <PlanningDocumentsPanel
+        client={fake.client}
+        workspaceId={workspaceId}
+        workspaceKey="PLATFORM-42"
+      />,
+    );
+
+    expect(
+      await screen.findByRole("img", { name: "Mermaid diagram" }),
+    ).toBeVisible();
+    expect(mermaidMocks.render).toHaveBeenNthCalledWith(
+      1,
+      expect.stringMatching(/^planning-mermaid-/),
+      encodedDiagram,
+    );
+    expect(mermaidMocks.render).toHaveBeenNthCalledWith(
+      2,
+      expect.stringMatching(/-compatible$/),
+      encodedDiagram.replace(/\|"([^"\r\n]*)"\|/g, "|$1|"),
+    );
   });
 
   it("renders a standalone Mermaid planning file", async () => {
@@ -788,6 +1151,38 @@ describe("PlanningDocumentsPanel", () => {
     expect(mermaidMocks.render).toHaveBeenCalledWith(
       expect.stringMatching(/^planning-mermaid-/),
       "kanban\n  todo[Todo]\n  done[Done]",
+    );
+  });
+
+  it("retries quoted flowchart edge labels with compatible Mermaid syntax", async () => {
+    const fake = planningClient();
+    mermaidMocks.render
+      .mockRejectedValueOnce(new Error("Invalid edge label"))
+      .mockResolvedValueOnce({
+        svg: '<svg xmlns="http://www.w3.org/2000/svg"><text>Rendered</text></svg>',
+      });
+    fake.readWorkspacePlanningDocument.mockResolvedValue(
+      planningDocument(
+        "plan",
+        '```mermaid\nflowchart LR\n  Operator -->|"direct FixRoutine"| Policy\n```',
+      ),
+    );
+
+    render(
+      <PlanningDocumentsPanel
+        client={fake.client}
+        workspaceId={workspaceId}
+        workspaceKey="PLATFORM-42"
+      />,
+    );
+
+    expect(
+      await screen.findByRole("img", { name: "Mermaid diagram" }),
+    ).toBeVisible();
+    expect(mermaidMocks.render).toHaveBeenNthCalledWith(
+      2,
+      expect.stringMatching(/-compatible$/),
+      "flowchart LR\n  Operator -->|direct FixRoutine| Policy",
     );
   });
 

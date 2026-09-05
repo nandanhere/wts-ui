@@ -16,20 +16,31 @@
 
 .label {
   position: fixed;
+  display: flex;
   max-width: min(320px, calc(100vw - 16px));
-  min-height: 22px;
-  padding: 3px 7px;
+  min-height: 40px;
+  justify-content: center;
+  gap: 1px;
+  padding: 5px 8px;
   overflow: hidden;
   border: 1px solid #9f3512;
   border-radius: 4px;
   color: #fff;
   background: #bc421a;
   box-shadow: 0 2px 8px rgb(54 22 12 / 28%);
-  font: 600 11px/1.35 var(--wts-font-mono);
+  flex-direction: column;
+  font: 600 11px/1.25 var(--wts-font-sans);
   letter-spacing: 0;
   text-overflow: ellipsis;
   white-space: nowrap;
   pointer-events: none;
+}
+
+.label code {
+  overflow: hidden;
+  color: rgb(255 255 255 / 72%);
+  font: 500 9px/1.2 var(--wts-font-mono);
+  text-overflow: ellipsis;
 }
 
 .exit:focus-visible {

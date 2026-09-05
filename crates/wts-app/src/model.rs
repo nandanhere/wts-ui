@@ -1,4 +1,4 @@
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as _};
 use uuid::Uuid;
 use wts_core::workspace::{
     RuntimePlanSelection, WorkspacePlanningSelection, WorkspaceRepositoryRequest,
@@ -7,18 +7,67 @@ use wts_core::workspace::{
 pub const MATERIALIZATION_MANIFEST_SCHEMA_VERSION: u32 = 1;
 pub const MAX_PLANNING_DOCUMENT_BYTES: usize = 256 * 1024;
 
-/// A fixed document in a workspace planning home.
+/// A document in a workspace planning home.
 ///
-/// Callers select a semantic identifier. They cannot provide a filesystem
-/// path or file name.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+/// Fixed documents use semantic identifiers. Discovered files use an opaque
+/// digest identifier. Callers cannot provide a filesystem path or file name.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum WorkspacePlanningDocumentId {
     Readme,
     Plan,
     Findings,
     Kanban,
     ProgramBacklog,
+    Generated(String),
+}
+
+impl WorkspacePlanningDocumentId {
+    pub fn from_wire(value: &str) -> Option<Self> {
+        match value {
+            "readme" => Some(Self::Readme),
+            "plan" => Some(Self::Plan),
+            "findings" => Some(Self::Findings),
+            "kanban" => Some(Self::Kanban),
+            "programBacklog" => Some(Self::ProgramBacklog),
+            _ if value.strip_prefix("generated-").is_some_and(|digest| {
+                digest.len() == 64 && digest.bytes().all(|byte| byte.is_ascii_hexdigit())
+            }) =>
+            {
+                Some(Self::Generated(value.to_ascii_lowercase()))
+            }
+            _ => None,
+        }
+    }
+
+    pub fn wire_id(&self) -> &str {
+        match self {
+            Self::Readme => "readme",
+            Self::Plan => "plan",
+            Self::Findings => "findings",
+            Self::Kanban => "kanban",
+            Self::ProgramBacklog => "programBacklog",
+            Self::Generated(value) => value,
+        }
+    }
+}
+
+impl Serialize for WorkspacePlanningDocumentId {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(self.wire_id())
+    }
+}
+
+impl<'de> Deserialize<'de> for WorkspacePlanningDocumentId {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        Self::from_wire(&value).ok_or_else(|| D::Error::custom("invalid planning document ID"))
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -281,6 +330,25 @@ pub struct OpenWorkspaceGitlabMergeRequestResult {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PrepareWorkspaceChangeRequest {
     pub repository_id: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PublishWorkspaceChangeRequestBranch {
+    pub repository_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch_name: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkspaceBranchPublicationResult {
+    pub workspace_id: Uuid,
+    pub repository_id: String,
+    pub repository_label: String,
+    pub remote_name: String,
+    pub branch_name: String,
+    pub head_commit_oid: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -769,6 +837,43 @@ pub struct WorkspaceRepositorySyncResult {
     pub previous_base_commit_oid: String,
     pub base_commit_oid: String,
     pub updated: bool,
+    pub graph_refreshed: bool,
+    pub graph_detail: String,
+    pub materialization: WorkspaceMaterialization,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkspaceRepositoryAdditionPreflight {
+    pub workspace_id: Uuid,
+    pub repository_id: String,
+    pub repository_label: String,
+    pub base_ref: String,
+    pub resolved_base_ref: String,
+    pub base_commit_oid: String,
+    pub target_display_path: String,
+    pub branch_name: String,
+    pub effect_digest: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkspaceRepositoryAdditionResult {
+    pub workspace_id: Uuid,
+    pub repository_id: String,
+    pub repository_label: String,
+    pub replayed: bool,
+    pub graph_refreshed: bool,
+    pub graph_detail: String,
+    pub materialization: WorkspaceMaterialization,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkspaceRepositoryRemovalResult {
+    pub workspace_id: Uuid,
+    pub repository_id: String,
+    pub repository_label: String,
     pub graph_refreshed: bool,
     pub graph_detail: String,
     pub materialization: WorkspaceMaterialization,

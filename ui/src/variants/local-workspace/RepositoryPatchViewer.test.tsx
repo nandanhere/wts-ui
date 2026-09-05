@@ -698,6 +698,9 @@ index 1111111..2222222 100644
       <RepositoryPatchViewer patch={multiFilePatch} theme="light" />,
     );
     const reviewScroller = screen.getByTestId("patch-review-scroll");
+    expect(reviewScroller.closest('[data-ui="changes.code"]')).toHaveAttribute(
+      "data-history-swipe-block",
+    );
     const firstFile = summarizeRepositoryPatch(multiFilePatch).files[0]!;
     const firstFileBlock = container.querySelector(
       `[id="file-block-${firstFile.id}"]`,

@@ -101,6 +101,7 @@ pub struct GitlabMergeRequest {
     pub id: String,
     pub repository_id: String,
     pub project_path: String,
+    pub web_url: String,
     pub iid: u64,
     pub title: String,
     pub author_username: String,
@@ -1359,6 +1360,7 @@ fn validated_merge_request(
         id: node.id.to_string(),
         repository_id: repository.repository_id.clone(),
         project_path: repository.project_path.clone(),
+        web_url: node.web_url,
         iid: node.iid,
         title: bounded_text(node.title, 256)?,
         author_username: validated_username(&node.author.username)?.to_owned(),
@@ -2574,7 +2576,10 @@ mod tests {
             Some(repository().head_commit_oid())
         );
         let json = serde_json::to_value(&result).unwrap();
-        assert!(json["mergeRequests"][0].get("webUrl").is_none());
+        assert_eq!(
+            json["mergeRequests"][0]["webUrl"],
+            "https://gitlab.example.com/acme/api/-/merge_requests/17"
+        );
     }
 
     #[test]

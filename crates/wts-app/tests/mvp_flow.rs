@@ -15,22 +15,22 @@ use wts_app::{
     CreateWorkspaceReviewThreadRequest, ExternalLauncher, GitlabMergeRequestTarget, JourneyAction,
     JourneyPlan, JourneyStep, LaunchFailure, LocalWtsError, LocalWtsService,
     MAX_PLANNING_DOCUMENT_BYTES, OpenWorkspaceChangeRequestDraft, PreflightBlockerCode,
-    PrepareWorkspaceChangeRequest, ProcessWorkspaceAdapter, RemovalBlockerCode,
-    RepositoryBaseTarget, RepositoryForge, ResolveWorkspaceReviewThreadRequest, ReviewAnchorState,
-    ReviewAuthor, ReviewCodeSide, ReviewTarget, ReviewThreadState, RuntimeAnalysisRequest,
-    TEST_RUN_SCHEMA_VERSION, TerminalProvider, TestArtifactStore, TestRunResult, TestRunState,
-    TestStepResult, TestStepState, UpdateWorkspacePlanningDocumentRequest, VerificationCheckStatus,
-    VerificationStatus, WORKSPACE_EVIDENCE_SCHEMA_VERSION, WorkspaceGraphEvidenceStatus,
-    WorkspacePlanningDocumentId, WorkspaceRemovalKind, WorkspaceWorkItemProvider,
-    WorkspaceWorkItemRole,
+    PrepareWorkspaceChangeRequest, ProcessWorkspaceAdapter, PublishWorkspaceChangeRequestBranch,
+    RemovalBlockerCode, RepositoryBaseTarget, RepositoryForge, ResolveWorkspaceReviewThreadRequest,
+    ReviewAnchorState, ReviewAuthor, ReviewCodeSide, ReviewTarget, ReviewThreadState,
+    RuntimeAnalysisRequest, TEST_RUN_SCHEMA_VERSION, TerminalProvider, TestArtifactStore,
+    TestRunResult, TestRunState, TestStepResult, TestStepState,
+    UpdateWorkspacePlanningDocumentRequest, VerificationCheckStatus, VerificationStatus,
+    WORKSPACE_EVIDENCE_SCHEMA_VERSION, WorkspaceGraphEvidenceStatus, WorkspacePlanningDocumentId,
+    WorkspaceRemovalKind, WorkspaceWorkItemProvider, WorkspaceWorkItemRole,
 };
 use wts_core::workspace::{
-    CreateWorkspaceRequest, FollowWorkspaceAgentRequest, PlaceWorkspaceOnBoardRequest,
-    RenameWorkspaceRequest, RuntimePlanSelection, RuntimePortPolicy, RuntimePortSelection,
-    RuntimeServiceSelection, TransitionWorkspaceWorkflowRequest, WorkspaceIntent,
-    WorkspaceMaterializationState, WorkspacePlanningFolder, WorkspacePlanningFormat,
-    WorkspacePlanningSelection, WorkspaceProvider, WorkspaceRepositoryRequest,
-    WorkspaceWorkflowState,
+    AddWorkspaceRepositoryRequest, CreateWorkspaceRequest, FollowWorkspaceAgentRequest,
+    PlaceWorkspaceOnBoardRequest, RenameWorkspaceRequest, RuntimePlanSelection, RuntimePortPolicy,
+    RuntimePortSelection, RuntimeServiceSelection, TransitionWorkspaceWorkflowRequest,
+    WorkspaceIntent, WorkspaceMaterializationState, WorkspacePlanningFolder,
+    WorkspacePlanningFormat, WorkspacePlanningSelection, WorkspaceProvider,
+    WorkspaceRepositoryRequest, WorkspaceWorkflowState,
 };
 use wts_store::{WorkspaceBoardPlacementMode, WorkspaceStoreError};
 
@@ -1681,6 +1681,16 @@ fn prepares_and_opens_a_verified_gitlab_merge_request_draft() {
         "# checkout-api\n\nValidate admission.\n",
     )
     .expect("change worktree");
+    assert!(matches!(
+        fixture.service.publish_workspace_change_request_branch(
+            workspace_id,
+            PublishWorkspaceChangeRequestBranch {
+                repository_id: worktree.repository_id.clone(),
+                branch_name: None,
+            },
+        ),
+        Err(LocalWtsError::ChangeRequestWorktreeDirty)
+    ));
     git(Some(&path), ["add", "README.md"]);
     git(
         Some(&path),
@@ -1818,6 +1828,86 @@ fn prepares_and_opens_a_verified_gitlab_merge_request_draft() {
             .contains("merge_request%5Bsource_branch%5D=")
     );
     assert!(targets[0].web_url().contains("PLATFORM-42"));
+}
+
+#[test]
+fn publishes_the_managed_branch_and_sets_its_upstream() {
+    let fixture = Fixture::new();
+    configure_local_origin(&fixture, &fixture.api);
+    let workspace_id = fixture.create_plan(&["checkout-api"]);
+    let preflight = fixture
+        .service
+        .preflight_workspace(workspace_id)
+        .expect("preflight");
+    let materialized = fixture
+        .service
+        .materialize_workspace(workspace_id, &preflight.effect_digest)
+        .expect("materialize")
+        .materialization;
+    let worktree = materialized
+        .worktrees
+        .iter()
+        .find(|worktree| worktree.label == "checkout-api")
+        .expect("API worktree");
+    let path = PathBuf::from(&worktree.target_display_path);
+    fs::write(
+        path.join("README.md"),
+        "# checkout-api\n\nPublished work.\n",
+    )
+    .expect("change worktree");
+    git(Some(&path), ["add", "README.md"]);
+    git(
+        Some(&path),
+        ["commit", "-m", "feat: publish managed branch"],
+    );
+    assert!(matches!(
+        fixture.service.prepare_workspace_change_request(
+            workspace_id,
+            PrepareWorkspaceChangeRequest {
+                repository_id: worktree.repository_id.clone(),
+            },
+        ),
+        Err(LocalWtsError::ChangeRequestBranchNotPublished)
+    ));
+
+    let published = fixture
+        .service
+        .publish_workspace_change_request_branch(
+            workspace_id,
+            PublishWorkspaceChangeRequestBranch {
+                repository_id: worktree.repository_id.clone(),
+                branch_name: Some("feature/custom-published-name".to_owned()),
+            },
+        )
+        .expect("publish branch");
+
+    assert_eq!(published.repository_id, worktree.repository_id);
+    assert_eq!(published.remote_name, "origin");
+    assert_eq!(published.branch_name, "feature/custom-published-name");
+    assert_eq!(
+        git_output(
+            Some(&path),
+            [
+                "rev-parse",
+                "--abbrev-ref",
+                "--symbolic-full-name",
+                "@{upstream}"
+            ],
+        )
+        .trim(),
+        "origin/feature/custom-published-name"
+    );
+    assert_eq!(
+        git_output(
+            Some(&path),
+            [
+                "rev-parse",
+                &format!("refs/remotes/origin/{}", published.branch_name)
+            ],
+        )
+        .trim(),
+        published.head_commit_oid
+    );
 }
 
 #[test]
@@ -3100,6 +3190,111 @@ fn reloads_and_replays_a_materialized_workspace_after_service_restart() {
 }
 
 #[test]
+fn adds_a_repository_to_the_current_workspace_without_changing_existing_work() {
+    let fixture = Fixture::new();
+    let workspace_id = fixture.create_plan(&["checkout-api"]);
+    let preflight = fixture
+        .service
+        .preflight_workspace(workspace_id)
+        .expect("preflight workspace");
+    let initial = fixture
+        .service
+        .materialize_workspace(workspace_id, &preflight.effect_digest)
+        .expect("materialize workspace")
+        .materialization;
+    let existing_worktree = PathBuf::from(&initial.worktrees[0].target_display_path);
+    let local_work = existing_worktree.join("local-work.txt");
+    fs::write(&local_work, "keep this local change\n").expect("write local work");
+    let catalog = fixture
+        .service
+        .repository_catalog()
+        .expect("repository catalog");
+    let repository = catalog
+        .repositories
+        .iter()
+        .find(|repository| repository.label == "checkout-web")
+        .expect("checkout-web repository");
+
+    let addition_request = AddWorkspaceRepositoryRequest {
+        repository_id: repository.id.clone(),
+        base_ref: repository.default_branch.name.clone(),
+    };
+    let addition_preflight = fixture
+        .service
+        .preflight_workspace_repository_addition(workspace_id, addition_request.clone())
+        .expect("preflight repository addition");
+    let added = fixture
+        .service
+        .add_workspace_repository(
+            workspace_id,
+            addition_request,
+            &addition_preflight.effect_digest,
+        )
+        .expect("add repository");
+
+    assert_eq!(added.workspace_id, workspace_id);
+    assert_eq!(added.materialization.workspace_id, workspace_id);
+    assert_eq!(
+        added.materialization.workspace_display_path,
+        initial.workspace_display_path
+    );
+    assert_eq!(added.materialization.worktrees.len(), 2);
+    assert_eq!(
+        fs::read_to_string(&local_work).expect("read preserved local work"),
+        "keep this local change\n"
+    );
+    assert_eq!(
+        added.materialization.worktrees[0].target_display_path,
+        initial.worktrees[0].target_display_path
+    );
+    let workspace = fixture
+        .service
+        .get_workspace(workspace_id)
+        .expect("read workspace")
+        .expect("workspace exists");
+    assert_eq!(workspace.repositories.len(), 2);
+    let code_workspace = fs::read_to_string(&added.materialization.code_workspace_display_path)
+        .expect("read VS Code workspace");
+    assert!(code_workspace.contains("checkout-api"), "{code_workspace}");
+    assert!(code_workspace.contains("checkout-web"), "{code_workspace}");
+
+    let added_worktree = added
+        .materialization
+        .worktrees
+        .iter()
+        .find(|worktree| worktree.repository_id == repository.id)
+        .expect("added worktree");
+    let added_worktree_path = PathBuf::from(&added_worktree.target_display_path);
+    let removed = fixture
+        .service
+        .remove_workspace_repository(workspace_id, &repository.id)
+        .expect("remove repository from current workspace");
+
+    assert_eq!(removed.workspace_id, workspace_id);
+    assert_eq!(removed.repository_id, repository.id);
+    assert_eq!(removed.materialization.worktrees.len(), 1);
+    assert_eq!(
+        fs::read_to_string(&local_work).expect("read retained local work"),
+        "keep this local change\n"
+    );
+    assert!(!added_worktree_path.exists());
+    assert!(
+        fixture.web.exists(),
+        "the stored checkout must stay on disk"
+    );
+    let workspace = fixture
+        .service
+        .get_workspace(workspace_id)
+        .expect("read workspace after removal")
+        .expect("workspace exists after removal");
+    assert_eq!(workspace.repositories.len(), 1);
+    let code_workspace = fs::read_to_string(&removed.materialization.code_workspace_display_path)
+        .expect("read VS Code workspace after removal");
+    assert!(code_workspace.contains("checkout-api"), "{code_workspace}");
+    assert!(!code_workspace.contains("checkout-web"), "{code_workspace}");
+}
+
+#[test]
 fn records_and_validates_an_existing_workspace_graph() {
     let fixture = Fixture::new();
     let workspace_id = fixture.create_plan(&["checkout-api"]);
@@ -4239,7 +4434,7 @@ fn creates_an_editable_planning_home_and_requires_manual_preservation_or_deletio
 }
 
 #[test]
-fn planning_document_api_lists_fixed_files_and_writes_with_compare_and_swap() {
+fn planning_document_api_lists_generated_files_and_writes_with_compare_and_swap() {
     let fixture = Fixture::new();
     let planning = WorkspacePlanningSelection {
         folder: WorkspacePlanningFolder::PlansAndKanban,
@@ -4274,6 +4469,19 @@ fn planning_document_api_lists_fixed_files_and_writes_with_compare_and_swap() {
         .service
         .materialize_workspace(workspace_id, &preflight.effect_digest)
         .expect("materialize planning workspace");
+    let planning_home = PathBuf::from(&materialized.materialization.workspace_display_path)
+        .join("plans-and-kanban");
+    fs::write(
+        planning_home.join("PPEC-MH1-CREDENTIAL-CHECK-2026-08-31.md"),
+        "# Credential check\n\nGenerated evidence.\n",
+    )
+    .expect("write generated Markdown fixture");
+    fs::write(
+        planning_home.join("mh1-credential-check-failures-2026-08-31.csv"),
+        "host,status\nnode-1,failed\n",
+    )
+    .expect("write generated CSV fixture");
+    fs::write(planning_home.join("ignored.json"), "{}\n").expect("write unsupported fixture");
 
     let list = fixture
         .service
@@ -4282,7 +4490,7 @@ fn planning_document_api_lists_fixed_files_and_writes_with_compare_and_swap() {
     assert_eq!(
         list.documents
             .iter()
-            .map(|document| (document.document_id, document.file_name.as_str()))
+            .map(|document| (document.document_id.clone(), document.file_name.as_str()))
             .collect::<Vec<_>>(),
         vec![
             (WorkspacePlanningDocumentId::Readme, "README.md"),
@@ -4293,8 +4501,36 @@ fn planning_document_api_lists_fixed_files_and_writes_with_compare_and_swap() {
                 WorkspacePlanningDocumentId::ProgramBacklog,
                 "PROGRAM-BACKLOG.md",
             ),
+            (
+                list.documents[5].document_id.clone(),
+                "mh1-credential-check-failures-2026-08-31.csv",
+            ),
+            (
+                list.documents[6].document_id.clone(),
+                "PPEC-MH1-CREDENTIAL-CHECK-2026-08-31.md",
+            ),
         ]
     );
+    assert!(matches!(
+        &list.documents[5].document_id,
+        WorkspacePlanningDocumentId::Generated(value)
+            if value.starts_with("generated-") && value.len() == 74
+    ));
+    assert!(
+        !list
+            .documents
+            .iter()
+            .any(|document| document.file_name == "ignored.json")
+    );
+    let generated = fixture
+        .service
+        .read_workspace_planning_document(workspace_id, list.documents[6].document_id.clone())
+        .expect("read generated planning file");
+    assert_eq!(
+        generated.file_name,
+        "PPEC-MH1-CREDENTIAL-CHECK-2026-08-31.md"
+    );
+    assert!(generated.contents.contains("Generated evidence."));
 
     let original = fixture
         .service
@@ -4334,8 +4570,6 @@ fn planning_document_api_lists_fixed_files_and_writes_with_compare_and_swap() {
         updated.contents
     );
 
-    let planning_home =
-        PathBuf::from(materialized.materialization.workspace_display_path).join("plans-and-kanban");
     fs::write(planning_home.join("KANBAN.md"), [0xff, 0xfe]).expect("write invalid UTF-8 fixture");
     assert!(matches!(
         fixture
@@ -4408,12 +4642,30 @@ fn planning_document_api_rejects_symbolic_links_and_path_like_identifiers() {
     fs::write(&outside, "outside\n").expect("outside file");
     fs::remove_file(planning_home.join("FINDINGS.md")).expect("remove fixed document");
     symlink(&outside, planning_home.join("FINDINGS.md")).expect("symlink fixture");
+    symlink(&outside, planning_home.join("generated-evidence.md"))
+        .expect("generated symlink fixture");
 
     assert!(matches!(
         fixture
             .service
             .read_workspace_planning_document(workspace_id, WorkspacePlanningDocumentId::Findings,),
         Err(LocalWtsError::InvalidPlanningDocument)
+    ));
+    assert!(
+        !fixture
+            .service
+            .list_workspace_planning_documents(workspace_id)
+            .expect("list planning documents")
+            .documents
+            .iter()
+            .any(|document| document.file_name == "generated-evidence.md")
+    );
+    assert!(matches!(
+        fixture.service.read_workspace_planning_document(
+            workspace_id,
+            WorkspacePlanningDocumentId::Generated(format!("generated-{}", "a".repeat(64))),
+        ),
+        Err(LocalWtsError::PlanningDocumentUnavailable)
     ));
 }
 

@@ -1,5 +1,6 @@
 import {
   isValidElement,
+  memo,
   type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
   useCallback,
@@ -9,11 +10,22 @@ import {
   useRef,
   useState,
 } from "react";
+import { select } from "d3-selection";
+import {
+  zoom as createZoom,
+  zoomIdentity,
+  zoomTransform,
+  type ZoomBehavior,
+} from "d3-zoom";
 import { Button } from "react-aria-components";
-import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
+import ReactMarkdown, {
+  defaultUrlTransform,
+  type Components,
+} from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { useTheme } from "../../theme";
 import {
+  type FixedWorkspacePlanningDocumentId,
   type ReviewAnchorState,
   type WorkspaceClient,
   WorkspaceClientError,
@@ -25,7 +37,7 @@ import {
 import { Glyph } from "./Glyph";
 import styles from "./PlanningDocumentsPanel.module.css";
 
-const DOCUMENT_ORDER: WorkspacePlanningDocumentId[] = [
+const DOCUMENT_ORDER: FixedWorkspacePlanningDocumentId[] = [
   "plan",
   "kanban",
   "findings",
@@ -33,7 +45,7 @@ const DOCUMENT_ORDER: WorkspacePlanningDocumentId[] = [
   "readme",
 ];
 
-const DOCUMENT_LABELS: Record<WorkspacePlanningDocumentId, string> = {
+const DOCUMENT_LABELS: Record<FixedWorkspacePlanningDocumentId, string> = {
   findings: "FINDINGS.md",
   kanban: "KANBAN.md",
   plan: "PLAN.md",
@@ -41,7 +53,7 @@ const DOCUMENT_LABELS: Record<WorkspacePlanningDocumentId, string> = {
   readme: "README.md",
 };
 
-const DOCUMENT_DESCRIPTIONS: Record<WorkspacePlanningDocumentId, string> = {
+const DOCUMENT_DESCRIPTIONS: Record<FixedWorkspacePlanningDocumentId, string> = {
   findings: "Agent findings and evidence",
   kanban: "Current work and next tasks",
   plan: "Scope, decisions, and approach",
@@ -53,8 +65,184 @@ type RequestState = "loading" | "ready" | "error";
 type SaveState = "idle" | "saving" | "error" | "conflict";
 type FeedbackCreateState = "idle" | "saving" | "error";
 type DocumentView = "preview" | "source";
+type DocumentFilter = "current" | "old" | "all";
 
 const MERMAID_MAX_CHARACTERS = 50_000;
+const MERMAID_MIN_ZOOM = 0.1;
+const MERMAID_MAX_ZOOM = 8;
+const MERMAID_ZOOM_FACTOR = 1.25;
+const PLANNING_FILE_STATES_STORAGE_KEY = "wts.planning-file-states.v1";
+
+function clampMermaidZoom(zoom: number) {
+  const clamped = Math.min(
+    MERMAID_MAX_ZOOM,
+    Math.max(MERMAID_MIN_ZOOM, zoom),
+  );
+  return Math.round(clamped * 1_000) / 1_000;
+}
+
+interface SanitizedMermaidSvg {
+  height: number;
+  markup: string;
+  width: number;
+}
+
+function oldDocumentIdsForWorkspace(workspaceId: string) {
+  try {
+    const value = JSON.parse(
+      globalThis.localStorage?.getItem(PLANNING_FILE_STATES_STORAGE_KEY) ?? "{}",
+    ) as unknown;
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      return new Set<WorkspacePlanningDocumentId>();
+    }
+    const documentIds = (value as Record<string, unknown>)[workspaceId];
+    return new Set(
+      Array.isArray(documentIds)
+        ? documentIds.filter(
+            (documentId): documentId is WorkspacePlanningDocumentId =>
+              typeof documentId === "string",
+          )
+        : [],
+    );
+  } catch {
+    return new Set<WorkspacePlanningDocumentId>();
+  }
+}
+
+function saveOldDocumentIds(
+  workspaceId: string,
+  documentIds: ReadonlySet<WorkspacePlanningDocumentId>,
+) {
+  try {
+    const stored = JSON.parse(
+      globalThis.localStorage?.getItem(PLANNING_FILE_STATES_STORAGE_KEY) ?? "{}",
+    ) as unknown;
+    const next =
+      stored && typeof stored === "object" && !Array.isArray(stored)
+        ? { ...stored }
+        : {};
+    (next as Record<string, unknown>)[workspaceId] = [...documentIds];
+    globalThis.localStorage?.setItem(
+      PLANNING_FILE_STATES_STORAGE_KEY,
+      JSON.stringify(next),
+    );
+  } catch {
+    // The list still works when the webview does not permit local storage.
+  }
+}
+
+interface SelectionCheckboxProps {
+  checked: boolean | "mixed";
+  disabled?: boolean;
+  label: string;
+  onChange: (checked: boolean) => void;
+}
+
+function SelectionCheckbox({
+  checked,
+  disabled = false,
+  label,
+  onChange,
+}: SelectionCheckboxProps) {
+  return (
+    <input
+      aria-checked={checked}
+      aria-label={label}
+      checked={checked === true}
+      className={styles.selectionCheckbox}
+      disabled={disabled}
+      onChange={(event) => onChange(event.currentTarget.checked)}
+      ref={(element) => {
+        if (element) element.indeterminate = checked === "mixed";
+      }}
+      type="checkbox"
+    />
+  );
+}
+
+function normalizeMermaidSource(source: string) {
+  return source.replace(
+    /^(?:(?:&#x20;|&#32;|&nbsp;))+/gim,
+    (indentation) => indentation.replace(/(?:&#x20;|&#32;|&nbsp;)/gi, " "),
+  );
+}
+
+function mermaidCompatibilitySource(source: string) {
+  return normalizeMermaidSource(source).replace(
+    /\|"([^"\r\n]*)"\|/g,
+    "|$1|",
+  );
+}
+
+function sanitizeMermaidSvg(svg: string) {
+  const document = new DOMParser().parseFromString(svg, "image/svg+xml");
+  if (
+    document.querySelector("parsererror") ||
+    document.documentElement.localName !== "svg"
+  ) {
+    throw new Error("Mermaid returned invalid SVG.");
+  }
+
+  document
+    .querySelectorAll("script, iframe, object, embed, link, meta")
+    .forEach((element) => element.remove());
+  document.querySelectorAll("*").forEach((element) => {
+    for (const attribute of [...element.attributes]) {
+      const name = attribute.name.toLowerCase();
+      const value = attribute.value.trim();
+      if (
+        name.startsWith("on") ||
+        ((name === "href" || name === "xlink:href" || name === "src") &&
+          !value.startsWith("#")) ||
+        (name === "style" && /url\s*\(/i.test(value))
+      ) {
+        element.removeAttribute(attribute.name);
+      }
+    }
+  });
+  const viewBox = (document.documentElement.getAttribute("viewBox") ?? "")
+    .split(/[\s,]+/)
+    .map(Number);
+  const width =
+    viewBox.length === 4 && Number.isFinite(viewBox[2]) && viewBox[2]! > 0
+      ? viewBox[2]!
+      : Number.parseFloat(document.documentElement.getAttribute("width") ?? "") ||
+        800;
+  const height =
+    viewBox.length === 4 && Number.isFinite(viewBox[3]) && viewBox[3]! > 0
+      ? viewBox[3]!
+      : Number.parseFloat(document.documentElement.getAttribute("height") ?? "") ||
+        600;
+  return {
+    height,
+    markup: new XMLSerializer().serializeToString(document.documentElement),
+    width,
+  } satisfies SanitizedMermaidSvg;
+}
+
+function displayFileName(fileName: string) {
+  return fileName.split(/[\\/]/).pop() || "Planning file";
+}
+
+function documentLabel(
+  document: Pick<WorkspacePlanningDocumentDescriptor, "documentId" | "fileName">,
+) {
+  return (
+    DOCUMENT_LABELS[
+      document.documentId as FixedWorkspacePlanningDocumentId
+    ] ?? displayFileName(document.fileName)
+  );
+}
+
+function documentDescription(document: WorkspacePlanningDocumentDescriptor) {
+  const fixed = DOCUMENT_DESCRIPTIONS[
+    document.documentId as FixedWorkspacePlanningDocumentId
+  ];
+  if (fixed) return fixed;
+  return /\.csv$/i.test(document.fileName)
+    ? "Generated evidence data"
+    : "Generated planning file";
+}
 
 function safeMarkdownUrl(url: string) {
   const safeUrl = defaultUrlTransform(url);
@@ -74,26 +262,126 @@ interface MermaidDiagramProps {
 
 function MermaidDiagram({ source }: MermaidDiagramProps) {
   const { resolvedTheme } = useTheme();
+  const normalizedSource = useMemo(() => normalizeMermaidSource(source), [source]);
   const reactId = useId();
   const diagramId = useMemo(
     () => `planning-mermaid-${reactId.replace(/[^a-zA-Z0-9_-]/g, "")}`,
     [reactId],
   );
-  const [imageUrl, setImageUrl] = useState("");
+  const [svgData, setSvgData] = useState<SanitizedMermaidSvg | null>(null);
+  const [zoom, setZoom] = useState(1);
+  const viewportRef = useRef<HTMLDivElement>(null);
+  const cameraRef = useRef<HTMLDivElement>(null);
+  const zoomBehaviorRef = useRef<ZoomBehavior<HTMLDivElement, unknown> | null>(
+    null,
+  );
+  const fitDiagramRef = useRef<() => void>(() => undefined);
   const [renderState, setRenderState] = useState<
     "loading" | "ready" | "error" | "oversize"
-  >(source.length > MERMAID_MAX_CHARACTERS ? "oversize" : "loading");
+  >(
+    normalizedSource.length > MERMAID_MAX_CHARACTERS ? "oversize" : "loading",
+  );
 
   useEffect(() => {
-    if (source.length > MERMAID_MAX_CHARACTERS) {
-      setImageUrl("");
+    const viewport = viewportRef.current;
+    const camera = cameraRef.current;
+    if (!viewport || !camera || !svgData) return;
+
+    const selection = select<HTMLDivElement, unknown>(viewport);
+    const behavior = createZoom<HTMLDivElement, unknown>()
+      .scaleExtent([MERMAID_MIN_ZOOM, MERMAID_MAX_ZOOM])
+      .constrain((transform) => transform)
+      .filter((event) => event.type !== "wheel" || event.ctrlKey)
+      .on("zoom", (event) => {
+        const transform = event.transform;
+        camera.style.transform = `translate(${transform.x}px, ${transform.y}px) scale(${transform.k})`;
+        setZoom(transform.k);
+      });
+    zoomBehaviorRef.current = behavior;
+    selection.call(behavior).on("dblclick.zoom", null);
+
+    const fitDiagram = () => {
+      if (viewport.clientWidth <= 0 || viewport.clientHeight <= 0) {
+        selection.call(behavior.transform, zoomIdentity);
+        return;
+      }
+      const padding = 32;
+      const scale = clampMermaidZoom(
+        Math.min(
+          (viewport.clientWidth - padding * 2) / svgData.width,
+          (viewport.clientHeight - padding * 2) / svgData.height,
+        ),
+      );
+      const x = (viewport.clientWidth - svgData.width * scale) / 2;
+      const y = (viewport.clientHeight - svgData.height * scale) / 2;
+      selection.call(
+        behavior.transform,
+        zoomIdentity.translate(x, y).scale(scale),
+      );
+    };
+    fitDiagramRef.current = fitDiagram;
+    fitDiagram();
+
+    const handleWheelPan = (event: WheelEvent) => {
+      if (event.ctrlKey) return;
+      event.preventDefault();
+      event.stopPropagation();
+      const current = zoomTransform(viewport);
+      selection.call(
+        behavior.transform,
+        zoomIdentity
+          .translate(current.x - event.deltaX, current.y - event.deltaY)
+          .scale(current.k),
+      );
+    };
+    let gestureStartZoom = zoomTransform(viewport).k;
+    const handleGestureStart = (event: Event) => {
+      event.preventDefault();
+      gestureStartZoom = zoomTransform(viewport).k;
+    };
+    const handleGestureChange = (event: Event) => {
+      event.preventDefault();
+      const scale = (event as Event & { scale?: number }).scale;
+      if (!Number.isFinite(scale)) return;
+      selection.call(
+        behavior.scaleTo,
+        clampMermaidZoom(gestureStartZoom * (scale ?? 1)),
+      );
+    };
+
+    viewport.addEventListener("wheel", handleWheelPan, { passive: false });
+    viewport.addEventListener("gesturestart", handleGestureStart, {
+      passive: false,
+    });
+    viewport.addEventListener("gesturechange", handleGestureChange, {
+      passive: false,
+    });
+    return () => {
+      selection.on(".zoom", null);
+      viewport.removeEventListener("wheel", handleWheelPan);
+      viewport.removeEventListener("gesturestart", handleGestureStart);
+      viewport.removeEventListener("gesturechange", handleGestureChange);
+      zoomBehaviorRef.current = null;
+      fitDiagramRef.current = () => undefined;
+    };
+  }, [svgData]);
+
+  const scaleDiagram = useCallback((factor: number) => {
+    const viewport = viewportRef.current;
+    const behavior = zoomBehaviorRef.current;
+    if (!viewport || !behavior) return;
+    select<HTMLDivElement, unknown>(viewport).call(behavior.scaleBy, factor);
+  }, []);
+
+  useEffect(() => {
+    if (normalizedSource.length > MERMAID_MAX_CHARACTERS) {
+      setSvgData(null);
       setRenderState("oversize");
       return;
     }
 
     let current = true;
-    let objectUrl = "";
-    setImageUrl("");
+    setSvgData(null);
     setRenderState("loading");
 
     void import("mermaid")
@@ -103,12 +391,19 @@ function MermaidDiagram({ source }: MermaidDiagramProps) {
           securityLevel: "strict",
           theme: resolvedTheme === "dark" ? "dark" : "neutral",
         });
-        const { svg } = await mermaid.render(diagramId, source);
+        let svg: string;
+        try {
+          ({ svg } = await mermaid.render(diagramId, normalizedSource));
+        } catch (error) {
+          const compatibleSource = mermaidCompatibilitySource(normalizedSource);
+          if (compatibleSource === normalizedSource) throw error;
+          ({ svg } = await mermaid.render(
+            `${diagramId}-compatible`,
+            compatibleSource,
+          ));
+        }
         if (!current) return;
-        objectUrl = URL.createObjectURL(
-          new Blob([svg], { type: "image/svg+xml;charset=utf-8" }),
-        );
-        setImageUrl(objectUrl);
+        setSvgData(sanitizeMermaidSvg(svg));
         setRenderState("ready");
       })
       .catch(() => {
@@ -118,14 +413,58 @@ function MermaidDiagram({ source }: MermaidDiagramProps) {
 
     return () => {
       current = false;
-      if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
-  }, [diagramId, resolvedTheme, source]);
+  }, [diagramId, normalizedSource, resolvedTheme]);
 
-  if (renderState === "ready" && imageUrl) {
+  if (renderState === "ready" && svgData) {
+    const zoomPercentage = Math.round(zoom * 1_000) / 10;
     return (
       <figure className={styles.mermaidDiagram}>
-        <img alt="Mermaid diagram" src={imageUrl} />
+        <div
+          aria-label="Mermaid diagram zoom"
+          className={styles.mermaidToolbar}
+          role="toolbar"
+        >
+          <button
+            aria-label="Zoom out"
+            disabled={zoom <= MERMAID_MIN_ZOOM}
+            onClick={() => scaleDiagram(1 / MERMAID_ZOOM_FACTOR)}
+            type="button"
+          >
+            −
+          </button>
+          <output aria-label="Diagram zoom">{Math.round(zoomPercentage)}%</output>
+          <button
+            aria-label="Zoom in"
+            disabled={zoom >= MERMAID_MAX_ZOOM}
+            onClick={() => scaleDiagram(MERMAID_ZOOM_FACTOR)}
+            type="button"
+          >
+            +
+          </button>
+          <button
+            aria-label="Reset diagram zoom"
+            onClick={() => fitDiagramRef.current()}
+            type="button"
+          >
+            Fit
+          </button>
+        </div>
+        <div
+          aria-label="Mermaid diagram canvas"
+          className={styles.mermaidViewport}
+          ref={viewportRef}
+          role="region"
+        >
+          <div
+            aria-label="Mermaid diagram"
+            className={styles.mermaidCanvas}
+            dangerouslySetInnerHTML={{ __html: svgData.markup }}
+            ref={cameraRef}
+            role="img"
+            style={{ height: svgData.height, width: svgData.width }}
+          />
+        </div>
       </figure>
     );
   }
@@ -157,15 +496,53 @@ function codeText(children: ReactNode) {
   return String(children).replace(/\n$/, "");
 }
 
+const planningMarkdownComponents: Components = {
+  a: ({ children, href }) => {
+    const safeHref = href ? safeMarkdownUrl(href) : undefined;
+    return safeHref ? (
+      <a href={safeHref} rel="noreferrer" target="_blank">
+        {children}
+      </a>
+    ) : (
+      <span>{children}</span>
+    );
+  },
+  code: ({ children, className, ...props }) => (
+    <code className={className} {...props}>
+      {children}
+    </code>
+  ),
+  img: ({ alt }) => (
+    <span className={styles.blockedImage} role="note">
+      Image not loaded{alt ? `: ${alt}` : ""}
+    </span>
+  ),
+  pre: ({ children }) => {
+    if (
+      isValidElement<{
+        children?: ReactNode;
+        className?: string;
+      }>(children) &&
+      /^language-mermaid(?:\s|$)/.test(children.props.className ?? "")
+    ) {
+      return <MermaidDiagram source={codeText(children.props.children)} />;
+    }
+    return <pre>{children}</pre>;
+  },
+};
+
 interface PlanningPreviewProps {
   document: WorkspacePlanningDocument;
 }
 
-function PlanningPreview({ document }: PlanningPreviewProps) {
+const PlanningPreview = memo(function PlanningPreview({
+  document,
+}: PlanningPreviewProps) {
+  const label = documentLabel(document);
   if (/\.(?:mmd|mermaid)$/i.test(document.fileName)) {
     return (
       <article
-        aria-label={`${DOCUMENT_LABELS[document.documentId]} preview`}
+        aria-label={`${label} preview`}
         className={styles.previewView}
         data-history-swipe-block
       >
@@ -174,53 +551,26 @@ function PlanningPreview({ document }: PlanningPreviewProps) {
     );
   }
 
+  if (/\.(?:csv|txt)$/i.test(document.fileName)) {
+    return (
+      <article
+        aria-label={`${label} preview`}
+        className={styles.previewView}
+        data-history-swipe-block
+      >
+        <pre><code>{document.contents}</code></pre>
+      </article>
+    );
+  }
+
   return (
     <article
-      aria-label={`${DOCUMENT_LABELS[document.documentId]} preview`}
+      aria-label={`${label} preview`}
       className={styles.previewView}
       data-history-swipe-block
     >
       <ReactMarkdown
-        components={{
-          a: ({ children, href }) => {
-            const safeHref = href ? safeMarkdownUrl(href) : undefined;
-            return safeHref ? (
-              <a href={safeHref} rel="noreferrer" target="_blank">
-                {children}
-              </a>
-            ) : (
-              <span>{children}</span>
-            );
-          },
-          code: ({ children, className, ...props }) => {
-            return (
-              <code className={className} {...props}>
-                {children}
-              </code>
-            );
-          },
-          img: ({ alt }) => (
-            <span className={styles.blockedImage} role="note">
-              Image not loaded{alt ? `: ${alt}` : ""}
-            </span>
-          ),
-          pre: ({ children }) => {
-            if (
-              isValidElement<{
-                children?: ReactNode;
-                className?: string;
-              }>(children) &&
-              /^language-mermaid(?:\s|$)/.test(
-                children.props.className ?? "",
-              )
-            ) {
-              return (
-                <MermaidDiagram source={codeText(children.props.children)} />
-              );
-            }
-            return <pre>{children}</pre>;
-          },
-        }}
+        components={planningMarkdownComponents}
         remarkPlugins={[remarkGfm]}
         skipHtml
         urlTransform={safeMarkdownUrl}
@@ -229,7 +579,7 @@ function PlanningPreview({ document }: PlanningPreviewProps) {
       </ReactMarkdown>
     </article>
   );
-}
+});
 
 function errorMessage(error: unknown, fallback: string) {
   return error instanceof Error && error.message.trim()
@@ -252,9 +602,14 @@ function sortedDocuments(
     DOCUMENT_ORDER.map((documentId, index) => [documentId, index]),
   );
   return [...documents].sort(
-    (left, right) =>
-      (order.get(left.documentId) ?? DOCUMENT_ORDER.length) -
-      (order.get(right.documentId) ?? DOCUMENT_ORDER.length),
+    (left, right) => {
+      const orderDifference =
+        (order.get(left.documentId as FixedWorkspacePlanningDocumentId) ??
+          DOCUMENT_ORDER.length) -
+        (order.get(right.documentId as FixedWorkspacePlanningDocumentId) ??
+          DOCUMENT_ORDER.length);
+      return orderDifference || left.fileName.localeCompare(right.fileName);
+    },
   );
 }
 
@@ -322,12 +677,12 @@ function PlanningSource({
 
   return (
     <div
-      aria-label={`${DOCUMENT_LABELS[document.documentId]} contents`}
+      aria-label={`${documentLabel(document)} contents`}
       className={styles.sourceView}
       data-history-swipe-block
       role="region"
     >
-      <ol aria-label="Markdown source. Select a line to add feedback.">
+      <ol aria-label="File source. Select a line to add feedback.">
         {lines.map((line, index) => {
           const lineNumber = index + 1;
           const selected = selectedLine === lineNumber;
@@ -453,6 +808,15 @@ export function PlanningDocumentsPanel({
   const [listError, setListError] = useState("");
   const [listErrorCode, setListErrorCode] = useState("");
   const [listRevision, setListRevision] = useState(0);
+  const [documentQuery, setDocumentQuery] = useState("");
+  const [documentFilter, setDocumentFilter] =
+    useState<DocumentFilter>("current");
+  const [oldDocumentIds, setOldDocumentIds] = useState(() =>
+    oldDocumentIdsForWorkspace(workspaceId),
+  );
+  const [selectedDocumentIds, setSelectedDocumentIds] = useState<
+    Set<WorkspacePlanningDocumentId>
+  >(new Set());
   const [selectedId, setSelectedId] =
     useState<WorkspacePlanningDocumentId | null>(null);
   const [document, setDocument] =
@@ -488,6 +852,40 @@ export function PlanningDocumentsPanel({
   );
 
   const dirty = Boolean(document && draft !== document.contents);
+  const visibleDocuments = useMemo(() => {
+    const query = documentQuery.trim().toLocaleLowerCase();
+    return documents.filter((item) => {
+      const old = oldDocumentIds.has(item.documentId);
+      if (documentFilter === "current" && old) return false;
+      if (documentFilter === "old" && !old) return false;
+      return (
+        !query ||
+        documentLabel(item).toLocaleLowerCase().includes(query) ||
+        documentDescription(item).toLocaleLowerCase().includes(query)
+      );
+    });
+  }, [documentFilter, documentQuery, documents, oldDocumentIds]);
+  const selectedDocuments = useMemo(
+    () => documents.filter((item) => selectedDocumentIds.has(item.documentId)),
+    [documents, selectedDocumentIds],
+  );
+  const selectedVisibleCount = visibleDocuments.filter((item) =>
+    selectedDocumentIds.has(item.documentId),
+  ).length;
+  const allVisibleSelected =
+    visibleDocuments.length > 0 &&
+    selectedVisibleCount === visibleDocuments.length;
+  const visibleSelectionState: boolean | "mixed" = allVisibleSelected
+    ? true
+    : selectedVisibleCount > 0
+      ? "mixed"
+      : false;
+  const selectedHasOld = selectedDocuments.some((item) =>
+    oldDocumentIds.has(item.documentId),
+  );
+  const selectedHasCurrent = selectedDocuments.some(
+    (item) => !oldDocumentIds.has(item.documentId),
+  );
 
   useEffect(() => {
     feedbackRequestRef.current += 1;
@@ -516,6 +914,11 @@ export function PlanningDocumentsPanel({
     setListState("loading");
     setListError("");
     setListErrorCode("");
+    setDocumentQuery("");
+    setDocumentFilter("current");
+    setSelectedDocumentIds(new Set());
+    const storedOldDocumentIds = oldDocumentIdsForWorkspace(workspaceId);
+    setOldDocumentIds(storedOldDocumentIds);
 
     void client
       .listWorkspacePlanningDocuments(workspaceId)
@@ -526,7 +929,11 @@ export function PlanningDocumentsPanel({
         }
         const nextDocuments = sortedDocuments(result.documents);
         setDocuments(nextDocuments);
-        setSelectedId(nextDocuments[0]?.documentId ?? null);
+        setSelectedId(
+          nextDocuments.find(
+            (item) => !storedOldDocumentIds.has(item.documentId),
+          )?.documentId ?? nextDocuments[0]?.documentId ?? null,
+        );
         setListState("ready");
       })
       .catch((error) => {
@@ -656,31 +1063,101 @@ export function PlanningDocumentsPanel({
         "Home",
         "End",
       ].includes(event.key) ||
-      documents.length === 0
+      visibleDocuments.length === 0
     ) {
       return;
     }
-    const currentIndex = documents.findIndex(
+    const currentIndex = visibleDocuments.findIndex(
       (item) => item.documentId === documentId,
     );
     if (currentIndex < 0) return;
     let nextIndex = currentIndex;
     if (event.key === "ArrowDown" || event.key === "ArrowRight") {
-      nextIndex = (currentIndex + 1) % documents.length;
+      nextIndex = (currentIndex + 1) % visibleDocuments.length;
     } else if (event.key === "ArrowUp" || event.key === "ArrowLeft") {
-      nextIndex = (currentIndex - 1 + documents.length) % documents.length;
+      nextIndex =
+        (currentIndex - 1 + visibleDocuments.length) % visibleDocuments.length;
     } else if (event.key === "Home") {
       nextIndex = 0;
     } else if (event.key === "End") {
-      nextIndex = documents.length - 1;
+      nextIndex = visibleDocuments.length - 1;
     }
     event.preventDefault();
-    const nextId = documents[nextIndex]!.documentId;
+    const nextId = visibleDocuments[nextIndex]!.documentId;
     if (chooseDocument(nextId)) {
       window.requestAnimationFrame(() =>
         documentButtonsRef.current.get(nextId)?.focus(),
       );
     }
+  };
+
+  const toggleSelectedOld = () => {
+    if (!selectedId) return;
+    setOldDocumentIds((current) => {
+      const next = new Set(current);
+      if (next.has(selectedId)) {
+        next.delete(selectedId);
+      } else {
+        next.add(selectedId);
+      }
+      saveOldDocumentIds(workspaceId, next);
+      return next;
+    });
+    setSelectedDocumentIds((current) => {
+      const next = new Set(current);
+      next.delete(selectedId);
+      return next;
+    });
+  };
+
+  const toggleVisibleSelection = () => {
+    setSelectedDocumentIds((current) => {
+      const next = new Set(current);
+      for (const item of visibleDocuments) {
+        if (allVisibleSelected) {
+          next.delete(item.documentId);
+        } else {
+          next.add(item.documentId);
+        }
+      }
+      return next;
+    });
+  };
+
+  const setDocumentSelected = (
+    documentId: WorkspacePlanningDocumentId,
+    selected: boolean,
+  ) => {
+    setSelectedDocumentIds((current) => {
+      const next = new Set(current);
+      if (selected) {
+        next.add(documentId);
+      } else {
+        next.delete(documentId);
+      }
+      return next;
+    });
+  };
+
+  const setSelectedDocumentsOld = (old: boolean) => {
+    if (selectedDocuments.length === 0) return;
+    setOldDocumentIds((current) => {
+      const next = new Set(current);
+      for (const item of selectedDocuments) {
+        if (old) {
+          next.add(item.documentId);
+        } else {
+          next.delete(item.documentId);
+        }
+      }
+      saveOldDocumentIds(workspaceId, next);
+      return next;
+    });
+    const count = selectedDocuments.length;
+    setSelectedDocumentIds(new Set());
+    onNotice?.(
+      `${count} planning ${count === 1 ? "file" : "files"} marked ${old ? "old" : "current"}`,
+    );
   };
 
   const reloadDocument = () => {
@@ -727,7 +1204,7 @@ export function PlanningDocumentsPanel({
       setSelectedLine(null);
       feedbackContextRef.current += 1;
       setFeedbackRevision((revision) => revision + 1);
-      onNotice?.(`${DOCUMENT_LABELS[saved.documentId]} saved`);
+      onNotice?.(`${documentLabel(saved)} saved`);
     } catch (error) {
       if (requestId !== documentRequestRef.current) return;
       const isConflict =
@@ -888,7 +1365,13 @@ export function PlanningDocumentsPanel({
     [client, onNotice, resolvingThreadId, workspaceId],
   );
 
-  const selectedLabel = selectedId ? DOCUMENT_LABELS[selectedId] : "Planning file";
+  const selectedDescriptor = documents.find(
+    (item) => item.documentId === selectedId,
+  );
+  const selectedLabel = selectedDescriptor
+    ? documentLabel(selectedDescriptor)
+    : "Planning file";
+  const selectedIsOld = selectedId ? oldDocumentIds.has(selectedId) : false;
 
   if (listState === "loading") {
     return (
@@ -950,58 +1433,170 @@ export function PlanningDocumentsPanel({
       aria-label="Plans and Kanban"
       className={styles.panel}
       data-ui="planning.panel"
-      data-ui-label="Planning documents panel"
+      data-ui-label="Plans and Kanban view"
     >
       <aside
         className={styles.sidebar}
         data-ui="planning.files"
-        data-ui-label="Planning files"
+        data-ui-label="Planning file explorer"
       >
         <header>
-          <span>Files</span>
-          <small>{documents.length}</small>
+          <span>
+            <Glyph name="chevron" size={12} />
+            Planning files
+          </span>
+          <span className={styles.fileHeaderActions}>
+            <small>{visibleDocuments.length}</small>
+            <SelectionCheckbox
+              checked={visibleSelectionState}
+              disabled={visibleDocuments.length === 0}
+              label="Select all visible planning files"
+              onChange={toggleVisibleSelection}
+            />
+          </span>
         </header>
-        <nav aria-label="Planning files" className={styles.documentList}>
-          {documents.map((item) => {
-            const selected = item.documentId === selectedId;
-            return (
+        <div
+          className={styles.fileTools}
+          data-ui="planning.file-tools"
+          data-ui-label="Planning file search and filters"
+        >
+          <label className={styles.fileSearch}>
+            <Glyph name="search" size={13} />
+            <input
+              aria-label="Search planning files"
+              onChange={(event) => {
+                setDocumentQuery(event.target.value);
+                setSelectedDocumentIds(new Set());
+              }}
+              placeholder="Search files"
+              type="search"
+              value={documentQuery}
+            />
+          </label>
+          <div
+            aria-label="Planning file state"
+            className={styles.fileFilters}
+            role="group"
+          >
+            {(["current", "old", "all"] as const).map((filter) => (
               <button
-                aria-current={selected ? "page" : undefined}
-                className={styles.documentButton}
-                data-selected={selected || undefined}
-                key={item.documentId}
-                onClick={() => chooseDocument(item.documentId)}
-                onKeyDown={(event) =>
-                  handleDocumentKeyDown(event, item.documentId)
-                }
-                ref={(element) => {
-                  if (element) {
-                    documentButtonsRef.current.set(item.documentId, element);
-                  } else {
-                    documentButtonsRef.current.delete(item.documentId);
-                  }
+                aria-pressed={documentFilter === filter}
+                key={filter}
+                onClick={() => {
+                  setDocumentFilter(filter);
+                  setSelectedDocumentIds(new Set());
                 }}
-                tabIndex={selected ? 0 : -1}
                 type="button"
               >
-                <span className={styles.documentIcon} aria-hidden="true">
-                  <Glyph name="file" size={15} />
-                </span>
-                <span>
-                  <b>{DOCUMENT_LABELS[item.documentId]}</b>
-                  <small>{DOCUMENT_DESCRIPTIONS[item.documentId]}</small>
-                </span>
+                {filter === "current"
+                  ? "Current"
+                  : filter === "old"
+                    ? "Old"
+                    : "All"}
               </button>
+            ))}
+          </div>
+        </div>
+        {selectedDocuments.length > 0 && (
+          <div
+            aria-label="Planning file selection actions"
+            className={styles.bulkActions}
+            data-ui="planning.file-selection-actions"
+            data-ui-label="Planning file selection actions"
+            onKeyDown={(event) => {
+              if (event.key === "Escape") setSelectedDocumentIds(new Set());
+            }}
+            role="toolbar"
+          >
+            <span>{selectedDocuments.length} selected</span>
+            {selectedHasCurrent && (
+              <Button
+                className={styles.bulkActionButton}
+                onPress={() => setSelectedDocumentsOld(true)}
+              >
+                Mark old
+              </Button>
+            )}
+            {selectedHasOld && (
+              <Button
+                className={styles.bulkActionButton}
+                data-action="current"
+                onPress={() => setSelectedDocumentsOld(false)}
+              >
+                Mark current
+              </Button>
+            )}
+            <button
+              aria-label="Clear planning file selection"
+              className={styles.clearSelectionButton}
+              onClick={() => setSelectedDocumentIds(new Set())}
+              type="button"
+            >
+              <Glyph name="close" size={12} />
+            </button>
+          </div>
+        )}
+        <nav aria-label="Planning files" className={styles.documentList}>
+          {visibleDocuments.map((item) => {
+            const selected = item.documentId === selectedId;
+            const old = oldDocumentIds.has(item.documentId);
+            return (
+              <div
+                className={styles.documentRow}
+                data-checked={
+                  selectedDocumentIds.has(item.documentId) || undefined
+                }
+                key={item.documentId}
+              >
+                <SelectionCheckbox
+                  checked={selectedDocumentIds.has(item.documentId)}
+                  label={`Select ${documentLabel(item)}`}
+                  onChange={(checked) =>
+                    setDocumentSelected(item.documentId, checked)
+                  }
+                />
+                <button
+                  aria-description={documentDescription(item)}
+                  aria-current={selected ? "page" : undefined}
+                  className={styles.documentButton}
+                  data-old={old || undefined}
+                  data-selected={selected || undefined}
+                  onClick={() => chooseDocument(item.documentId)}
+                  onKeyDown={(event) =>
+                    handleDocumentKeyDown(event, item.documentId)
+                  }
+                  ref={(element) => {
+                    if (element) {
+                      documentButtonsRef.current.set(item.documentId, element);
+                    } else {
+                      documentButtonsRef.current.delete(item.documentId);
+                    }
+                  }}
+                  tabIndex={selected ? 0 : -1}
+                  type="button"
+                >
+                  <span className={styles.documentIcon} aria-hidden="true">
+                    <Glyph name="file" size={14} />
+                  </span>
+                  <b>{documentLabel(item)}</b>
+                  {old && <small>Old</small>}
+                </button>
+              </div>
             );
           })}
+          {visibleDocuments.length === 0 && (
+            <p className={styles.noFiles}>No files match this view.</p>
+          )}
         </nav>
-        <p className={styles.keyboardHint}>Use arrow keys to move between files.</p>
+        <p className={styles.keyboardHint}>
+          Use the arrow keys to move through the files.
+        </p>
       </aside>
 
       <div
         className={styles.documentPane}
         data-ui="planning.document"
-        data-ui-label="Planning document"
+        data-ui-label="Planning document viewer"
       >
         <header
           className={styles.documentHeader}
@@ -1023,6 +1618,13 @@ export function PlanningDocumentsPanel({
             <div className={styles.documentActions}>
               {!editing ? (
                 <>
+                  <Button
+                    aria-label={`Mark ${selectedLabel} as ${selectedIsOld ? "current" : "old"}`}
+                    className={styles.secondaryButton}
+                    onPress={toggleSelectedOld}
+                  >
+                    {selectedIsOld ? "Mark current" : "Mark old"}
+                  </Button>
                   <div
                     aria-label="Document view"
                     className={styles.viewSwitch}
@@ -1148,7 +1750,7 @@ export function PlanningDocumentsPanel({
               <div
                 className={styles.documentCanvas}
                 data-ui="planning.document-content"
-                data-ui-label="Planning document content"
+                data-ui-label="Planning document content area"
               >
                 {editing ? (
                   <div className={styles.editorShell}>
@@ -1202,7 +1804,7 @@ export function PlanningDocumentsPanel({
                 aria-label={`Feedback for ${selectedLabel}`}
                 className={styles.feedbackRail}
                 data-ui="planning.feedback"
-                data-ui-label="Planning feedback"
+                data-ui-label="Planning feedback sidebar"
               >
                 <header className={styles.feedbackHeader}>
                   <div>
@@ -1304,7 +1906,7 @@ export function PlanningDocumentsPanel({
                   <div
                     className={styles.threadSections}
                     data-ui="planning.feedback-threads"
-                    data-ui-label="Planning feedback threads"
+                    data-ui-label="Planning feedback list"
                   >
                     {resolveError && (
                       <div className={styles.resolveError} role="alert">

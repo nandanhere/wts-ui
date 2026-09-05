@@ -12,6 +12,7 @@ import type {
 } from "../../lib/wtsClient";
 import { useTheme } from "../../theme";
 import { Glyph } from "./Glyph";
+import { SelectMenu } from "../../components/SelectMenu";
 import { RepositoryPatchViewer } from "./RepositoryPatchViewer";
 import styles from "./RepositoryReviewScreen.module.css";
 
@@ -487,9 +488,9 @@ export function RepositoryReviewScreen({
         </div>
         <label>
           <span>Repository</span>
-          <select
+          <SelectMenu
             aria-label="Repository to review"
-            onChange={(event) => selectRepository(event.target.value)}
+            onChange={selectRepository}
             value={repositoryId || defaultRepositoryId}
           >
             {materialization.worktrees.map((worktree) => (
@@ -497,16 +498,16 @@ export function RepositoryReviewScreen({
                 {worktree.label}
               </option>
             ))}
-          </select>
+          </SelectMenu>
         </label>
         {gitlabReview && (
           <label>
             <span>Changes</span>
-            <select
+            <SelectMenu
               aria-label="Merge request changes"
               disabled={reviewPatchFromCache}
-              onChange={(event) => {
-                setSelectedCommitOid(event.currentTarget.value);
+              onChange={(value) => {
+                setSelectedCommitOid(value);
                 displayedRequestRef.current = null;
                 setRequestRevision((value) => value + 1);
               }}
@@ -522,7 +523,7 @@ export function RepositoryReviewScreen({
                   {index + 1}/{reviewCommits.length} · {commit.shortId} · {commit.title}
                 </option>
               ))}
-            </select>
+            </SelectMenu>
           </label>
         )}
         <span

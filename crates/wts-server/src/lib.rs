@@ -48,23 +48,26 @@ use wts_app::{
     OpenWorkspaceChangeRequestResult, OpenWorkspaceGitlabMergeRequestResult,
     OpenWorkspaceJiraPreviewRequest, OpenWorkspaceResult, OpenWorkspaceWorkItemRequest,
     OpenWorkspaceWorkItemResult, PrepareWorkspaceChangeRequest, PreviewWorkspaceJiraLinkRequest,
-    RefreshRepositoryBranchesRequest, RefreshRepositoryBranchesResult, RemoveWorkspaceResult,
-    RepositoryCatalog, ResolveWorkspaceReviewThreadRequest, RuntimeAnalysisRequest,
-    RuntimeAnalysisResult, TerminalProvider, TestRunList, TestRunResult, TestRunSummary,
-    UnlinkWorkspaceWorkItemRequest, UpdateWorkspacePlanningDocumentRequest,
+    PublishWorkspaceChangeRequestBranch, RefreshRepositoryBranchesRequest,
+    RefreshRepositoryBranchesResult, RemoveWorkspaceResult, RepositoryCatalog,
+    ResolveWorkspaceReviewThreadRequest, RuntimeAnalysisRequest, RuntimeAnalysisResult,
+    TerminalProvider, TestRunList, TestRunResult, TestRunSummary, UnlinkWorkspaceWorkItemRequest,
+    UpdateWorkspacePlanningDocumentRequest, WorkspaceBranchPublicationResult,
     WorkspaceChangeRequestDraft, WorkspaceCliLaunchResult, WorkspaceEvidence,
     WorkspaceMaterialization, WorkspacePlanningDocument, WorkspacePlanningDocumentId,
     WorkspacePlanningDocumentList, WorkspacePreflight, WorkspaceRemovalPreflight,
+    WorkspaceRepositoryAdditionPreflight, WorkspaceRepositoryAdditionResult,
     WorkspaceRepositoryAlignmentPreflight, WorkspaceRepositoryAlignmentResult,
-    WorkspaceRepositoryDiff, WorkspaceRepositoryFileReview, WorkspaceRepositoryReviewGraph,
-    WorkspaceRepositorySyncResult, WorkspaceReviewThread, WorkspaceReviewThreadList,
-    WorkspaceWorkItemLinkList, WorkspaceWorkItemLinkPreview, WorkspaceWorkItemUnlinkResult,
+    WorkspaceRepositoryDiff, WorkspaceRepositoryFileReview, WorkspaceRepositoryRemovalResult,
+    WorkspaceRepositoryReviewGraph, WorkspaceRepositorySyncResult, WorkspaceReviewThread,
+    WorkspaceReviewThreadList, WorkspaceWorkItemLinkList, WorkspaceWorkItemLinkPreview,
+    WorkspaceWorkItemUnlinkResult,
 };
 use wts_core::{
     BoundaryCompiler, BoundaryDraft, RepositoryPin, ServiceSpec, WorkspaceBoundary,
     workspace::{
-        CreateWorkspaceRequest, FollowWorkspaceAgentRequest, PlaceWorkspaceOnBoardRequest,
-        RenameWorkspaceRequest, TransitionWorkspaceWorkflowRequest,
+        AddWorkspaceRepositoryRequest, CreateWorkspaceRequest, FollowWorkspaceAgentRequest,
+        PlaceWorkspaceOnBoardRequest, RenameWorkspaceRequest, TransitionWorkspaceWorkflowRequest,
     },
 };
 use wts_integrations::{
@@ -249,6 +252,12 @@ pub enum MvpFailure {
     RepositorySyncDiverged,
     RepositorySyncFailed,
     RepositorySyncBusy,
+    RepositoryAlreadyInWorkspace,
+    RepositoryAdditionStale,
+    RepositoryAdditionFailed,
+    RepositoryAdditionCleanupIncomplete,
+    RepositoryRemovalBlocked,
+    RepositoryRemovalFailed,
     RepositoryAlignmentStale,
     RepositoryAlignmentFailed,
     InvalidRepositoryBase,
@@ -256,6 +265,11 @@ pub enum MvpFailure {
     RepositoryForgeUnsupported,
     GitlabReviewCommentFailed,
     ChangeRequestBranchNotPublished,
+    ChangeRequestBranchPublishFailed,
+    InvalidChangeRequestBranchName,
+    ChangeRequestBranchAuthenticationFailed,
+    ChangeRequestBranchNetworkFailed,
+    ChangeRequestBranchRejected,
     ChangeRequestRemoteMismatch,
     ChangeRequestWorktreeDirty,
     ChangeRequestForkUnsupported,
@@ -383,6 +397,7 @@ pub trait MvpBackend: RegistryBackend {
     type RepositoryRefresh: Serialize + Send + 'static;
     type RepositoryBaseOpen: Serialize + Send + 'static;
     type ChangeRequestDraft: Serialize + Send + 'static;
+    type BranchPublication: Serialize + Send + 'static;
     type ChangeRequestOpen: Serialize + Send + 'static;
     type CodeWorkspaceImport: Serialize + Send + 'static;
     type RuntimeAnalysis: Serialize + Send + 'static;
@@ -392,6 +407,9 @@ pub trait MvpBackend: RegistryBackend {
     type RepositoryFileReview: Serialize + Send + 'static;
     type RepositoryReviewGraph: Serialize + Send + 'static;
     type RepositorySync: Serialize + Send + 'static;
+    type RepositoryAdditionPreflight: Serialize + Send + 'static;
+    type RepositoryAddition: Serialize + Send + 'static;
+    type RepositoryRemoval: Serialize + Send + 'static;
     type RepositoryAlignmentPreflight: Serialize + Send + 'static;
     type RepositoryAlignment: Serialize + Send + 'static;
     type Materialization: Serialize + Send + 'static;
@@ -469,6 +487,11 @@ pub trait MvpBackend: RegistryBackend {
         workspace_id: Uuid,
         request: PrepareWorkspaceChangeRequest,
     ) -> Result<Self::ChangeRequestDraft, MvpFailure>;
+    fn publish_workspace_change_request_branch(
+        &self,
+        workspace_id: Uuid,
+        request: PublishWorkspaceChangeRequestBranch,
+    ) -> Result<Self::BranchPublication, MvpFailure>;
     fn open_workspace_change_request_draft(
         &self,
         workspace_id: Uuid,
@@ -587,6 +610,22 @@ pub trait MvpBackend: RegistryBackend {
         workspace_id: Uuid,
         repository_id: &str,
     ) -> Result<Self::RepositorySync, MvpFailure>;
+    fn preflight_repository_addition(
+        &self,
+        workspace_id: Uuid,
+        request: AddWorkspaceRepositoryRequest,
+    ) -> Result<Self::RepositoryAdditionPreflight, MvpFailure>;
+    fn add_repository(
+        &self,
+        workspace_id: Uuid,
+        request: AddWorkspaceRepositoryRequest,
+        expected_effect_digest: &str,
+    ) -> Result<Self::RepositoryAddition, MvpFailure>;
+    fn remove_repository(
+        &self,
+        workspace_id: Uuid,
+        repository_id: &str,
+    ) -> Result<Self::RepositoryRemoval, MvpFailure>;
     fn preflight_repository_alignment(
         &self,
         workspace_id: Uuid,
@@ -798,6 +837,7 @@ impl MvpBackend for LocalWtsService {
     type RepositoryRefresh = RefreshRepositoryBranchesResult;
     type RepositoryBaseOpen = OpenRepositoryBaseResult;
     type ChangeRequestDraft = WorkspaceChangeRequestDraft;
+    type BranchPublication = WorkspaceBranchPublicationResult;
     type ChangeRequestOpen = OpenWorkspaceChangeRequestResult;
     type CodeWorkspaceImport = CodeWorkspaceImportResult;
     type RuntimeAnalysis = RuntimeAnalysisResult;
@@ -807,6 +847,9 @@ impl MvpBackend for LocalWtsService {
     type RepositoryFileReview = WorkspaceRepositoryFileReview;
     type RepositoryReviewGraph = WorkspaceRepositoryReviewGraph;
     type RepositorySync = WorkspaceRepositorySyncResult;
+    type RepositoryAdditionPreflight = WorkspaceRepositoryAdditionPreflight;
+    type RepositoryAddition = WorkspaceRepositoryAdditionResult;
+    type RepositoryRemoval = WorkspaceRepositoryRemovalResult;
     type RepositoryAlignmentPreflight = WorkspaceRepositoryAlignmentPreflight;
     type RepositoryAlignment = WorkspaceRepositoryAlignmentResult;
     type Materialization = MaterializeWorkspaceResult;
@@ -934,6 +977,15 @@ impl MvpBackend for LocalWtsService {
             .map_err(map_local_mvp_error)
     }
 
+    fn publish_workspace_change_request_branch(
+        &self,
+        workspace_id: Uuid,
+        request: PublishWorkspaceChangeRequestBranch,
+    ) -> Result<Self::BranchPublication, MvpFailure> {
+        LocalWtsService::publish_workspace_change_request_branch(self, workspace_id, request)
+            .map_err(map_local_mvp_error)
+    }
+
     fn open_workspace_change_request_draft(
         &self,
         workspace_id: Uuid,
@@ -961,6 +1013,39 @@ impl MvpBackend for LocalWtsService {
 
     fn preflight(&self, workspace_id: Uuid) -> Result<Self::Preflight, MvpFailure> {
         self.preflight_workspace(workspace_id)
+            .map_err(map_local_mvp_error)
+    }
+
+    fn preflight_repository_addition(
+        &self,
+        workspace_id: Uuid,
+        request: AddWorkspaceRepositoryRequest,
+    ) -> Result<Self::RepositoryAdditionPreflight, MvpFailure> {
+        LocalWtsService::preflight_workspace_repository_addition(self, workspace_id, request)
+            .map_err(map_local_mvp_error)
+    }
+
+    fn add_repository(
+        &self,
+        workspace_id: Uuid,
+        request: AddWorkspaceRepositoryRequest,
+        expected_effect_digest: &str,
+    ) -> Result<Self::RepositoryAddition, MvpFailure> {
+        LocalWtsService::add_workspace_repository(
+            self,
+            workspace_id,
+            request,
+            expected_effect_digest,
+        )
+        .map_err(map_local_mvp_error)
+    }
+
+    fn remove_repository(
+        &self,
+        workspace_id: Uuid,
+        repository_id: &str,
+    ) -> Result<Self::RepositoryRemoval, MvpFailure> {
+        LocalWtsService::remove_workspace_repository(self, workspace_id, repository_id)
             .map_err(map_local_mvp_error)
     }
 
@@ -1461,6 +1546,17 @@ fn map_local_mvp_error(error: LocalWtsError) -> MvpFailure {
         LocalWtsError::ChangeRequestBranchNotPublished => {
             MvpFailure::ChangeRequestBranchNotPublished
         }
+        LocalWtsError::ChangeRequestBranchPublishFailed => {
+            MvpFailure::ChangeRequestBranchPublishFailed
+        }
+        LocalWtsError::InvalidChangeRequestBranchName => MvpFailure::InvalidChangeRequestBranchName,
+        LocalWtsError::ChangeRequestBranchAuthenticationFailed => {
+            MvpFailure::ChangeRequestBranchAuthenticationFailed
+        }
+        LocalWtsError::ChangeRequestBranchNetworkFailed => {
+            MvpFailure::ChangeRequestBranchNetworkFailed
+        }
+        LocalWtsError::ChangeRequestBranchRejected => MvpFailure::ChangeRequestBranchRejected,
         LocalWtsError::ChangeRequestRemoteMismatch => MvpFailure::ChangeRequestRemoteMismatch,
         LocalWtsError::ChangeRequestWorktreeDirty => MvpFailure::ChangeRequestWorktreeDirty,
         LocalWtsError::ChangeRequestForkUnsupported => MvpFailure::ChangeRequestForkUnsupported,
@@ -1515,6 +1611,16 @@ fn map_local_mvp_error(error: LocalWtsError) -> MvpFailure {
         LocalWtsError::RepositorySyncDiverged => MvpFailure::RepositorySyncDiverged,
         LocalWtsError::RepositorySyncFailed => MvpFailure::RepositorySyncFailed,
         LocalWtsError::RepositorySyncBusy => MvpFailure::RepositorySyncBusy,
+        LocalWtsError::RepositoryAlreadyInWorkspace => MvpFailure::RepositoryAlreadyInWorkspace,
+        LocalWtsError::RepositoryAdditionStale => MvpFailure::RepositoryAdditionStale,
+        LocalWtsError::RepositoryAdditionFailed {
+            cleanup_complete: true,
+        } => MvpFailure::RepositoryAdditionFailed,
+        LocalWtsError::RepositoryAdditionFailed {
+            cleanup_complete: false,
+        } => MvpFailure::RepositoryAdditionCleanupIncomplete,
+        LocalWtsError::RepositoryRemovalBlocked => MvpFailure::RepositoryRemovalBlocked,
+        LocalWtsError::RepositoryRemovalFailed => MvpFailure::RepositoryRemovalFailed,
         LocalWtsError::RepositoryAlignmentStale => MvpFailure::RepositoryAlignmentStale,
         LocalWtsError::RepositoryAlignmentFailed => MvpFailure::RepositoryAlignmentFailed,
         LocalWtsError::EvidenceUnavailable => MvpFailure::WorkspaceEvidenceUnavailable,
@@ -1792,6 +1898,10 @@ fn build_router_with_admission_limits<R: MvpBackend>(
             axum::routing::post(prepare_workspace_change_request::<R>),
         )
         .route(
+            "/workspaces/{workspace_id}/change-requests/publish-branch",
+            axum::routing::post(publish_workspace_change_request_branch::<R>),
+        )
+        .route(
             "/workspaces/{workspace_id}/change-requests/open",
             axum::routing::post(open_workspace_change_request_draft::<R>),
         )
@@ -1860,6 +1970,18 @@ fn build_router_with_admission_limits<R: MvpBackend>(
         .route(
             "/workspaces/{workspace_id}/materialization",
             get(get_workspace_materialization::<R>),
+        )
+        .route(
+            "/workspaces/{workspace_id}/repositories/addition-preflight",
+            axum::routing::post(preflight_workspace_repository_addition::<R>),
+        )
+        .route(
+            "/workspaces/{workspace_id}/repositories",
+            axum::routing::post(add_workspace_repository::<R>),
+        )
+        .route(
+            "/workspaces/{workspace_id}/repositories/{repository_id}",
+            axum::routing::delete(remove_workspace_repository::<R>),
         )
         .route(
             "/workspaces/{workspace_id}/repositories/{repository_id}/diff",
@@ -2205,6 +2327,19 @@ async fn prepare_workspace_change_request<R: MvpBackend>(
     let backend = Arc::clone(&state.registry);
     run_mvp_operation(&state.admission, OperationClass::Heavy, move || {
         backend.prepare_workspace_change_request(workspace_id, request)
+    })
+    .await
+    .map(Json)
+}
+
+async fn publish_workspace_change_request_branch<R: MvpBackend>(
+    State(state): State<AppState<R>>,
+    AxumPath(workspace_id): AxumPath<Uuid>,
+    ApiJson(request): ApiJson<PublishWorkspaceChangeRequestBranch>,
+) -> Result<Json<R::BranchPublication>, ApiError> {
+    let backend = Arc::clone(&state.registry);
+    run_mvp_operation(&state.admission, OperationClass::Heavy, move || {
+        backend.publish_workspace_change_request_branch(workspace_id, request)
     })
     .await
     .map(Json)
@@ -2567,6 +2702,69 @@ async fn get_workspace_materialization<R: MvpBackend>(
     let backend = Arc::clone(&state.registry);
     run_mvp_operation(&state.admission, OperationClass::Scan, move || {
         backend.get_materialization(workspace_id)
+    })
+    .await
+    .map(Json)
+}
+
+async fn preflight_workspace_repository_addition<R: MvpBackend>(
+    State(state): State<AppState<R>>,
+    AxumPath(workspace_id): AxumPath<String>,
+    ApiJson(request): ApiJson<AddWorkspaceRepositoryRequest>,
+) -> Result<Json<R::RepositoryAdditionPreflight>, ApiError> {
+    let workspace_id = parse_workspace_id(&workspace_id)?;
+    let backend = Arc::clone(&state.registry);
+    run_mvp_operation(&state.admission, OperationClass::Heavy, move || {
+        backend.preflight_repository_addition(workspace_id, request)
+    })
+    .await
+    .map(Json)
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct AddRepositoryHttpRequest {
+    repository_id: String,
+    base_ref: String,
+    effect_digest: String,
+}
+
+async fn add_workspace_repository<R: MvpBackend>(
+    State(state): State<AppState<R>>,
+    AxumPath(workspace_id): AxumPath<String>,
+    ApiJson(request): ApiJson<AddRepositoryHttpRequest>,
+) -> Result<Json<R::RepositoryAddition>, ApiError> {
+    let workspace_id = parse_workspace_id(&workspace_id)?;
+    if request.effect_digest.trim().is_empty() {
+        return Err(ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid_request",
+            "Review the repository addition before you add it.",
+        ));
+    }
+    let backend = Arc::clone(&state.registry);
+    run_mvp_operation(&state.admission, OperationClass::Heavy, move || {
+        backend.add_repository(
+            workspace_id,
+            AddWorkspaceRepositoryRequest {
+                repository_id: request.repository_id,
+                base_ref: request.base_ref,
+            },
+            &request.effect_digest,
+        )
+    })
+    .await
+    .map(Json)
+}
+
+async fn remove_workspace_repository<R: MvpBackend>(
+    State(state): State<AppState<R>>,
+    AxumPath((workspace_id, repository_id)): AxumPath<(String, String)>,
+) -> Result<Json<R::RepositoryRemoval>, ApiError> {
+    let workspace_id = parse_workspace_id(&workspace_id)?;
+    let backend = Arc::clone(&state.registry);
+    run_mvp_operation(&state.admission, OperationClass::Heavy, move || {
+        backend.remove_repository(workspace_id, &repository_id)
     })
     .await
     .map(Json)
@@ -3601,18 +3799,13 @@ fn parse_workspace_id(value: &str) -> Result<Uuid, ApiError> {
 }
 
 fn parse_planning_document_id(value: &str) -> Result<WorkspacePlanningDocumentId, ApiError> {
-    match value {
-        "readme" => Ok(WorkspacePlanningDocumentId::Readme),
-        "plan" => Ok(WorkspacePlanningDocumentId::Plan),
-        "findings" => Ok(WorkspacePlanningDocumentId::Findings),
-        "kanban" => Ok(WorkspacePlanningDocumentId::Kanban),
-        "programBacklog" => Ok(WorkspacePlanningDocumentId::ProgramBacklog),
-        _ => Err(ApiError::new(
+    WorkspacePlanningDocumentId::from_wire(value).ok_or_else(|| {
+        ApiError::new(
             StatusCode::NOT_FOUND,
             "planning_document_unavailable",
             "The planning document is not available for this workspace.",
-        )),
-    }
+        )
+    })
 }
 
 async fn run_registry_operation<T>(
@@ -4054,6 +4247,36 @@ impl ApiError {
                 "repository_sync_busy",
                 "Stop active agent or verification work before syncing this repository.",
             ),
+            MvpFailure::RepositoryAlreadyInWorkspace => Self::new(
+                StatusCode::CONFLICT,
+                "repository_already_in_workspace",
+                "This repository is already in the workspace.",
+            ),
+            MvpFailure::RepositoryAdditionStale => Self::new(
+                StatusCode::CONFLICT,
+                "repository_addition_stale",
+                "The repository changed after review. Review the repository addition again.",
+            ),
+            MvpFailure::RepositoryAdditionFailed => Self::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "repository_addition_failed",
+                "WTS could not add the repository. The existing workspace was not changed.",
+            ),
+            MvpFailure::RepositoryAdditionCleanupIncomplete => Self::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "repository_addition_cleanup_failed",
+                "WTS could not add the repository or complete cleanup. Check the workspace before you retry.",
+            ),
+            MvpFailure::RepositoryRemovalBlocked => Self::new(
+                StatusCode::CONFLICT,
+                "repository_removal_blocked",
+                "WTS cannot remove the only repository or a repository that has local files.",
+            ),
+            MvpFailure::RepositoryRemovalFailed => Self::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "repository_removal_failed",
+                "WTS could not remove the repository. Refresh the workspace before you retry.",
+            ),
             MvpFailure::RepositoryAlignmentStale => Self::new(
                 StatusCode::CONFLICT,
                 "repository_alignment_stale",
@@ -4089,6 +4312,31 @@ impl ApiError {
                 "change_request_branch_not_published",
                 "Publish this branch and set its upstream before you prepare a change request.",
             ),
+            MvpFailure::ChangeRequestBranchPublishFailed => Self::new(
+                StatusCode::BAD_GATEWAY,
+                "change_request_branch_publish_failed",
+                "Git rejected the publish operation for an unknown reason. Open the workspace and run Git push to see the diagnostic.",
+            ),
+            MvpFailure::InvalidChangeRequestBranchName => Self::new(
+                StatusCode::BAD_REQUEST,
+                "invalid_change_request_branch_name",
+                "Enter a valid Git branch name and retry.",
+            ),
+            MvpFailure::ChangeRequestBranchAuthenticationFailed => Self::new(
+                StatusCode::BAD_GATEWAY,
+                "change_request_branch_authentication_failed",
+                "Git authentication failed. Unlock the SSH key or credential helper, then retry.",
+            ),
+            MvpFailure::ChangeRequestBranchNetworkFailed => Self::new(
+                StatusCode::BAD_GATEWAY,
+                "change_request_branch_network_failed",
+                "Git cannot reach the remote. Check the network connection, then retry.",
+            ),
+            MvpFailure::ChangeRequestBranchRejected => Self::new(
+                StatusCode::CONFLICT,
+                "change_request_branch_rejected",
+                "The remote rejected this branch update. Choose another branch name or synchronize the branch.",
+            ),
             MvpFailure::ChangeRequestRemoteMismatch => Self::new(
                 StatusCode::CONFLICT,
                 "change_request_remote_mismatch",
@@ -4107,7 +4355,7 @@ impl ApiError {
             MvpFailure::ChangeRequestAgentProposalUnavailable => Self::new(
                 StatusCode::CONFLICT,
                 "change_request_agent_proposal_unavailable",
-                "No agent session prepared a change request for this repository commit. Ask the agent to prepare and publish the branch first.",
+                "No agent session prepared a change request for this repository commit. Select Ask agent to prepare.",
             ),
             MvpFailure::ChangeRequestAgentProposalInvalid => Self::new(
                 StatusCode::CONFLICT,
@@ -5078,6 +5326,7 @@ mod tests {
         type RepositoryRefresh = Value;
         type RepositoryBaseOpen = Value;
         type ChangeRequestDraft = Value;
+        type BranchPublication = Value;
         type ChangeRequestOpen = Value;
         type CodeWorkspaceImport = Value;
         type RuntimeAnalysis = Value;
@@ -5087,6 +5336,9 @@ mod tests {
         type RepositoryFileReview = Value;
         type RepositoryReviewGraph = Value;
         type RepositorySync = Value;
+        type RepositoryAdditionPreflight = Value;
+        type RepositoryAddition = Value;
+        type RepositoryRemoval = Value;
         type RepositoryAlignmentPreflight = Value;
         type RepositoryAlignment = Value;
         type Materialization = Value;
@@ -5384,6 +5636,24 @@ mod tests {
                 "verificationStatus": "notReported",
                 "verificationSummary": "The agent did not report verification.",
                 "effectDigest": format!("sha256:{}", "a".repeat(64))
+            }))
+        }
+
+        fn publish_workspace_change_request_branch(
+            &self,
+            workspace_id: Uuid,
+            request: PublishWorkspaceChangeRequestBranch,
+        ) -> Result<Self::BranchPublication, MvpFailure> {
+            let branch_name = request
+                .branch_name
+                .unwrap_or_else(|| "feat/PLATFORM-7197".to_owned());
+            Ok(json!({
+                "workspaceId": workspace_id,
+                "repositoryId": request.repository_id,
+                "repositoryLabel": "checkout-api",
+                "remoteName": "origin",
+                "branchName": branch_name,
+                "headCommitOid": "1111111111111111111111111111111111111111"
             }))
         }
 
@@ -5765,6 +6035,64 @@ mod tests {
                 return Err(MvpFailure::WorkspaceNotFound);
             }
             Ok(fake_preflight(workspace_id))
+        }
+
+        fn preflight_repository_addition(
+            &self,
+            workspace_id: Uuid,
+            request: AddWorkspaceRepositoryRequest,
+        ) -> Result<Self::RepositoryAdditionPreflight, MvpFailure> {
+            if !self
+                .workspaces
+                .lock()
+                .expect("workspace test lock")
+                .contains_key(&workspace_id)
+            {
+                return Err(MvpFailure::WorkspaceNotFound);
+            }
+            Ok(json!({
+                "workspaceId": workspace_id,
+                "repositoryId": request.repository_id,
+                "repositoryLabel": "checkout-web",
+                "baseRef": request.base_ref,
+                "resolvedBaseRef": "refs/heads/main",
+                "baseCommitOid": "1111111111111111111111111111111111111111",
+                "targetDisplayPath": "checkout-web",
+                "branchName": "wts/test",
+                "effectDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            }))
+        }
+
+        fn add_repository(
+            &self,
+            workspace_id: Uuid,
+            request: AddWorkspaceRepositoryRequest,
+            _expected_effect_digest: &str,
+        ) -> Result<Self::RepositoryAddition, MvpFailure> {
+            Ok(json!({
+                "workspaceId": workspace_id,
+                "repositoryId": request.repository_id,
+                "repositoryLabel": "checkout-web",
+                "replayed": false,
+                "graphRefreshed": false,
+                "graphDetail": "Graph indexing is not configured.",
+                "materialization": fake_materialization(workspace_id)
+            }))
+        }
+
+        fn remove_repository(
+            &self,
+            workspace_id: Uuid,
+            repository_id: &str,
+        ) -> Result<Self::RepositoryRemoval, MvpFailure> {
+            Ok(json!({
+                "workspaceId": workspace_id,
+                "repositoryId": repository_id,
+                "repositoryLabel": "checkout-web",
+                "graphRefreshed": false,
+                "graphDetail": "Re-index the graph.",
+                "materialization": fake_materialization(workspace_id)
+            }))
         }
 
         fn get_materialization(
@@ -8393,6 +8721,28 @@ mod tests {
         let prepared = response_json(prepared).await;
         assert_eq!(prepared["repositoryId"], "repo-1");
         assert!(prepared.get("url").is_none());
+
+        let publish_uri =
+            format!("/api/v1/workspaces/{workspace_id}/change-requests/publish-branch");
+        let published = router
+            .clone()
+            .oneshot(
+                protected_request(Method::POST, &publish_uri)
+                    .header(ORIGIN, policy().origin())
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        r#"{"repositoryId":"repo-1","branchName":"feat/custom-name"}"#,
+                    ))
+                    .expect("build request"),
+            )
+            .await
+            .expect("router response");
+        assert_eq!(published.status(), StatusCode::OK);
+        let published = response_json(published).await;
+        assert_eq!(published["repositoryId"], "repo-1");
+        assert_eq!(published["remoteName"], "origin");
+        assert_eq!(published["branchName"], "feat/custom-name");
+        assert!(published.get("remoteUrl").is_none());
 
         let open_uri = format!("/api/v1/workspaces/{workspace_id}/change-requests/open");
         let opened = router

@@ -39,6 +39,7 @@ import {
   LocalWorkspace,
   repositoryUpstreamsFromIssueContent,
   resolveWorkspaceDropTarget,
+  suggestedJiraIssueKeyForReview,
 } from "./LocalWorkspace";
 import { loadActivityWatchReviewSnapshot } from "./activityWatchReviewCache";
 import { saveTimeReviewSchedule } from "./timeReviewSchedule";
@@ -87,6 +88,26 @@ describe("Jira repository upstream discovery", () => {
     ]);
   });
 
+});
+
+describe("review Jira issue discovery", () => {
+  it("returns one exact uppercase Jira key from merge request metadata", () => {
+    expect(suggestedJiraIssueKeyForReview({
+      title: "[PLATFORM-7197] Fix checkout retries",
+      sourceBranch: "feat/PLATFORM-7197-checkout-retries",
+    })).toBe("PLATFORM-7197");
+  });
+
+  it("does not guess when metadata is ambiguous or malformed", () => {
+    expect(suggestedJiraIssueKeyForReview({
+      title: "PLATFORM-7197 Fix checkout retries",
+      sourceBranch: "feat/PAYMENTS-42-checkout-retries",
+    })).toBeUndefined();
+    expect(suggestedJiraIssueKeyForReview({
+      title: "platform-7197 Fix checkout retries",
+      sourceBranch: "feat/health-endpoint-fallback",
+    })).toBeUndefined();
+  });
 });
 
 describe("workspace board drop targets", () => {
@@ -680,7 +701,7 @@ describe("personal local workspace registry", () => {
 
     render(<LocalWorkspace client={fake.client} />);
     await user.click(
-      await screen.findByRole("button", { name: /Open PLATFORM-42/i }),
+      await screen.findByRole("button", { name: /Open PLATFORM-42:/i }),
     );
     await selectWorkspaceView(user, "Plans & Kanban");
     await user.click(
@@ -891,7 +912,7 @@ describe("personal local workspace registry", () => {
     render(<LocalWorkspace client={fake.client} />);
 
     const card = await screen.findByRole("button", {
-      name: /Open PLATFORM-42/i,
+      name: /Open PLATFORM-42:/i,
     });
     const cardSurface = card.closest("article") as HTMLElement;
     expect(
@@ -910,9 +931,47 @@ describe("personal local workspace registry", () => {
     const user = userEvent.setup();
     const catalog = repositoryCatalogFixture();
     const repository = catalog.repositories[0]!;
+    const reviewWorkspace = workspaceFixture({
+      workspaceId: "ws_review_checkout_17",
+      intent: { type: "repositorySet", label: "Review acme/checkout-api !17" },
+      title: "Review acme/checkout-api !17",
+      preferredProvider: "codex",
+      repositories: [{
+        requestId: repository.id,
+        repositoryId: repository.id,
+        label: repository.label,
+        baseRef: "feat/review-checkout",
+        worktreeLeaf: "checkout-api",
+      }],
+      planning: { folder: "plansAndKanban", format: "kanban" },
+    });
+    const materialization = assistantMaterialization(reviewWorkspace);
+    const preflight: WorkspacePreflight = {
+      workspaceId: reviewWorkspace.workspaceId,
+      workspaceDisplayPath: reviewWorkspace.workspaceDisplayPath,
+      codeWorkspaceDisplayPath: materialization.codeWorkspaceDisplayPath,
+      branchName: materialization.branchName,
+      ready: true,
+      effectDigest: materialization.effectDigest,
+      repositories: [{
+        repositoryId: repository.id,
+        label: repository.label,
+        sourceDisplayPath: "/repos/checkout-api",
+        requestedBaseRef: "feat/review-checkout",
+        resolvedBaseRef: "refs/heads/feat/review-checkout",
+        baseCommitOid: materialization.worktrees[0]!.baseCommitOid,
+        targetDisplayPath: materialization.worktrees[0]!.targetDisplayPath,
+      }],
+      blockers: [],
+      warnings: [],
+      graph: { status: "notStarted", detail: "Not started." },
+    };
     const fake = fakeWorkspaceClient({
       list: workspaceListFixture(),
       repositories: catalog,
+      create: { workspace: reviewWorkspace, replayed: false },
+      preflight,
+      materialize: { replayed: false, materialization },
       gitlabReviewInbox: {
         schemaVersion: 1,
         state: "fresh",
@@ -962,6 +1021,19 @@ describe("personal local workspace registry", () => {
       iid: 17,
       accepted: true,
     });
+    fake.launchAgentSession.mockResolvedValue({
+      schemaVersion: 1,
+      sessionId: "99999999-9999-4999-8999-999999999999",
+      workspaceId: reviewWorkspace.workspaceId,
+      provider: "codex",
+      terminal: "terminal",
+      category: "review",
+      status: "launching",
+      startedAtUnixMs: 1_776_585_600_000,
+      lastHeartbeatAtUnixMs: 1_776_585_600_000,
+      endedAtUnixMs: null,
+      failure: null,
+    });
 
     render(<LocalWorkspace client={fake.client} />);
 
@@ -1003,44 +1075,22 @@ describe("personal local workspace registry", () => {
 
     await user.click(
       within(ready).getByRole("button", {
-        name: "Create review workspace",
+        name: "Start review",
       }),
     );
     expect(fake.prepareGitlabReviewRepository).toHaveBeenCalledWith(
       repository.id,
       17,
     );
-    const dialog = await screen.findByRole("dialog", { name: "New workspace" });
-    expect(
-      within(dialog).getByRole("list", {
-        name: "Repositories in this workspace plan",
-      }),
-    ).toHaveTextContent("checkout-api");
-    await user.click(
-      within(dialog).getByRole("button", { name: /Review repositories/i }),
-    );
-    expect(
-      within(dialog).getByRole("combobox", {
-        name: "Base branch for checkout-api [repo_checkout]",
-      }),
-    ).toHaveValue("feat/review-checkout");
-
-    await user.click(
-      within(dialog).getByRole("button", { name: /Analyze services/i }),
-    );
-    await user.click(
-      await within(dialog).findByRole("button", { name: /Review plan/i }),
-    );
-    await user.click(
-      within(dialog).getByRole("button", { name: /Save workspace plan/i }),
-    );
+    expect(screen.queryByRole("dialog", { name: "New workspace" })).toBeNull();
     expect(fake.createWorkspace).toHaveBeenCalledWith(
-      expect.objectContaining({
+      {
         intent: {
           type: "repositorySet",
-          label: "Review checkout-api !17",
+          label: "Review acme/checkout-api !17",
         },
         title: "Review acme/checkout-api !17",
+        preferredProvider: "codex",
         repositories: [
           {
             repositoryId: repository.id,
@@ -1048,9 +1098,36 @@ describe("personal local workspace registry", () => {
             baseRef: "feat/review-checkout",
           },
         ],
-      }),
+        planning: { folder: "plansAndKanban", format: "kanban" },
+      },
       expect.any(String),
     );
+    expect(fake.preflightWorkspace).toHaveBeenCalledWith(reviewWorkspace.workspaceId);
+    expect(fake.materializeWorkspace).toHaveBeenCalledWith(
+      reviewWorkspace.workspaceId,
+      materialization.effectDigest,
+      expect.any(String),
+    );
+    expect(fake.launchAgentSession).toHaveBeenCalledWith(
+      reviewWorkspace.workspaceId,
+      expect.objectContaining({
+        provider: "codex",
+        category: "review",
+        prompt: expect.stringContaining("Write the durable initial review"),
+      }),
+    );
+    expect(screen.getAllByRole("tab").map((tab) => tab.textContent)).toEqual([
+      "Review",
+      "Agent review",
+      "Code review",
+    ]);
+    expect(screen.getByRole("tab", { name: "Code review" })).toHaveAttribute(
+      "data-state",
+      "active",
+    );
+    expect(screen.getByRole("tab", { name: "Agent review" })).toBeVisible();
+    expect(screen.queryByRole("tab", { name: "Verify" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Workspace actions" })).toBeVisible();
   });
 
   it("shows one existing review workspace and opens its provider changes", async () => {
@@ -1142,14 +1219,73 @@ describe("personal local workspace registry", () => {
     await user.click(screen.getByRole("button", {
       name: "Open Review acme/checkout-api !17: Review acme/checkout-api !17 details",
     }));
-    expect(await screen.findByText("Your review is requested")).toBeVisible();
     await user.click(screen.getByRole("button", { name: "Review changes" }));
     expect(await screen.findByText("acme/checkout-api changes")).toBeVisible();
     expect(fake.getGitlabReviewPatch).toHaveBeenCalledWith("repo_checkout", 17);
     expect(fake.prepareGitlabReviewRepository).not.toHaveBeenCalled();
   });
 
+  it("redirects a review workspace verification link to a visible review view", async () => {
+    const reviewWorkspace = workspaceFixture({
+      workspaceId: "ws_review_checkout_17",
+      intent: { type: "repositorySet", label: "Review acme/checkout-api !17" },
+      title: "Review acme/checkout-api !17",
+      repositories: [{
+        requestId: "repo_checkout",
+        repositoryId: "repo_checkout",
+        label: "checkout-api",
+        baseRef: "feat/review-checkout",
+        worktreeLeaf: "checkout-api",
+      }],
+      lifecycle: {
+        materializationState: "materialized",
+        worktreeCount: 1,
+        observedAtUnixMs: 1_776_585_600_000,
+      },
+    });
+    const fake = fakeWorkspaceClient({
+      list: workspaceListFixture([reviewWorkspace]),
+      persistedMaterialization: assistantMaterialization(reviewWorkspace),
+      gitlabReviewInbox: {
+        schemaVersion: 1,
+        state: "fresh",
+        reviews: [{
+          id: "1017",
+          repositoryId: "repo_checkout",
+          repository: "acme/checkout-api",
+          number: 17,
+          title: "Review checkout delivery",
+          authorLogin: "bob",
+          sourceBranch: "feat/review-checkout",
+          targetBranch: "main",
+          updatedAt: "2026-08-19T09:00:00Z",
+          draft: false,
+          reviewState: "requested",
+          status: "open",
+        }],
+        fetchedAtUnixMs: 1_776_585_600_000,
+        detail: "GitLab returned current review requests.",
+      },
+    });
+
+    render(
+      <LocalWorkspace
+        client={fake.client}
+        initialView="workbench"
+        initialWorkspaceId={reviewWorkspace.workspaceId}
+        initialWorkbenchTab="verification"
+      />,
+    );
+
+    expect(await screen.findByRole("tab", { name: "Review" })).toHaveAttribute(
+      "data-state",
+      "active",
+    );
+    expect(screen.queryByRole("tab", { name: "Verify" })).toBeNull();
+  });
+
   it("moves a workspace with a fresh open merge request to Parked", async () => {
+    const user = userEvent.setup();
     const persisted = workspaceFixture({
       workspaceId: "ws_pending_mr",
       intent: { type: "repositorySet", label: "Pending MR" },
@@ -1188,6 +1324,7 @@ describe("personal local workspace registry", () => {
         id: "mr-42",
         repositoryId: "repo_checkout",
         projectPath: "acme/checkout-api",
+        webUrl: "https://gitlab.example.com/acme/checkout-api/-/merge_requests/42",
         iid: 42,
         title: "Wait for delivery",
         authorUsername: "alice",
@@ -1219,6 +1356,11 @@ describe("personal local workspace registry", () => {
       revision: 5,
       updatedAtUnixMs: 1_776_153_300_000,
     });
+    fake.openGitlabMergeRequest.mockResolvedValue({
+      repositoryId: "repo_checkout",
+      iid: 42,
+      accepted: true,
+    });
 
     render(<LocalWorkspace client={fake.client} />);
 
@@ -1233,7 +1375,16 @@ describe("personal local workspace registry", () => {
     const pendingCard = within(parkedLane).getByRole("button", {
       name: "Open Pending MR: Wait for merge details",
     });
-    expect(within(pendingCard).getByText("MR !42 · Open")).toBeVisible();
+    const pendingCardSurface = pendingCard.closest("article") as HTMLElement;
+    expect(within(pendingCardSurface).getByText("MR !42")).toBeVisible();
+    expect(within(pendingCardSurface).getByText("Open")).toBeVisible();
+    await user.click(within(pendingCardSurface).getByRole("link", {
+      name: "Open merge request !42 in GitLab",
+    }));
+    expect(fake.openGitlabMergeRequest).toHaveBeenCalledWith(
+      "repo_checkout",
+      42,
+    );
     expect(pendingCard.closest("article")).toHaveAttribute(
       "data-delivery-status",
       "open",
@@ -1242,6 +1393,75 @@ describe("personal local workspace registry", () => {
       .getAllByRole("button")
       .filter((button) => button.getAttribute("aria-label")?.startsWith("Open "));
     expect(workspaceCards[0]).toBe(pendingCard);
+  });
+
+  it("refreshes merge request state on the Kanban board", async () => {
+    const user = userEvent.setup();
+    const persisted = workspaceFixture({
+      workspaceId: "ws_live_mr",
+      intent: { type: "repositorySet", label: "Live MR" },
+      title: "Watch merge request state",
+      repositories: [{
+        requestId: "repo_checkout",
+        repositoryId: "repo_checkout",
+        label: "checkout-api",
+        baseRef: "feat/PLATFORM-42",
+        worktreeLeaf: "checkout-api",
+      }],
+      lifecycle: {
+        materializationState: "materialized",
+        worktreeCount: 1,
+        observedAtUnixMs: 1_776_153_300_000,
+      },
+      workflow: {
+        state: "parked",
+        revision: 5,
+        updatedAtUnixMs: 1_776_153_300_000,
+        placement: { mode: "pinned", rank: 0 },
+      },
+    });
+    const mergeRequest = {
+      id: "mr-live-42",
+      repositoryId: "repo_checkout",
+      projectPath: "acme/checkout-api",
+      webUrl: "https://gitlab.example.com/acme/checkout-api/-/merge_requests/42",
+      iid: 42,
+      title: "Watch delivery",
+      authorUsername: "alice",
+      sourceBranch: "feat/PLATFORM-42",
+      targetBranch: "main",
+      updatedAt: "2026-08-28T08:00:00Z",
+      draft: false,
+    };
+    const fake = fakeWorkspaceClient({
+      list: workspaceListFixture([persisted]),
+    });
+    fake.getGitlabMergeRequests
+      .mockResolvedValueOnce({
+        schemaVersion: 1,
+        state: "fresh",
+        mergeRequests: [{ ...mergeRequest, status: "open" }],
+        fetchedAtUnixMs: 1_776_153_300_000,
+        detail: "GitLab returned an open merge request.",
+      })
+      .mockResolvedValue({
+        schemaVersion: 1,
+        state: "fresh",
+        mergeRequests: [{ ...mergeRequest, status: "merged" }],
+        fetchedAtUnixMs: 1_776_153_360_000,
+        detail: "GitLab returned a merged merge request.",
+      });
+
+    render(<LocalWorkspace client={fake.client} />);
+    const board = await screen.findByLabelText("Local workspace board");
+    expect(await within(board).findByText("Open")).toBeVisible();
+
+    await user.click(screen.getByRole("button", {
+      name: "Refresh review status",
+    }));
+
+    expect(await within(board).findByText("Merged")).toBeVisible();
+    expect(fake.getGitlabMergeRequests).toHaveBeenCalledTimes(2);
   });
 
   it("moves the exact review workspace to Parked after the user approves", async () => {
@@ -1341,16 +1561,220 @@ describe("personal local workspace registry", () => {
     await user.click(
       within(screen.getByRole("region", { name: "Parked" })).getByRole(
         "button",
-        { name: /Open Review sre-tools\/obx-api !9/i },
+        {
+          name: "Open Review sre-tools/obx-api !9: Review sre-tools/obx-api !9 details",
+        },
       ),
     );
     await user.click(
       await screen.findByRole("button", {
-        name: "Review merge request !9 changes in obx-api",
+        name: "Review changes",
       }),
     );
     expect(await screen.findByText("sre-tools/obx-api changes")).toBeVisible();
     expect(fake.getGitlabReviewPatch).toHaveBeenCalledWith("repo_obx_api", 9);
+  });
+
+  it("shows a merged review state and opens its trusted GitLab link", async () => {
+    const user = userEvent.setup();
+    const reviewWorkspace = workspaceFixture({
+      workspaceId: "ws_review_merged_22",
+      intent: { type: "repositorySet", label: "Review sre-tools/ppxe-verify !22" },
+      title: "Review sre-tools/ppxe-verify !22",
+      repositories: [{
+        requestId: "repo_ppxe_verify",
+        repositoryId: "repo_ppxe_verify",
+        label: "ppxe-verify",
+        baseRef: "fix/health-endpoint-fallback",
+        worktreeLeaf: "ppxe-verify",
+      }],
+      lifecycle: {
+        materializationState: "materialized",
+        worktreeCount: 1,
+        observedAtUnixMs: 1_787_029_200_000,
+      },
+      workflow: {
+        state: "parked",
+        revision: 7,
+        updatedAtUnixMs: 1_787_029_300_000,
+      },
+    });
+    const fake = fakeWorkspaceClient({
+      list: workspaceListFixture([reviewWorkspace]),
+      persistedMaterialization: assistantMaterialization(reviewWorkspace),
+      gitlabReviewInbox: {
+        schemaVersion: 1,
+        state: "fresh",
+        reviews: [{
+          id: "merge-22",
+          repositoryId: "repo_ppxe_verify",
+          repository: "sre-tools/ppxe-verify",
+          number: 22,
+          title: "[SRETOOLS-6349] Fix health endpoint fallback",
+          authorLogin: "vikram.kangotra",
+          sourceBranch: "fix/health-endpoint-fallback",
+          targetBranch: "main",
+          updatedAt: "2026-08-18T05:05:48Z",
+          draft: false,
+          reviewState: "approved",
+          status: "merged",
+        }],
+        fetchedAtUnixMs: 1_787_029_200_000,
+        detail: "GitLab returned approved merge requests.",
+      },
+    });
+    fake.openGitlabMergeRequest.mockResolvedValue({
+      repositoryId: "repo_ppxe_verify",
+      iid: 22,
+      accepted: true,
+    });
+
+    render(<LocalWorkspace client={fake.client} />);
+    await user.click(await screen.findByRole("button", {
+      name: "Open Review sre-tools/ppxe-verify !22: Review sre-tools/ppxe-verify !22 details",
+    }));
+
+    const reviewAction = await screen.findByRole("region", {
+      name: "Workspace review action",
+    });
+    expect(within(reviewAction).getByText("Merged")).toBeVisible();
+    expect(within(reviewAction).getByRole("heading", {
+      name: "[SRETOOLS-6349] Fix health endpoint fallback",
+    })).toBeVisible();
+    expect(reviewAction).toHaveTextContent(
+      "GitLab merged this change. No review action remains.",
+    );
+    expect(screen.getByRole("tab", { name: "Review" })).toBeVisible();
+    expect(screen.getByRole("region", { name: "Review scope" })).toBeVisible();
+    expect(screen.getByRole("region", {
+      name: "Review issue context",
+    })).toHaveTextContent("SRETOOLS-6349");
+    expect(screen.queryByRole("region", { name: "Workspace facts" })).toBeNull();
+    expect(screen.queryByRole("heading", { name: "Linked Jira issues" })).toBeNull();
+    expect(screen.queryByRole("heading", { name: "Agent sessions" })).toBeNull();
+    expect(screen.queryByText("Managed worktrees")).toBeNull();
+    await user.click(within(reviewAction).getByRole("link", {
+      name: "Open merge request !22 in GitLab",
+    }));
+    expect(fake.openGitlabMergeRequest).toHaveBeenCalledWith(
+      "repo_ppxe_verify",
+      22,
+    );
+    expect(fake.confirmWorkspaceJiraLink).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      name: "requested",
+      draft: false,
+      reviewState: "requested" as const,
+      status: "open" as const,
+      workflowState: "review" as const,
+      label: "Review requested",
+      detail: "GitLab requests your review.",
+    },
+    {
+      name: "draft",
+      draft: true,
+      reviewState: "requested" as const,
+      status: "open" as const,
+      workflowState: "review" as const,
+      label: "Draft",
+      detail: "This merge request is a draft.",
+    },
+    {
+      name: "approved",
+      draft: false,
+      reviewState: "approved" as const,
+      status: "open" as const,
+      workflowState: "parked" as const,
+      label: "Approved",
+      detail: "Your approval is recorded. GitLab has not merged this change.",
+    },
+    {
+      name: "new changes",
+      draft: false,
+      reviewState: "changesAfterApproval" as const,
+      status: "open" as const,
+      workflowState: "review" as const,
+      label: "New changes",
+      detail: "The author added commits after your approval.",
+    },
+    {
+      name: "closed",
+      draft: false,
+      reviewState: "approved" as const,
+      status: "closed" as const,
+      workflowState: "active" as const,
+      label: "Closed",
+      detail: "GitLab closed this change. No review action remains.",
+    },
+  ])("shows the exact $name review result", async ({
+    draft,
+    reviewState,
+    status,
+    workflowState,
+    label,
+    detail,
+  }) => {
+    const user = userEvent.setup();
+    const reviewWorkspace = workspaceFixture({
+      workspaceId: `ws_review_${status}_${reviewState}`,
+      intent: { type: "repositorySet", label: "Review sre-tools/ppxe-verify !22" },
+      title: "Review sre-tools/ppxe-verify !22",
+      repositories: [{
+        requestId: "repo_ppxe_verify",
+        repositoryId: "repo_ppxe_verify",
+        label: "ppxe-verify",
+        baseRef: "fix/health-endpoint-fallback",
+        worktreeLeaf: "ppxe-verify",
+      }],
+      lifecycle: {
+        materializationState: "materialized",
+        worktreeCount: 1,
+        observedAtUnixMs: 1_787_029_200_000,
+      },
+      workflow: {
+        state: workflowState,
+        revision: 7,
+        updatedAtUnixMs: 1_787_029_300_000,
+      },
+    });
+    const fake = fakeWorkspaceClient({
+      list: workspaceListFixture([reviewWorkspace]),
+      persistedMaterialization: assistantMaterialization(reviewWorkspace),
+      gitlabReviewInbox: {
+        schemaVersion: 1,
+        state: "fresh",
+        reviews: [{
+          id: "merge-22",
+          repositoryId: "repo_ppxe_verify",
+          repository: "sre-tools/ppxe-verify",
+          number: 22,
+          title: "Fix health endpoint fallback",
+          authorLogin: "vikram.kangotra",
+          sourceBranch: "fix/health-endpoint-fallback",
+          targetBranch: "main",
+          updatedAt: "2026-08-18T05:05:48Z",
+          draft,
+          reviewState,
+          status,
+        }],
+        fetchedAtUnixMs: 1_787_029_200_000,
+        detail: "GitLab returned the current merge request state.",
+      },
+    });
+
+    render(<LocalWorkspace client={fake.client} />);
+    await user.click(await screen.findByRole("button", {
+      name: "Open Review sre-tools/ppxe-verify !22: Review sre-tools/ppxe-verify !22 details",
+    }));
+
+    const reviewAction = await screen.findByRole("region", {
+      name: "Workspace review action",
+    });
+    expect(within(reviewAction).getByText(label)).toBeVisible();
+    expect(reviewAction).toHaveTextContent(detail);
   });
 
   it("shows an open VS Code session without letting finished WTS history mask live work", async () => {
@@ -2482,7 +2906,7 @@ describe("personal local workspace registry", () => {
     render(<LocalWorkspace client={fake.client} />);
     await user.click(
       await screen.findByRole("button", {
-        name: /Open PLATFORM-42/i,
+        name: /Open PLATFORM-42:/i,
       }),
     );
     await user.click(
@@ -2634,7 +3058,7 @@ describe("personal local workspace registry", () => {
         "repo_checkout",
       ),
     );
-    await user.selectOptions(replacement, "dev-local");
+    fireEvent.change(replacement, { target: { value: "dev-local" } });
     await user.click(screen.getByRole("button", { name: "Revise saved plan" }));
 
     const dialog = await screen.findByRole("dialog", {
@@ -2721,7 +3145,7 @@ describe("personal local workspace registry", () => {
 
     render(<LocalWorkspace client={fake.client} />);
     await user.click(
-      await screen.findByRole("button", { name: /Open PLATFORM-42/i }),
+      await screen.findByRole("button", { name: /Open PLATFORM-42:/i }),
     );
     await screen.findByRole("heading", { name: "Repository requests" });
 
@@ -2821,7 +3245,7 @@ describe("personal local workspace registry", () => {
 
     render(<LocalWorkspace client={fake.client} />);
     await user.click(
-      await screen.findByRole("button", { name: /Open PLATFORM-42/i }),
+      await screen.findByRole("button", { name: /Open PLATFORM-42:/i }),
     );
     await screen.findByRole("button", { name: "Workspace actions" });
 
@@ -2980,11 +3404,11 @@ describe("personal local workspace registry", () => {
       ).toBeGreaterThan(0);
       expect(within(dialog).getByText("VS Code")).toBeVisible();
       if (label === "Jira") {
-        await user.selectOptions(
+        fireEvent.change(
           within(dialog).getByRole("combobox", {
             name: "Repository to add to copied plan",
           }),
-          "catalog_senzu",
+          { target: { value: "catalog_senzu" } },
         );
         await user.click(
           within(dialog).getByRole("button", { name: "Add repository" }),
@@ -3280,7 +3704,7 @@ describe("personal local workspace registry", () => {
 
     render(<LocalWorkspace client={fake.client} />);
     await user.click(
-      await screen.findByRole("button", { name: /Open PLATFORM-42/i }),
+      await screen.findByRole("button", { name: /Open PLATFORM-42:/i }),
     );
     await screen.findByRole("button", { name: "Workspace actions" });
 
@@ -3502,9 +3926,81 @@ describe("personal local workspace registry", () => {
       },
       activity: { changedFileCount: 3, commitsAhead: 2 },
     };
+    const repositories = repositoryCatalogFixture();
+    repositories.repositories.push({
+      id: "repo_web",
+      label: "checkout-web",
+      checkoutLeaf: "checkout-web",
+      displayPath: "~/cd/checkout-web",
+      defaultBranch: {
+        name: "main",
+        fullRef: "refs/heads/main",
+        commitOid: "1123456789abcdef0123456789abcdef01234567",
+      },
+      availableBranches: [{
+        name: "main",
+        fullRef: "refs/heads/main",
+        commitOid: "1123456789abcdef0123456789abcdef01234567",
+        remote: false,
+      }],
+    });
+    const addedMaterialization = {
+      ...materialization,
+      worktrees: [...materialization.worktrees, {
+        repositoryId: "repo_web",
+        label: "checkout-web",
+        targetDisplayPath: `${materialization.workspaceDisplayPath}/checkout-web`,
+        branchName: materialization.branchName,
+        baseCommitOid: "1123456789abcdef0123456789abcdef01234567",
+      }],
+    };
+    const addedView = workspaceFixture({
+      repositories: [...persisted.repositories, {
+        requestId: "repo_web_request",
+        repositoryId: "repo_web",
+        label: "checkout-web",
+        baseRef: "main",
+        worktreeLeaf: "checkout-web",
+      }],
+      lifecycle: {
+        materializationState: "materialized",
+        worktreeCount: 2,
+        observedAtUnixMs: 1_721_776_500_100,
+      },
+    });
     const fake = fakeWorkspaceClient({
       list: workspaceListFixture([persisted]),
+      get: addedView,
+      repositories,
       persistedMaterialization: materialization,
+      repositoryAdditionPreflight: {
+        workspaceId: persisted.workspaceId,
+        repositoryId: "repo_web",
+        repositoryLabel: "checkout-web",
+        baseRef: "main",
+        resolvedBaseRef: "refs/heads/main",
+        baseCommitOid: "1123456789abcdef0123456789abcdef01234567",
+        targetDisplayPath: `${materialization.workspaceDisplayPath}/checkout-web`,
+        branchName: materialization.branchName,
+        effectDigest: `sha256:${"a".repeat(64)}`,
+      },
+      repositoryAddition: {
+        workspaceId: persisted.workspaceId,
+        repositoryId: "repo_web",
+        repositoryLabel: "checkout-web",
+        replayed: false,
+        graphRefreshed: false,
+        graphDetail: "Graph indexing is not configured.",
+        materialization: addedMaterialization,
+      },
+      repositoryRemoval: {
+        workspaceId: persisted.workspaceId,
+        repositoryId: "repo_web",
+        repositoryLabel: "checkout-web",
+        graphRefreshed: false,
+        graphDetail: "Graph indexing is not configured.",
+        materialization,
+      },
       reindex: {
         workspaceId: persisted.workspaceId,
         status: "ready",
@@ -3513,6 +4009,9 @@ describe("personal local workspace registry", () => {
         durationMs: 42,
       },
     });
+    fake.getWorkspace
+      .mockResolvedValueOnce(addedView)
+      .mockResolvedValueOnce(persisted);
     fake.getWorkspaceMaterialization.mockRejectedValueOnce(
       new WorkspaceClientError(
         "The managed worktrees changed since WTS last registered their Git state.",
@@ -3524,7 +4023,7 @@ describe("personal local workspace registry", () => {
 
     render(<LocalWorkspace client={fake.client} />);
     await user.click(
-      await screen.findByRole("button", { name: /Open PLATFORM-42/i }),
+      await screen.findByRole("button", { name: /Open PLATFORM-42:/i }),
     );
 
     expect(
@@ -3565,13 +4064,60 @@ describe("personal local workspace registry", () => {
     ).not.toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Add repositories" }));
-    const revisionDialog = await screen.findByRole("dialog", {
-      name: /Revise /,
+    const addDialog = await screen.findByRole("dialog", {
+      name: "Add repository to PLATFORM-42",
     });
+    const repositoryPicker = within(addDialog).getByRole("combobox", {
+      name: "Repository to add",
+    });
+    expect(repositoryPicker).toHaveValue("checkout-web · main · checkout-web");
+    await user.clear(repositoryPicker);
+    await user.type(repositoryPicker, "checkout-web");
+    await user.click(
+      screen.getByRole("option", { name: /checkout-web · main/i }),
+    );
+    expect(repositoryPicker).toHaveValue("checkout-web · main · checkout-web");
+    expect(screen.queryByRole("dialog", { name: /Revise / })).not.toBeInTheDocument();
+    await user.click(within(addDialog).getByRole("button", { name: "Review repository" }));
+    await waitFor(() => expect(fake.preflightWorkspaceRepositoryAddition).toHaveBeenCalledWith(
+      persisted.workspaceId,
+      "repo_web",
+      "main",
+    ));
+    await user.click(await within(addDialog).findByRole("button", { name: "Add to workspace" }));
+    await waitFor(() => expect(fake.addWorkspaceRepository).toHaveBeenCalledWith(
+      persisted.workspaceId,
+      "repo_web",
+      "main",
+      `sha256:${"a".repeat(64)}`,
+    ));
+    expect(fake.createWorkspace).not.toHaveBeenCalled();
+    expect(await screen.findByText("checkout-web")).toBeVisible();
+
+    await user.click(
+      screen.getByRole("button", {
+        name: "Remove checkout-web from this workspace",
+      }),
+    );
+    const removePrompt = screen.getByRole("alertdialog", {
+      name: "Remove checkout-web from this workspace",
+    });
+    expect(removePrompt).toHaveTextContent("The source checkout and retained branch stay on disk.");
+    await user.click(
+      within(removePrompt).getByRole("button", { name: "Remove repository" }),
+    );
+    await waitFor(() =>
+      expect(fake.removeWorkspaceRepository).toHaveBeenCalledWith(
+        persisted.workspaceId,
+        "repo_web",
+      ),
+    );
     expect(
-      within(revisionDialog).getByRole("region", { name: "Add repositories" }),
-    ).toBeVisible();
-    expect(within(revisionDialog).getAllByText("checkout-api").length).toBeGreaterThan(0);
+      screen.queryByRole("button", {
+        name: "Remove checkout-web from this workspace",
+      }),
+    ).not.toBeInTheDocument();
+    expect(fake.createWorkspace).not.toHaveBeenCalled();
   });
 
   it("opens the current workspace directly from provider and editor buttons", async () => {
@@ -3623,7 +4169,7 @@ describe("personal local workspace registry", () => {
     });
     render(<LocalWorkspace client={fake.client} />);
     await user.click(
-      await screen.findByRole("button", { name: /Open PLATFORM-42/i }),
+      await screen.findByRole("button", { name: /Open PLATFORM-42:/i }),
     );
     await selectWorkspaceAction(user, "Open workspace");
     expect(fake.openWorkspaceCli).toHaveBeenCalledWith(
@@ -3878,7 +4424,9 @@ describe("personal local workspace registry", () => {
     });
 
     render(<LocalWorkspace client={fake.client} />);
-    await user.click(await screen.findByRole("button", { name: /Open PLATFORM-42/i }));
+    await user.click(await screen.findByRole("button", {
+      name: "Open PLATFORM-42: Checkout retries create duplicate captures details",
+    }));
     await user.click(screen.getByRole("button", { name: "Prepare MR" }));
     expect(fake.prepareWorkspaceChangeRequest).toHaveBeenCalledWith(
       persisted.workspaceId,
@@ -3894,6 +4442,172 @@ describe("personal local workspace registry", () => {
       changeRequestDraft.body,
     );
     expect(await screen.findByText("checkout-api · merge request form opened.")).toBeVisible();
+  });
+
+  it("publishes an untracked branch and retries change-request preparation", async () => {
+    const user = userEvent.setup();
+    const persisted = workspaceFixture({
+      repositories: [{
+        requestId: "repo_checkout",
+        repositoryId: "repo_checkout",
+        label: "checkout-api",
+        baseRef: "main",
+        worktreeLeaf: "checkout-api",
+      }],
+      lifecycle: {
+        materializationState: "materialized",
+        worktreeCount: 1,
+        observedAtUnixMs: 1_721_776_500_000,
+      },
+    });
+    const materialization = assistantMaterialization(persisted);
+    materialization.worktrees[0] = {
+      ...materialization.worktrees[0]!,
+      gitState: {
+        headCommitOid: "0123456789abcdef0123456789abcdef01234567",
+        originUrl: "git@gitlab.example.com:acme/checkout-api.git",
+      },
+      activity: { changedFileCount: 0, commitsAhead: 1 },
+    };
+    const draft = {
+      schemaVersion: 1,
+      workspaceId: persisted.workspaceId,
+      repositoryId: "repo_checkout",
+      repositoryLabel: "checkout-api",
+      forge: "gitlab" as const,
+      host: "gitlab.example.com",
+      sourceRemoteName: "origin",
+      sourceBranch: "feat/PLATFORM-7197",
+      sourceHeadCommitOid: "0123456789abcdef0123456789abcdef01234567",
+      targetBranch: "main",
+      commitSubject: "feat: validate admission",
+      proposedBySessionId: "33333333-3333-4333-8333-333333333333",
+      proposedByProvider: "codex" as const,
+      commits: [{
+        commitOid: "0123456789abcdef0123456789abcdef01234567",
+        subject: "feat: validate admission",
+      }],
+      changedFiles: ["src/admission.rs"],
+      worktreeClean: true,
+      remoteMatches: true,
+      title: "PLATFORM-7197: Validate admission",
+      body: "## Summary\n\n- Validate admission",
+      workItems: [],
+      verificationStatus: "passed" as const,
+      verificationSummary: "Checks passed.",
+      effectDigest: `sha256:${"a".repeat(64)}`,
+    };
+    const fake = fakeWorkspaceClient({
+      list: workspaceListFixture([persisted]),
+      persistedMaterialization: materialization,
+      changeRequestDraft: draft,
+      branchPublication: {
+        workspaceId: persisted.workspaceId,
+        repositoryId: "repo_checkout",
+        repositoryLabel: "checkout-api",
+        remoteName: "origin",
+        branchName: "feat/PLATFORM-7197",
+        headCommitOid: draft.sourceHeadCommitOid,
+      },
+    });
+    fake.prepareWorkspaceChangeRequest.mockRejectedValueOnce(
+      new WorkspaceClientError(
+        "Publish this branch and set its upstream before you prepare a change request.",
+        { code: "change_request_branch_not_published", retryable: true },
+      ),
+    );
+
+    render(<LocalWorkspace client={fake.client} />);
+    await user.click(await screen.findByRole("button", {
+      name: "Open PLATFORM-42: Checkout retries create duplicate captures details",
+    }));
+    await user.click(screen.getByRole("button", { name: "Prepare MR" }));
+    expect(await screen.findByRole("button", { name: "Publish branch" })).toBeVisible();
+    const branchName = screen.getByRole("textbox", { name: "Branch name" });
+    expect(branchName).toHaveValue(materialization.worktrees[0]!.branchName);
+    await user.clear(branchName);
+    await user.type(branchName, "feat/PLATFORM-7197");
+
+    await user.click(screen.getByRole("button", { name: "Publish branch" }));
+
+    expect(fake.publishWorkspaceChangeRequestBranch).toHaveBeenCalledWith(
+      persisted.workspaceId,
+      "repo_checkout",
+      "feat/PLATFORM-7197",
+    );
+    expect(fake.prepareWorkspaceChangeRequest).toHaveBeenCalledTimes(2);
+    expect(await screen.findByRole("dialog", { name: /Prepare merge request/ })).toBeVisible();
+    expect(screen.getByText("checkout-api · branch published.")).toBeVisible();
+  });
+
+  it("starts an agent when the current commit has no change-request proposal", async () => {
+    const user = userEvent.setup();
+    const persisted = workspaceFixture({
+      repositories: [{
+        requestId: "repo_checkout",
+        repositoryId: "repo_checkout",
+        label: "checkout-api",
+        baseRef: "main",
+        worktreeLeaf: "checkout-api",
+      }],
+      lifecycle: {
+        materializationState: "materialized",
+        worktreeCount: 1,
+        observedAtUnixMs: 1_721_776_500_000,
+      },
+    });
+    const materialization = assistantMaterialization(persisted);
+    materialization.worktrees[0] = {
+      ...materialization.worktrees[0]!,
+      gitState: {
+        headCommitOid: "0123456789abcdef0123456789abcdef01234567",
+        originUrl: "git@gitlab.example.com:acme/checkout-api.git",
+        upstreamFullRef: "refs/remotes/origin/feat/PLATFORM-7197",
+      },
+      activity: { changedFileCount: 0, commitsAhead: 1 },
+    };
+    const fake = fakeWorkspaceClient({
+      list: workspaceListFixture([persisted]),
+      persistedMaterialization: materialization,
+    });
+    fake.prepareWorkspaceChangeRequest.mockRejectedValue(
+      new WorkspaceClientError(
+        "No agent session prepared a change request for this repository commit. Select Ask agent to prepare.",
+        { code: "change_request_agent_proposal_unavailable", retryable: true },
+      ),
+    );
+    fake.launchAgentSession.mockResolvedValue({
+      schemaVersion: 1,
+      sessionId: "99999999-9999-4999-8999-999999999999",
+      workspaceId: persisted.workspaceId,
+      provider: "codex",
+      terminal: "terminal",
+      category: "review",
+      status: "launching",
+      startedAtUnixMs: 1_721_776_500_000,
+      lastHeartbeatAtUnixMs: 1_721_776_500_000,
+      endedAtUnixMs: null,
+      failure: null,
+    });
+
+    render(<LocalWorkspace client={fake.client} />);
+    await user.click(await screen.findByRole("button", {
+      name: "Open PLATFORM-42: Checkout retries create duplicate captures details",
+    }));
+    await user.click(screen.getByRole("button", { name: "Prepare MR" }));
+    await user.click(await screen.findByRole("button", { name: "Ask agent to prepare" }));
+
+    expect(fake.launchAgentSession).toHaveBeenCalledWith(
+      persisted.workspaceId,
+      expect.objectContaining({
+        provider: "codex",
+        category: "review",
+        prompt: expect.stringContaining("WTS_CHANGE_REQUEST_PROPOSAL"),
+      }),
+    );
+    expect(await screen.findByText(
+      "checkout-api · Codex started. Prepare the change request again after the agent finishes.",
+    )).toBeVisible();
   });
 
   it("shows matching GitLab merge requests and uses the trusted open action", async () => {
@@ -3933,6 +4647,7 @@ describe("personal local workspace registry", () => {
             id: "mr-42",
             repositoryId: "repo_senzu",
             projectPath: "acme/senzu",
+            webUrl: "https://gitlab.example.com/acme/senzu/-/merge_requests/42",
             iid: 42,
             title: "Validate admission",
             authorUsername: "octocat",
@@ -3941,12 +4656,13 @@ describe("personal local workspace registry", () => {
             targetBranch: "develop",
             updatedAt: "2026-08-14T08:15:00Z",
             draft: false,
-            status: "open",
+            status: "merged",
           },
           {
             id: "mr-43",
             repositoryId: "repo_senzu",
             projectPath: "acme/senzu",
+            webUrl: "https://gitlab.example.com/acme/senzu/-/merge_requests/43",
             iid: 43,
             title: "Follow-up draft",
             authorUsername: "octocat",
@@ -3968,14 +4684,18 @@ describe("personal local workspace registry", () => {
     });
 
     render(<LocalWorkspace client={fake.client} />);
-    await user.click(await screen.findByRole("button", { name: /Open PLATFORM-42/i }));
+    await user.click(await screen.findByRole("button", { name: /Open PLATFORM-42:/i }));
 
-    const current = await screen.findByRole("button", {
+    const current = await screen.findByRole("link", {
       name: /Open senzu merge request !42 on GitLab: Validate admission/i,
     });
-    expect(current).toHaveTextContent("MR !42 · Open · New local work");
+    expect(current).toHaveAttribute(
+      "href",
+      "https://gitlab.example.com/acme/senzu/-/merge_requests/42",
+    );
+    expect(current).toHaveTextContent("MR !42 · Merged · New local work");
     expect(
-      screen.getByRole("button", {
+      screen.getByRole("link", {
         name: /Open senzu merge request !43 on GitLab: Follow-up draft/i,
       }),
     ).toHaveTextContent("Draft MR !43 · Open");
@@ -4027,7 +4747,7 @@ describe("personal local workspace registry", () => {
     });
 
     render(<LocalWorkspace client={fake.client} />);
-    await user.click(await screen.findByRole("button", { name: /Open PLATFORM-42/i }));
+    await user.click(await screen.findByRole("button", { name: /Open PLATFORM-42:/i }));
     await waitFor(() => expect(fake.getGitlabMergeRequests).toHaveBeenCalled());
     expect(screen.getByText("Clean")).toBeVisible();
     expect(screen.queryByRole("button", { name: "Prepare MR" })).not.toBeInTheDocument();
@@ -4091,7 +4811,7 @@ describe("personal local workspace registry", () => {
       },
     });
     render(<LocalWorkspace client={fake.client} />);
-    await user.click(await screen.findByRole("button", { name: /Open PLATFORM-42/i }));
+    await user.click(await screen.findByRole("button", { name: /Open PLATFORM-42:/i }));
     await waitFor(() => expect(fake.getGitlabMergeRequests).toHaveBeenCalled());
     expect(screen.queryByRole("button", { name: "Prepare MR" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Sign in/i })).not.toBeInTheDocument();
@@ -4227,7 +4947,7 @@ describe("personal local workspace registry", () => {
 
     render(<LocalWorkspace client={fake.client} />);
     await user.click(
-      await screen.findByRole("button", { name: /Open PLATFORM-42/i }),
+      await screen.findByRole("button", { name: /Open PLATFORM-42:/i }),
     );
     await user.click(
       screen.getByRole("button", {
@@ -4306,7 +5026,7 @@ describe("personal local workspace registry", () => {
 
     render(<LocalWorkspace client={fake.client} />);
     await user.click(
-      await screen.findByRole("button", { name: /Open PLATFORM-42/i }),
+      await screen.findByRole("button", { name: /Open PLATFORM-42:/i }),
     );
     await user.click(
       screen.getByRole("button", {
@@ -4358,7 +5078,7 @@ describe("personal local workspace registry", () => {
 
     render(<LocalWorkspace client={fake.client} />);
     await user.click(
-      await screen.findByRole("button", { name: /Open PLATFORM-42/i }),
+      await screen.findByRole("button", { name: /Open PLATFORM-42:/i }),
     );
 
     expect(
@@ -4457,7 +5177,7 @@ describe("personal local workspace registry", () => {
 
     render(<LocalWorkspace client={fake.client} />);
     await user.click(
-      await screen.findByRole("button", { name: /Open PLATFORM-42/i }),
+      await screen.findByRole("button", { name: /Open PLATFORM-42:/i }),
     );
     await user.click(
       screen.getByRole("button", { name: "Sync senzu with upstream develop" }),
@@ -4515,7 +5235,7 @@ describe("personal local workspace registry", () => {
 
     render(<LocalWorkspace client={fake.client} />);
     await user.click(
-      await screen.findByRole("button", { name: /Open PLATFORM-42/i }),
+      await screen.findByRole("button", { name: /Open PLATFORM-42:/i }),
     );
     await screen.findByRole("button", { name: "Workspace actions" });
     await selectWorkspaceAction(user, "Open with…");
@@ -4598,7 +5318,7 @@ describe("personal local workspace registry", () => {
 
     render(<LocalWorkspace client={fake.client} />);
     await user.click(
-      await screen.findByRole("button", { name: /Open PLATFORM-42/i }),
+      await screen.findByRole("button", { name: /Open PLATFORM-42:/i }),
     );
     await selectWorkspaceAction(user, "Open with…");
     const panel = await screen.findByRole("dialog", {
@@ -4662,7 +5382,7 @@ describe("personal local workspace registry", () => {
 
     render(<LocalWorkspace client={fake.client} />);
     await user.click(
-      await screen.findByRole("button", { name: /Open PLATFORM-42/i }),
+      await screen.findByRole("button", { name: /Open PLATFORM-42:/i }),
     );
     await screen.findByRole("button", { name: "Workspace actions" });
     expect(screen.queryByRole("tab", { name: "CLI" })).not.toBeInTheDocument();
@@ -4707,7 +5427,7 @@ describe("personal local workspace registry", () => {
 
     render(<LocalWorkspace client={fake.client} />);
     await user.click(
-      await screen.findByRole("button", { name: /Open PLATFORM-42/i }),
+      await screen.findByRole("button", { name: /Open PLATFORM-42:/i }),
     );
     await user.click(screen.getByRole("button", { name: "Workspace actions" }));
     await user.click(
@@ -4770,7 +5490,7 @@ describe("personal local workspace registry", () => {
 
     render(<LocalWorkspace client={fake.client} />);
     await user.click(
-      await screen.findByRole("button", { name: /Open PLATFORM-42/i }),
+      await screen.findByRole("button", { name: /Open PLATFORM-42:/i }),
     );
     await user.click(
       await screen.findByRole("button", { name: "Review setup" }),
@@ -4879,7 +5599,7 @@ describe("personal local workspace registry", () => {
       screen.getByRole("button", { name: /All workspaces/i }),
     );
     await user.click(screen.getByRole("menuitem", { name: /Review/i }));
-    expect(screen.getAllByRole("button", { name: /Open LOAD-/i })).toHaveLength(
+    expect(screen.getAllByRole("button", { name: /Open LOAD-\d+: /i })).toHaveLength(
       15,
     );
 
@@ -4998,7 +5718,7 @@ describe("personal local workspace registry", () => {
 
     render(<LocalWorkspace client={fake.client} />);
     await user.click(
-      await screen.findByRole("button", { name: /Open PLATFORM-42/i }),
+      await screen.findByRole("button", { name: /Open PLATFORM-42:/i }),
     );
 
     const refresh = await screen.findByRole("status", {
@@ -5036,13 +5756,13 @@ describe("personal local workspace registry", () => {
 
     render(<LocalWorkspace client={fake.client} />);
     await user.click(
-      await screen.findByRole("button", { name: /Open PLATFORM-42/i }),
+      await screen.findByRole("button", { name: /Open PLATFORM-42:/i }),
     );
     await screen.findByRole("button", { name: "Workspace actions" });
 
     await user.click(screen.getByRole("button", { name: "Open Spaces" }));
     await user.click(
-      await screen.findByRole("button", { name: /Open PLATFORM-42/i }),
+      await screen.findByRole("button", { name: /Open PLATFORM-42:/i }),
     );
 
     expect(screen.getByLabelText("Workspace facts")).toBeVisible();
@@ -5440,7 +6160,7 @@ describe("personal local workspace registry", () => {
       name: "Repository to add",
     });
     await waitFor(() => expect(repositoryPicker).toBeEnabled());
-    await user.selectOptions(repositoryPicker, "repo_checkout");
+    fireEvent.change(repositoryPicker, { target: { value: "repo_checkout" } });
     await user.click(
       within(dialog).getByRole("button", { name: "Add repository" }),
     );
@@ -5596,7 +6316,7 @@ describe("personal local workspace registry", () => {
     const remotePicker = within(dialog).getByRole("combobox", {
       name: "Select local remote for PLATFORM-42",
     });
-    await user.selectOptions(remotePicker, localRepository.id);
+    fireEvent.change(remotePicker, { target: { value: localRepository.id } });
 
     expect(await within(dialog).findByText("Base main")).toBeVisible();
     expect(
@@ -5705,13 +6425,13 @@ describe("personal local workspace registry", () => {
         name: /Create a starter kit/i,
       }),
     );
-    await user.selectOptions(
+    fireEvent.change(
       within(dialog).getByRole("combobox", { name: "Planning folder" }),
-      "plans",
+      { target: { value: "plans" } },
     );
-    await user.selectOptions(
+    fireEvent.change(
       within(dialog).getByRole("combobox", { name: "Planning starter" }),
-      "notes",
+      { target: { value: "notes" } },
     );
     expect(within(dialog).getByText(/plans\/ · notes kit/i)).toBeVisible();
 
@@ -5774,7 +6494,7 @@ describe("personal local workspace registry", () => {
       name: "Repository to add",
     });
     await waitFor(() => expect(repositoryPicker).toBeEnabled());
-    await user.selectOptions(repositoryPicker, "repo_checkout");
+    fireEvent.change(repositoryPicker, { target: { value: "repo_checkout" } });
     await user.click(
       within(dialog).getByRole("button", { name: "Add repository" }),
     );
@@ -5819,9 +6539,9 @@ describe("personal local workspace registry", () => {
     await user.click(
       within(dialog).getByRole("radio", { name: /^Repositories/i }),
     );
-    await user.selectOptions(
+    fireEvent.change(
       within(dialog).getByRole("combobox", { name: "Repository to add" }),
-      "repo_checkout",
+      { target: { value: "repo_checkout" } },
     );
     await user.click(
       within(dialog).getByRole("button", { name: "Add repository" }),
@@ -5835,7 +6555,7 @@ describe("personal local workspace registry", () => {
     const baseBranch = within(dialog).getByRole("combobox", {
       name: "Base branch for checkout-api [repo_checkout]",
     });
-    await user.selectOptions(baseBranch, "release/2026.07");
+    fireEvent.change(baseBranch, { target: { value: "release/2026.07" } });
     expect(baseBranch).toHaveValue("release/2026.07");
 
     await user.click(within(dialog).getByRole("button", { name: "Source" }));
@@ -6020,11 +6740,11 @@ describe("personal local workspace registry", () => {
       within(dialog).getByRole("button", { name: /Review plan/i }),
     ).toBeDisabled();
     await user.type(portInput, "4100");
-    await user.selectOptions(
+    fireEvent.change(
       within(dialog).getByRole("combobox", {
         name: "Port allocation policy for Checkout API http",
       }),
-      "fixed",
+      { target: { value: "fixed" } },
     );
 
     await user.click(within(dialog).getByRole("button", { name: /^Back$/i }));
@@ -6293,11 +7013,11 @@ describe("personal local workspace registry", () => {
     await user.click(
       within(dialog).getByRole("radio", { name: /^Saved WTS plan/i }),
     );
-    await user.selectOptions(
+    fireEvent.change(
       within(dialog).getByRole("combobox", {
         name: "Saved plan to copy",
       }),
-      source.workspaceId,
+      { target: { value: source.workspaceId } },
     );
     await user.click(
       within(dialog).getByRole("button", {
@@ -6538,11 +7258,11 @@ describe("personal local workspace registry", () => {
     ).toBeVisible();
     expect(fileInput).toHaveValue("");
 
-    await user.selectOptions(
+    fireEvent.change(
       within(dialog).getByRole("combobox", {
         name: "Add local repository folder",
       }),
-      "repo_runbooks",
+      { target: { value: "repo_runbooks" } },
     );
     await user.click(
       within(dialog).getByRole("button", { name: "Add folder" }),
@@ -6880,7 +7600,7 @@ describe("personal local workspace registry", () => {
     const branch = within(dialog).getByRole("combobox", {
       name: "Base branch for new-api [repo_new_api]",
     });
-    await user.selectOptions(branch, "develop");
+    fireEvent.change(branch, { target: { value: "develop" } });
     expect(branch).toHaveValue("develop");
 
     await user.click(within(dialog).getByRole("button", { name: "Back" }));
@@ -7067,7 +7787,7 @@ describe("personal local workspace registry", () => {
     expect(
       within(baseSelect).queryByRole("option", { name: /^main/ }),
     ).not.toBeInTheDocument();
-    await user.selectOptions(baseSelect, "release/2026.07");
+    fireEvent.change(baseSelect, { target: { value: "release/2026.07" } });
     const openBase = within(dialog).getByRole("button", {
       name: "Open checkout-api base release/2026.07 on GitLab (gitlab.example.test) in browser",
     });
@@ -7611,7 +8331,7 @@ describe("personal local workspace registry", () => {
     });
     expect(baseTeamA).toHaveValue("main");
     expect(baseTeamB).toHaveValue("develop");
-    await user.selectOptions(baseTeamA, "release/2026.07");
+    fireEvent.change(baseTeamA, { target: { value: "release/2026.07" } });
     expect(baseTeamA).toHaveValue("release/2026.07");
     expect(baseTeamB).toHaveValue("develop");
 
@@ -9281,7 +10001,7 @@ describe("personal local workspace registry", () => {
       fireEvent.wheel(screen.getByTestId("code-review-surface"), {
         clientX: window.innerWidth / 2,
         deltaX: -240,
-        deltaY: 180,
+        deltaY: 0,
       });
 
       expect(back).not.toHaveBeenCalled();
@@ -9304,7 +10024,7 @@ describe("personal local workspace registry", () => {
     try {
       render(<LocalWorkspace client={fake.client} />);
       await user.click(
-        await screen.findByRole("button", { name: /Open PLATFORM-42/i }),
+        await screen.findByRole("button", { name: /Open PLATFORM-42:/i }),
       );
 
       expect(globalThis.location.pathname).toBe(
@@ -9443,7 +10163,7 @@ describe("personal local workspace registry", () => {
 
     render(<LocalWorkspace client={fake.client} />);
     await user.click(
-      await screen.findByRole("button", { name: /Open PLATFORM-42/i }),
+      await screen.findByRole("button", { name: /Open PLATFORM-42:/i }),
     );
     await selectWorkspaceView(user, "Verification");
 
@@ -9517,7 +10237,7 @@ describe("personal local workspace registry", () => {
 
     render(<LocalWorkspace client={fake.client} />);
     await user.click(
-      await screen.findByRole("button", { name: /Open PLATFORM-42/i }),
+      await screen.findByRole("button", { name: /Open PLATFORM-42:/i }),
     );
     await selectWorkspaceView(user, "Verification");
 
@@ -9575,7 +10295,7 @@ describe("personal local workspace registry", () => {
 
     render(<LocalWorkspace client={fake.client} />);
     await user.click(
-      await screen.findByRole("button", { name: /Open PLATFORM-42/i }),
+      await screen.findByRole("button", { name: /Open PLATFORM-42:/i }),
     );
     await selectWorkspaceView(user, "Verification");
     await user.click(

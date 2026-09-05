@@ -453,6 +453,46 @@ const repositoryAlignmentResult = {
   materialization: repositorySyncResult.materialization,
 };
 
+const repositoryAdditionPreflight = {
+  workspaceId: workspace.workspaceId,
+  repositoryId: "repo_web",
+  repositoryLabel: "checkout-web",
+  baseRef: "main",
+  resolvedBaseRef: "refs/heads/main",
+  baseCommitOid: "718063770fb21d18f5fe92aac26da4ce18f52f48",
+  targetDisplayPath: `${workspace.workspaceDisplayPath}/checkout-web`,
+  branchName: preflight.branchName,
+  effectDigest: `sha256:${"b".repeat(64)}`,
+};
+
+const repositoryAdditionResult = {
+  workspaceId: workspace.workspaceId,
+  repositoryId: "repo_web",
+  repositoryLabel: "checkout-web",
+  replayed: false,
+  graphRefreshed: false,
+  graphDetail: "Re-index the workspace graph.",
+  materialization: {
+    ...materializeResult.materialization,
+    worktrees: [...materializeResult.materialization.worktrees, {
+      repositoryId: "repo_web",
+      label: "checkout-web",
+      targetDisplayPath: repositoryAdditionPreflight.targetDisplayPath,
+      branchName: repositoryAdditionPreflight.branchName,
+      baseCommitOid: repositoryAdditionPreflight.baseCommitOid,
+    }],
+  },
+};
+
+const repositoryRemovalResult = {
+  workspaceId: workspace.workspaceId,
+  repositoryId: "repo_web",
+  repositoryLabel: "checkout-web",
+  graphRefreshed: false,
+  graphDetail: "Re-index the workspace graph.",
+  materialization: materializeResult.materialization,
+};
+
 const repositoryBaseOpenResult = {
   repositoryId: "repo_checkout",
   forge: "github" as const,
@@ -493,6 +533,15 @@ const changeRequestDraft = {
   verificationStatus: "passed" as const,
   verificationSummary: "8 verification checks passed",
   effectDigest: `sha256:${"a".repeat(64)}`,
+};
+
+const branchPublication = {
+  workspaceId: workspace.workspaceId,
+  repositoryId: "repo_checkout",
+  repositoryLabel: "checkout-api",
+  remoteName: "origin",
+  branchName: "feat/PLATFORM-7197",
+  headCommitOid: "0123456789abcdef0123456789abcdef01234567",
 };
 
 const changeRequestOpenResult = {
@@ -1662,6 +1711,50 @@ describe("HTTP workspace client", () => {
     });
   });
 
+  it("reviews and adds a repository through the current workspace HTTP routes", async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(jsonResponse({ sessionToken: "session-123" }))
+      .mockResolvedValueOnce(jsonResponse(repositoryAdditionPreflight))
+      .mockResolvedValueOnce(jsonResponse(repositoryAdditionResult))
+      .mockResolvedValueOnce(jsonResponse(repositoryRemovalResult));
+    const client = createWorkspaceClient({ runtime: "http", fetch: fetchMock });
+
+    await client.preflightWorkspaceRepositoryAddition(workspace.workspaceId, "repo_web", "main");
+    await client.addWorkspaceRepository(
+      workspace.workspaceId,
+      "repo_web",
+      "main",
+      repositoryAdditionPreflight.effectDigest,
+    );
+    await expect(
+      client.removeWorkspaceRepository(workspace.workspaceId, "repo_web"),
+    ).resolves.toEqual(repositoryRemovalResult);
+
+    expect(fetchMock.mock.calls[1]?.[0]).toBe(
+      `/api/v1/workspaces/${workspace.workspaceId}/repositories/addition-preflight`,
+    );
+    expect(fetchMock.mock.calls[1]?.[1]).toMatchObject({
+      method: "POST",
+      body: JSON.stringify({ repositoryId: "repo_web", baseRef: "main" }),
+    });
+    expect(fetchMock.mock.calls[2]?.[0]).toBe(
+      `/api/v1/workspaces/${workspace.workspaceId}/repositories`,
+    );
+    expect(fetchMock.mock.calls[2]?.[1]).toMatchObject({
+      method: "POST",
+      body: JSON.stringify({
+        repositoryId: "repo_web",
+        baseRef: "main",
+        effectDigest: repositoryAdditionPreflight.effectDigest,
+      }),
+    });
+    expect(fetchMock.mock.calls[3]?.[0]).toBe(
+      `/api/v1/workspaces/${workspace.workspaceId}/repositories/repo_web`,
+    );
+    expect(fetchMock.mock.calls[3]?.[1]).toMatchObject({ method: "DELETE" });
+  });
+
   it("rejects a contradictory removal preview before enabling removal", async () => {
     const fetchMock = vi
       .fn<typeof fetch>()
@@ -2524,6 +2617,29 @@ describe("HTTP workspace client", () => {
       effectDigest: changeRequestDraft.effectDigest,
       title: changeRequestDraft.title,
       body: changeRequestDraft.body,
+    });
+  });
+
+  it("publishes a change-request branch through the fixed HTTP route", async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(jsonResponse({ sessionToken: "session-123" }))
+      .mockResolvedValueOnce(jsonResponse(branchPublication));
+    const client = createWorkspaceClient({ runtime: "http", fetch: fetchMock });
+
+    await expect(
+      client.publishWorkspaceChangeRequestBranch(
+        workspace.workspaceId,
+        " repo_checkout ",
+        "feat/custom-name",
+      ),
+    ).resolves.toEqual(branchPublication);
+    expect(fetchMock.mock.calls[1]?.[0]).toBe(
+      `/api/v1/workspaces/${workspace.workspaceId}/change-requests/publish-branch`,
+    );
+    expect(JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body))).toEqual({
+      repositoryId: "repo_checkout",
+      branchName: "feat/custom-name",
     });
   });
 
@@ -3579,6 +3695,43 @@ describe("Tauri workspace client", () => {
     );
   });
 
+  it("reviews and adds a repository with exact Tauri commands", async () => {
+    const invokeMock = vi
+      .fn()
+      .mockResolvedValueOnce(repositoryAdditionPreflight)
+      .mockResolvedValueOnce(repositoryAdditionResult)
+      .mockResolvedValueOnce(repositoryRemovalResult);
+    const client = createWorkspaceClient({
+      runtime: "tauri",
+      invoke: invokeMock as unknown as NonNullable<WorkspaceClientOptions["invoke"]>,
+    });
+
+    await client.preflightWorkspaceRepositoryAddition(workspace.workspaceId, "repo_web", "main");
+    await client.addWorkspaceRepository(
+      workspace.workspaceId,
+      "repo_web",
+      "main",
+      repositoryAdditionPreflight.effectDigest,
+    );
+    await expect(
+      client.removeWorkspaceRepository(workspace.workspaceId, "repo_web"),
+    ).resolves.toEqual(repositoryRemovalResult);
+
+    expect(invokeMock).toHaveBeenNthCalledWith(1, "preflight_workspace_repository_addition", {
+      workspaceId: workspace.workspaceId,
+      request: { repositoryId: "repo_web", baseRef: "main" },
+    });
+    expect(invokeMock).toHaveBeenNthCalledWith(2, "add_workspace_repository", {
+      workspaceId: workspace.workspaceId,
+      request: { repositoryId: "repo_web", baseRef: "main" },
+      effectDigest: repositoryAdditionPreflight.effectDigest,
+    });
+    expect(invokeMock).toHaveBeenNthCalledWith(3, "remove_workspace_repository", {
+      workspaceId: workspace.workspaceId,
+      repositoryId: "repo_web",
+    });
+  });
+
   it("recognizes the Tauri 2 runtime marker without an HTTP fallback", async () => {
     vi.stubGlobal("isTauri", true);
     const invokeMock = vi.fn(async (command: string): Promise<unknown> => {
@@ -3700,6 +3853,32 @@ describe("Tauri workspace client", () => {
       baseRef: "main",
     });
     expect(invokeMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("publishes a change-request branch with the exact Tauri command", async () => {
+    const invokeMock = vi.fn(async (): Promise<unknown> => branchPublication);
+    const client = createWorkspaceClient({
+      runtime: "tauri",
+      invoke: invokeMock as unknown as NonNullable<WorkspaceClientOptions["invoke"]>,
+    });
+
+    await expect(
+      client.publishWorkspaceChangeRequestBranch(
+        workspace.workspaceId,
+        " repo_checkout ",
+        "feat/custom-name",
+      ),
+    ).resolves.toEqual(branchPublication);
+    expect(invokeMock).toHaveBeenCalledWith(
+      "publish_workspace_change_request_branch",
+      {
+        workspaceId: workspace.workspaceId,
+        request: {
+          repositoryId: "repo_checkout",
+          branchName: "feat/custom-name",
+        },
+      },
+    );
   });
 
   it("uses the exact command names and camelCase argument shape", async () => {
@@ -4410,8 +4589,9 @@ describe("Tauri workspace client", () => {
     });
   });
 
-  it("uses HTTP workflow and fixed planning-document routes", async () => {
+  it("uses HTTP workflow and opaque generated planning-document routes", async () => {
     const digest = `sha256:${"a".repeat(64)}`;
+    const generatedId = `generated-${"c".repeat(64)}` as const;
     const fetchMock = vi
       .fn<typeof fetch>()
       .mockResolvedValueOnce(jsonResponse({ sessionToken: "session-123" }))
@@ -4421,24 +4601,24 @@ describe("Tauri workspace client", () => {
       .mockResolvedValueOnce(
         jsonResponse({
           workspaceId: workspace.workspaceId,
-          documents: [{ documentId: "plan", fileName: "PLAN.md" }],
+          documents: [{ documentId: generatedId, fileName: "evidence.csv" }],
         }),
       )
       .mockResolvedValueOnce(
         jsonResponse({
           workspaceId: workspace.workspaceId,
-          documentId: "plan",
-          fileName: "PLAN.md",
-          contents: "# Plan\n",
+          documentId: generatedId,
+          fileName: "evidence.csv",
+          contents: "host,status\nnode-1,failed\n",
           sha256: digest,
         }),
       )
       .mockResolvedValueOnce(
         jsonResponse({
           workspaceId: workspace.workspaceId,
-          documentId: "plan",
-          fileName: "PLAN.md",
-          contents: "# Reviewed\n",
+          documentId: generatedId,
+          fileName: "evidence.csv",
+          contents: "host,status\nnode-1,passed\n",
           sha256: `sha256:${"b".repeat(64)}`,
         }),
       );
@@ -4449,18 +4629,18 @@ describe("Tauri workspace client", () => {
     ).resolves.toMatchObject({ state: "review", revision: 2 });
     await expect(
       client.listWorkspacePlanningDocuments(workspace.workspaceId),
-    ).resolves.toMatchObject({ documents: [{ documentId: "plan" }] });
+    ).resolves.toMatchObject({ documents: [{ documentId: generatedId }] });
     await expect(
-      client.readWorkspacePlanningDocument(workspace.workspaceId, "plan"),
-    ).resolves.toMatchObject({ contents: "# Plan\n", sha256: digest });
+      client.readWorkspacePlanningDocument(workspace.workspaceId, generatedId),
+    ).resolves.toMatchObject({ contents: "host,status\nnode-1,failed\n", sha256: digest });
     await expect(
       client.updateWorkspacePlanningDocument(
         workspace.workspaceId,
-        "plan",
+        generatedId,
         digest,
-        "# Reviewed\n",
+        "host,status\nnode-1,passed\n",
       ),
-    ).resolves.toMatchObject({ contents: "# Reviewed\n" });
+    ).resolves.toMatchObject({ contents: "host,status\nnode-1,passed\n" });
 
     expect(fetchMock.mock.calls[1]?.[0]).toBe(
       `/api/v1/workspaces/${workspace.workspaceId}/workflow`,
@@ -4469,14 +4649,14 @@ describe("Tauri workspace client", () => {
       `/api/v1/workspaces/${workspace.workspaceId}/planning/documents`,
     );
     expect(fetchMock.mock.calls[3]?.[0]).toBe(
-      `/api/v1/workspaces/${workspace.workspaceId}/planning/documents/plan`,
+      `/api/v1/workspaces/${workspace.workspaceId}/planning/documents/${generatedId}`,
     );
     expect(fetchMock.mock.calls[4]?.[0]).toBe(
-      `/api/v1/workspaces/${workspace.workspaceId}/planning/documents/plan`,
+      `/api/v1/workspaces/${workspace.workspaceId}/planning/documents/${generatedId}`,
     );
     expect(JSON.parse(String(fetchMock.mock.calls[4]?.[1]?.body))).toEqual({
       expectedSha256: digest,
-      contents: "# Reviewed\n",
+      contents: "host,status\nnode-1,passed\n",
     });
   });
 

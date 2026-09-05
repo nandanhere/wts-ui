@@ -125,6 +125,17 @@ pub struct WorkspaceRepositoryRequest {
     pub base_ref: String,
 }
 
+/// Select one catalog-owned repository for an existing workspace.
+///
+/// The application resolves the opaque repository identity to a trusted local
+/// path. The request never carries a filesystem path.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AddWorkspaceRepositoryRequest {
+    pub repository_id: String,
+    pub base_ref: String,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum RuntimePortPolicy {

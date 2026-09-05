@@ -8,10 +8,11 @@ The user does not need to know a React component name or a source file.
 1. Press `Command+Shift+L` on macOS.
 2. Press `Ctrl+Shift+L` on Windows or Linux.
 3. Hover over the region that needs a change.
-4. Read or say the visible label, such as `Spaces toolbar`.
-5. Press `Escape` to close callout mode.
+4. Read the region name and its stable ID.
+5. Say the region name or ID, such as `Spaces toolbar` or `spaces.toolbar`.
+6. Press `Escape` to close callout mode.
 
-The label remains visible for 1.2 seconds after the pointer leaves the region.
+The region name and ID remain visible for 1.2 seconds after the pointer leaves.
 This delay gives the user time to start a voice message.
 
 Callout mode uses pointer coordinates to select the deepest annotated region.
@@ -34,6 +35,9 @@ Do not change this ID during a visual refactor.
 `data-ui-label` is the spoken label. Use short natural words that are easy to
 say and transcribe. Use sentence case. Do not show implementation terms in the
 label.
+
+Callout mode shows the spoken label and the stable machine ID. The label helps
+with voice feedback. The ID provides an exact source reference.
 
 Each rendered screen must use each machine ID and spoken label only once.
 Annotate meaningful regions, not layout wrappers or decorative elements.

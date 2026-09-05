@@ -8,7 +8,7 @@ import {
 } from "./wtsClient";
 
 describe("GitLab merge request transport contract", () => {
-  it("normalizes the exact workspace inbox shape without a provider URL", () => {
+  it("normalizes a trusted GitLab URL for a direct merge-request link", () => {
     expect(
       normalizeGitlabMergeRequestInbox({
         schemaVersion: 1,
@@ -18,6 +18,7 @@ describe("GitLab merge request transport contract", () => {
             id: "gid://gitlab/MergeRequest/42",
             repositoryId: "repo_senzu",
             projectPath: "acme/senzu",
+            webUrl: "https://gitlab.example.com/acme/senzu/-/merge_requests/42",
             iid: 42,
             title: "Validate admission",
             authorUsername: "octocat",
@@ -35,7 +36,12 @@ describe("GitLab merge request transport contract", () => {
       }),
     ).toMatchObject({
       state: "stale",
-      mergeRequests: [{ repositoryId: "repo_senzu", iid: 42, status: "merged" }],
+      mergeRequests: [{
+        repositoryId: "repo_senzu",
+        iid: 42,
+        status: "merged",
+        webUrl: "https://gitlab.example.com/acme/senzu/-/merge_requests/42",
+      }],
       diagnosticCode: "providerTimedOut",
     });
   });
@@ -55,7 +61,7 @@ describe("GitLab merge request transport contract", () => {
     );
   });
 
-  it("rejects provider URLs and unknown fields", () => {
+  it("rejects unsafe provider URLs and unknown fields", () => {
     expect(() =>
       normalizeGitlabMergeRequestInbox({
         schemaVersion: 1,
@@ -64,6 +70,7 @@ describe("GitLab merge request transport contract", () => {
           id: "mr-42",
           repositoryId: "repo_senzu",
           projectPath: "acme/senzu",
+          webUrl: "javascript:alert(1)",
           iid: 42,
           title: "Validate admission",
           authorUsername: "octocat",
@@ -72,7 +79,7 @@ describe("GitLab merge request transport contract", () => {
           updatedAt: "2026-08-14T08:15:00Z",
           draft: false,
           status: "open",
-          webUrl: "https://gitlab.example.com/acme/senzu/-/merge_requests/42",
+          unexpected: true,
         }],
         fetchedAtUnixMs: 1_776_153_300_000,
         detail: "Current merge requests.",
@@ -85,6 +92,7 @@ describe("GitLab merge request transport contract", () => {
       id: "mr-42",
       repositoryId: "repo_senzu",
       projectPath: "acme/senzu",
+      webUrl: "https://gitlab.example.com/acme/senzu/-/merge_requests/42",
       iid: 42,
       title: "Validate admission",
       authorUsername: "octocat",
