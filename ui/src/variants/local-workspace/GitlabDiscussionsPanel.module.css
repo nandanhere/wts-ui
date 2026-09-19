@@ -1,0 +1,452 @@
+.panel {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--wts-ink);
+  background: var(--wts-surface);
+}
+
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 24px;
+  border-bottom: 1px solid var(--wts-line);
+}
+
+.summary {
+  margin-right: auto;
+  min-width: 0;
+}
+
+.summary .freshness {
+  min-height: 18px;
+  max-width: 300px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--wts-faint);
+}
+
+.summary h3,
+.summary p,
+.threadHeading h4 {
+  margin: 0;
+}
+
+.summary h3 {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.summary p {
+  color: var(--wts-muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.toolbar label {
+  min-width: 0;
+}
+
+.toolbar [data-select-trigger] {
+  max-width: 260px;
+}
+
+.panel button {
+  cursor: pointer;
+  color: var(--wts-ink);
+  background: var(--wts-surface);
+  border: 1px solid var(--wts-line-strong);
+  border-radius: var(--wts-radius-sm);
+  font: 600 12px/1.4 var(--wts-font-sans);
+  padding: 6px 10px;
+  transition: background var(--wts-motion-fast, 150ms) ease-out, color var(--wts-motion-fast, 150ms) ease-out;
+}
+
+.panel .refresh {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: transparent;
+  border-color: transparent;
+}
+
+.refresh > span { display: flex; }
+.refresh > span[data-pending] { color: var(--wts-blue); }
+
+.panel button:hover:not(:disabled) {
+  background: var(--wts-surface-hover);
+}
+
+.panel button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.panel button:focus-visible,
+.composer textarea:focus-visible {
+  outline: none;
+  box-shadow: var(--wts-focus-ring);
+}
+
+.feed {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  overflow: auto;
+  scrollbar-gutter: stable;
+}
+
+.feed > ol {
+  box-sizing: border-box;
+  max-width: 980px;
+  margin: 0 auto;
+  padding: 8px 28px 32px;
+  list-style: none;
+}
+
+.thread {
+  min-width: 0;
+  padding: 24px 0;
+}
+
+.feed > ol > li + li {
+  border-top: 1px solid var(--wts-line);
+}
+
+.threadHeading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 18px;
+}
+
+.threadHeading h4 {
+  min-width: 0;
+  margin-right: auto;
+}
+
+.threadHeading h4 button {
+  max-width: 100%;
+  padding: 2px 0;
+  border: 0;
+  border-radius: 2px;
+  color: var(--wts-muted);
+  background: transparent;
+  font-size: 12px;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+
+.threadHeading h4 button:hover:not(:disabled),
+.threadHeading h4 button[aria-pressed="true"] {
+  color: var(--wts-blue);
+  background: transparent;
+}
+
+.resolved,
+.automated {
+  color: var(--wts-muted);
+  font-size: 12px;
+}
+
+.badge {
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: var(--wts-blue-soft);
+  color: var(--wts-blue);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.comments {
+  display: grid;
+  gap: 20px;
+  min-width: 0;
+}
+
+.comment {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr);
+  align-items: start;
+  gap: 12px;
+  min-width: 0;
+}
+
+.avatar {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: var(--wts-surface-muted);
+  color: var(--wts-muted);
+  font: 600 13px/1 var(--wts-font-sans);
+  user-select: none;
+}
+
+.commentContent {
+  min-width: 0;
+}
+
+.commentContent > header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+  min-height: 24px;
+  padding-top: 2px;
+}
+
+.commentContent > header b {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.commentContent time {
+  color: var(--wts-faint);
+  font-size: 12px;
+}
+
+.comments .commentBody {
+  color: var(--wts-ink);
+  font-size: 14px;
+  line-height: 1.65;
+}
+
+.comments .commentBody code {
+  font-size: 12px;
+}
+
+.comments .commentBody pre {
+  box-sizing: border-box;
+  padding: 10px;
+  background: var(--wts-surface-subtle);
+}
+
+.comments .commentBody h1,
+.comments .commentBody h2,
+.comments .commentBody h3,
+.comments .commentBody h4 {
+  margin: 16px 0 8px;
+  font-size: 15px;
+  line-height: 1.4;
+}
+
+.comments .commentBody > :first-child {
+  margin-top: 4px;
+}
+
+.comments .commentBody > :last-child {
+  margin-bottom: 0;
+}
+
+.panel .disclosure {
+  margin-top: 4px;
+  padding: 3px 0;
+  border: 0;
+  color: var(--wts-blue);
+  background: transparent;
+  font-weight: 500;
+}
+
+.panel .disclosure:hover:not(:disabled) {
+  background: transparent;
+  text-decoration: underline;
+}
+
+.panel .newReplies {
+  margin: 16px 0 0 44px;
+  color: var(--wts-blue);
+}
+
+.threadActions {
+  margin: 16px 0 0 44px;
+}
+
+.composer {
+  display: grid;
+  gap: 10px;
+  margin: 20px 0 0 44px;
+}
+
+.composer label {
+  display: block;
+}
+
+.composer textarea {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  min-height: 84px;
+  padding: 12px;
+  resize: vertical;
+  color: var(--wts-ink);
+  background: var(--wts-surface);
+  border: 1px solid var(--wts-line-strong);
+  border-radius: var(--wts-radius-sm);
+  font: 13px/1.5 var(--wts-font-sans);
+}
+
+.composer textarea::placeholder {
+  color: var(--wts-faint);
+}
+
+.composerActions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.composerActions p {
+  margin: 0;
+  color: var(--wts-muted);
+  font-size: 12px;
+}
+
+.composerActions > button[type="submit"] {
+  background: var(--wts-blue);
+  border-color: var(--wts-blue);
+  color: var(--wts-on-primary);
+}
+
+.composerActions > button[type="submit"]:hover:not(:disabled) {
+  background: var(--wts-blue);
+  filter: brightness(1.08);
+}
+
+.empty {
+  padding: 28px 24px;
+  margin: 0;
+  color: var(--wts-muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.notice,
+.error,
+.success {
+  margin: 0;
+  padding: 10px 24px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.notice {
+  color: var(--wts-muted);
+  background: var(--wts-surface-subtle);
+}
+
+.error {
+  color: var(--wts-red);
+  background: var(--wts-red-soft);
+}
+
+.success {
+  padding: 0;
+  color: var(--wts-green);
+}
+
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.panel[data-compact] .toolbar {
+  gap: 8px;
+  padding: 12px 16px;
+}
+
+.panel[data-compact] .summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+  width: 100%;
+}
+
+.panel[data-compact] .summary .freshness { flex-basis: 100%; }
+
+.panel[data-compact] .toolbar label {
+  flex: 1;
+}
+
+.panel[data-compact] .feed > ol {
+  padding: 0 16px 16px;
+}
+
+.panel[data-compact] .thread {
+  padding: 18px 0;
+}
+
+.panel[data-compact] .threadHeading {
+  margin-bottom: 12px;
+}
+
+.panel[data-compact] .comment {
+  grid-template-columns: 26px minmax(0, 1fr);
+  gap: 10px;
+}
+
+.panel[data-compact] .avatar {
+  width: 26px;
+  height: 26px;
+  font-size: 12px;
+}
+
+.panel[data-compact] .commentBody {
+  font-size: 13px;
+}
+
+.panel[data-compact] .composer,
+.panel[data-compact] .threadActions,
+.panel[data-compact] .newReplies {
+  margin-left: 36px;
+}
+
+.panel[data-compact] .notice,
+.panel[data-compact] .error,
+.panel[data-compact] .empty {
+  padding-right: 16px;
+  padding-left: 16px;
+}
+
+@media (max-width: 760px) {
+  .toolbar {
+    padding: 12px 16px;
+  }
+
+  .summary {
+    width: 100%;
+  }
+
+  .toolbar label {
+    flex: 1;
+  }
+
+  .toolbar [data-select-trigger] {
+    max-width: 100%;
+  }
+
+  .feed > ol {
+    padding-right: 16px;
+    padding-left: 16px;
+  }
+
+  .composerActions > button[type="submit"] {
+    margin-left: auto;
+  }
+}

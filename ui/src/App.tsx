@@ -1,7 +1,8 @@
 import { lazy, Suspense, useEffect } from "react";
-import type { WorkspaceClient } from "./lib/wtsClient";
+import { defaultWorkspaceClient, type WorkspaceClient } from "./lib/wtsClient";
 import { ThemeProvider } from "./theme";
 import { UiCallouts } from "./components/UiCallouts";
+import { AgentFeedbackBubble } from "./components/AgentFeedbackBubble";
 
 const LocalWorkspace = lazy(() =>
   import("./variants/local-workspace").then((module) => ({
@@ -165,6 +166,7 @@ export function App({
     <ThemeProvider>
       <Suspense fallback={<AppLoader />}>{content}</Suspense>
       <UiCallouts />
+      <AgentFeedbackBubble client={workspaceClient ?? defaultWorkspaceClient} />
     </ThemeProvider>
   );
 }

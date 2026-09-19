@@ -78,6 +78,10 @@ export function SelectMenu({
   const setComboBoxRef = useCallback((node: HTMLDivElement | null) => {
     setDialogPortal(node?.closest('[role="dialog"]') ?? null);
   }, []);
+  const setSelectTriggerRef = useCallback((node: HTMLButtonElement | null) => {
+    triggerRef.current = node;
+    setDialogPortal(node?.closest('[role="dialog"]') ?? null);
+  }, []);
 
   useLayoutEffect(() => {
     const trigger = triggerRef.current;
@@ -160,14 +164,18 @@ export function SelectMenu({
         aria-label={ariaLabel}
         className={`${styles.trigger}${className ? ` ${className}` : ""}`}
         data-select-trigger
-        ref={triggerRef}
+        ref={setSelectTriggerRef}
       >
         <SelectValue aria-hidden="true" className={styles.value} />
         <svg aria-hidden="true" className={styles.chevron} viewBox="0 0 16 16">
           <path d="m4 6 4 4 4-4" />
         </svg>
       </Button>
-      <Popover className={styles.popover} placement="bottom start">
+      <Popover
+        UNSTABLE_portalContainer={dialogPortal ?? undefined}
+        className={styles.popover}
+        placement="bottom start"
+      >
         <ListBox className={styles.listBox} items={options}>
           {(option) => (
             <ListBoxItem

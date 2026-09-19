@@ -14,6 +14,27 @@
   pointer-events: none;
 }
 
+:global(html[data-ui-region-picker]) :global(*) {
+  cursor: crosshair !important;
+}
+
+:global(html[data-ui-region-picker]) :global(input),
+:global(html[data-ui-region-picker]) :global(textarea),
+:global(html[data-ui-region-picker]) :global([contenteditable="true"]) {
+  cursor: text !important;
+}
+
+.picker .outline {
+  border-width: 2px;
+  background: rgb(240 93 35 / 8%);
+}
+
+.picker .label,
+.picker .label code,
+.picker .control {
+  font-size: 12px;
+}
+
 .label {
   position: fixed;
   display: flex;

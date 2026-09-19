@@ -45,6 +45,7 @@ impl Executor {
             Self::Agent(AgentProvider::Hermes) => "hermes",
             Self::Agent(AgentProvider::Codex) => "codex",
             Self::Agent(AgentProvider::OpenCode) => "opencode",
+            Self::Agent(AgentProvider::Copilot) => "copilot",
         }
     }
 
@@ -54,6 +55,7 @@ impl Executor {
             Self::Agent(AgentProvider::Hermes) => WorkspaceProvider::Hermes,
             Self::Agent(AgentProvider::Codex) => WorkspaceProvider::Codex,
             Self::Agent(AgentProvider::OpenCode) => WorkspaceProvider::OpenCode,
+            Self::Agent(AgentProvider::Copilot) => WorkspaceProvider::Copilot,
         }
     }
 }

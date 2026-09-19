@@ -168,6 +168,39 @@ pub struct WorktreeReceipt {
     pub worktrees: Vec<CreatedWorktree>,
 }
 
+/// Synchronous setup observations for a trusted host's durable attempt record.
+/// A planned entry is not a receipt and does not authorize removal.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(
+    tag = "stage",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum WorktreeMaterializationProgress<'a> {
+    Starting {
+        plan: &'a WorktreePlan,
+    },
+    RootPrepared {
+        receipt: &'a WorktreeReceipt,
+    },
+    WorktreeStarting {
+        receipt: &'a WorktreeReceipt,
+        planned: &'a PlannedWorktree,
+    },
+    WorktreeCreated {
+        receipt: &'a WorktreeReceipt,
+    },
+    Completed {
+        receipt: &'a WorktreeReceipt,
+    },
+    RolledBack {
+        receipt: &'a WorktreeReceipt,
+        cause: &'a GitError,
+        rollback: &'a RollbackReceipt,
+        unconfirmed_worktree: Option<&'a PlannedWorktree>,
+    },
+}
+
 /// Trusted inputs for inspecting or removing one WTS-created worktree.
 ///
 /// The source checkout, workspace root, target path, repository identity, and
@@ -239,6 +272,15 @@ pub struct BranchPublicationInspection {
     pub ahead: u32,
     pub behind: u32,
     pub changed_file_count: u32,
+}
+
+/// The verified effect of pushing one exact commit to one branch.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExactBranchPublication {
+    pub remote_name: String,
+    pub branch_name: String,
+    pub head_commit_oid: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -343,8 +385,9 @@ impl GitWorktreeService {
         &self,
         remote_url: &str,
         target_path: impl AsRef<Path>,
+        options: &crate::RepositoryCloneOptions,
     ) -> Result<RepositoryInspection, GitError> {
-        clone_repository(remote_url, target_path.as_ref())
+        clone_repository(remote_url, target_path.as_ref(), options)
     }
 
     /// Refresh cached `origin/*` refs for one host-owned repository.
@@ -868,6 +911,103 @@ impl GitWorktreeService {
         self.inspect_branch_publication(&repository.worktree_root)
     }
 
+    /// Push one reviewed commit to the current branch without force.
+    ///
+    /// The source side of the refspec is the exact expected object ID, not
+    /// `HEAD`. The method also revalidates the branch, clean worktree, local
+    /// head, and remote branch after the process effect.
+    pub fn publish_exact_branch(
+        &self,
+        trusted_path: impl AsRef<Path>,
+        requested_base: &str,
+        expected_branch_name: &str,
+        expected_head_commit_oid: &str,
+    ) -> Result<ExactBranchPublication, GitError> {
+        if !matches!(expected_head_commit_oid.len(), 40 | 64)
+            || !expected_head_commit_oid
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit())
+        {
+            return Err(GitError::InvalidCommitOid);
+        }
+        let repository = inspect_repository(trusted_path.as_ref())?;
+        let local_branch_name = repository
+            .current_branch_full_ref
+            .as_deref()
+            .and_then(|value| value.strip_prefix("refs/heads/"))
+            .filter(|value| !value.is_empty())
+            .ok_or(GitError::InvalidRepositoryMetadata)?;
+        validate_branch_name(&repository, local_branch_name)?;
+        validate_branch_name(&repository, expected_branch_name)?;
+        if local_branch_name != expected_branch_name {
+            return Err(GitError::RepositoryChanged);
+        }
+        let local_head = commit_for_local_branch(&repository, local_branch_name)?
+            .ok_or(GitError::InvalidRepositoryMetadata)?;
+        if !local_head.eq_ignore_ascii_case(expected_head_commit_oid) {
+            return Err(GitError::RepositoryChanged);
+        }
+        if self.changed_file_count(&repository.worktree_root)? != 0 {
+            return Err(GitError::WorktreeHasChanges);
+        }
+
+        let tracking = resolve_tracking_remote(&repository, requested_base)?;
+        let target_ref = format!("refs/heads/{expected_branch_name}");
+        let refspec = format!("{expected_head_commit_oid}:{target_ref}");
+        let push = crate::command::git(
+            Some(&repository.worktree_root),
+            ["push", "--", tracking.name.as_str(), refspec.as_str()],
+        )?;
+        if !push.status.success() {
+            return Err(push.command_error(GitOperation::PublishBranch));
+        }
+
+        let after = inspect_repository(&repository.worktree_root)?;
+        let after_branch = after
+            .current_branch_full_ref
+            .as_deref()
+            .and_then(|value| value.strip_prefix("refs/heads/"))
+            .ok_or(GitError::RepositoryChanged)?;
+        let after_head =
+            commit_for_local_branch(&after, after_branch)?.ok_or(GitError::RepositoryChanged)?;
+        if after_branch != expected_branch_name
+            || !after_head.eq_ignore_ascii_case(expected_head_commit_oid)
+            || self.changed_file_count(&after.worktree_root)? != 0
+        {
+            return Err(GitError::RepositoryChanged);
+        }
+        let remote = crate::command::git(
+            Some(&repository.worktree_root),
+            [
+                "ls-remote",
+                "--exit-code",
+                "--refs",
+                tracking.name.as_str(),
+                target_ref.as_str(),
+            ],
+        )?;
+        if !remote.status.success() {
+            return Err(remote.command_error(GitOperation::PublishBranch));
+        }
+        let remote = remote.success_text(GitOperation::PublishBranch)?;
+        let mut lines = remote.lines().filter(|line| !line.trim().is_empty());
+        let (remote_oid, remote_ref) = lines
+            .next()
+            .and_then(|line| line.split_once('\t'))
+            .ok_or(GitError::InvalidRepositoryMetadata)?;
+        if lines.next().is_some()
+            || remote_ref != target_ref
+            || !remote_oid.eq_ignore_ascii_case(expected_head_commit_oid)
+        {
+            return Err(GitError::RepositoryChanged);
+        }
+        Ok(ExactBranchPublication {
+            remote_name: tracking.name,
+            branch_name: expected_branch_name.to_owned(),
+            head_commit_oid: after_head.to_ascii_lowercase(),
+        })
+    }
+
     pub fn inspect_branch_change_inventory(
         &self,
         trusted_path: impl AsRef<Path>,
@@ -1189,73 +1329,90 @@ impl GitWorktreeService {
     /// Execute a preflight plan. If any repository fails, all previously
     /// created entries are rolled back in reverse order and reported.
     pub fn materialize(&self, plan: WorktreePlan) -> Result<WorktreeReceipt, MaterializeError> {
-        let workspace_root_created = self
-            .prepare_workspace_root(&plan)
+        self.materialize_observed(plan, |_| Ok(()))
+    }
+
+    /// Save host intent before mutation and report each verified effect before
+    /// the next step. Rejecting an observation stops setup and rolls back only
+    /// verified effects. The final rollback observation is best effort.
+    ///
+    /// A host interruption after WorktreeStarting leaves an unconfirmed planned
+    /// path. That observation does not authorize later removal of the path.
+    pub fn materialize_observed(
+        &self,
+        plan: WorktreePlan,
+        mut observer: impl FnMut(&WorktreeMaterializationProgress<'_>) -> Result<(), GitError>,
+    ) -> Result<WorktreeReceipt, MaterializeError> {
+        observer(&WorktreeMaterializationProgress::Starting { plan: &plan })
             .map_err(MaterializeError::before_mutation)?;
-        let mut created = Vec::with_capacity(plan.repositories.len());
-
-        for planned in &plan.repositories {
-            if let Err(cause) = self.revalidate_entry(&plan, planned) {
-                let rollback = self.rollback_transaction(
-                    &created,
-                    workspace_root_created.then_some(plan.workspace_root.as_path()),
-                );
-                return Err(MaterializeError {
-                    cause,
-                    rollback: Box::new(rollback),
-                });
-            }
-
-            #[cfg(test)]
-            run_after_revalidate_hook();
-
-            let target = planned.target_path.as_os_str().to_owned();
-            let args = [
-                OsString::from("worktree"),
-                OsString::from("add"),
-                OsString::from("--no-track"),
-                OsString::from("-b"),
-                OsString::from(&planned.branch_name),
-                target,
-                // Resolve the human-readable ref during preflight and use its
-                // pinned object ID for the mutation. The ref check above still
-                // rejects an already-stale plan, while this exact OID closes
-                // the race if the ref moves after that check.
-                OsString::from(&planned.base.commit_oid),
-            ];
-            let output = git(Some(&planned.repository.worktree_root), args).map_err(|cause| {
-                let rollback = self.rollback_failed_step(
-                    &created,
+        let mut receipt = WorktreeReceipt {
+            workspace_root: plan.workspace_root.clone(),
+            workspace_root_created: false,
+            branch_name: plan.branch_name.clone(),
+            worktrees: Vec::with_capacity(plan.repositories.len()),
+        };
+        let mut unconfirmed_worktree = None;
+        let result = (|| {
+            receipt.workspace_root_created = self.prepare_workspace_root(&plan)?;
+            observer(&WorktreeMaterializationProgress::RootPrepared { receipt: &receipt })?;
+            for planned in &plan.repositories {
+                self.revalidate_entry(&plan, planned)?;
+                observer(&WorktreeMaterializationProgress::WorktreeStarting {
+                    receipt: &receipt,
                     planned,
-                    workspace_root_created.then_some(plan.workspace_root.as_path()),
-                );
-                MaterializeError {
-                    cause,
-                    rollback: Box::new(rollback),
+                })?;
+                // Saving host intent can take time. Repeat the checks before
+                // starting Git, while still using the pinned base object ID.
+                self.revalidate_entry(&plan, planned)?;
+                #[cfg(test)]
+                run_after_revalidate_hook();
+                unconfirmed_worktree = Some(planned);
+                let output = git(
+                    Some(&planned.repository.worktree_root),
+                    [
+                        OsString::from("worktree"),
+                        OsString::from("add"),
+                        OsString::from("--no-track"),
+                        OsString::from("-b"),
+                        OsString::from(&planned.branch_name),
+                        planned.target_path.as_os_str().to_owned(),
+                        OsString::from(&planned.base.commit_oid),
+                    ],
+                )?;
+                if !output.status.success() {
+                    return Err(output.command_error(GitOperation::CreateWorktree));
                 }
-            })?;
-            if !output.status.success() {
-                let cause = output.command_error(GitOperation::CreateWorktree);
-                let rollback = self.rollback_failed_step(
-                    &created,
-                    planned,
-                    workspace_root_created.then_some(plan.workspace_root.as_path()),
-                );
-                return Err(MaterializeError {
-                    cause,
-                    rollback: Box::new(rollback),
-                });
+                if !self.verified_created_worktree(planned) {
+                    return Err(GitError::RollbackProvenanceMismatch);
+                }
+                receipt.worktrees.push(created_worktree(planned));
+                unconfirmed_worktree = None;
+                observer(&WorktreeMaterializationProgress::WorktreeCreated { receipt: &receipt })?;
             }
-
-            created.push(created_worktree(planned));
+            observer(&WorktreeMaterializationProgress::Completed { receipt: &receipt })
+        })();
+        if let Err(cause) = result {
+            if let Some(planned) = unconfirmed_worktree
+                && self.verified_created_worktree(planned)
+            {
+                receipt.worktrees.push(created_worktree(planned));
+                unconfirmed_worktree = None;
+            }
+            let rollback = self.rollback(&receipt);
+            // A storage failure here cannot start another cleanup attempt.
+            // The caller still receives the complete original rollback report.
+            let _ = observer(&WorktreeMaterializationProgress::RolledBack {
+                receipt: &receipt,
+                cause: &cause,
+                rollback: &rollback,
+                unconfirmed_worktree,
+            });
+            return Err(MaterializeError {
+                cause,
+                rollback: Box::new(rollback),
+            });
         }
-
-        Ok(WorktreeReceipt {
-            workspace_root: plan.workspace_root,
-            workspace_root_created,
-            branch_name: plan.branch_name,
-            worktrees: created,
-        })
+        Ok(receipt)
     }
 
     pub fn materialize_workspace(
@@ -1539,20 +1696,7 @@ impl GitWorktreeService {
         receipt
     }
 
-    fn rollback_failed_step(
-        &self,
-        previously_created: &[CreatedWorktree],
-        failed: &PlannedWorktree,
-        created_workspace_root: Option<&Path>,
-    ) -> RollbackReceipt {
-        let mut proven = previously_created.to_vec();
-        if self.failed_step_created_worktree(failed) {
-            proven.push(created_worktree(failed));
-        }
-        self.rollback_transaction(&proven, created_workspace_root)
-    }
-
-    fn failed_step_created_worktree(&self, planned: &PlannedWorktree) -> bool {
+    fn verified_created_worktree(&self, planned: &PlannedWorktree) -> bool {
         let Ok(target) = planned.target_path.canonicalize() else {
             return false;
         };
@@ -1562,14 +1706,17 @@ impl GitWorktreeService {
         let Ok(repository) = inspect_repository(&target) else {
             return false;
         };
-        if repository.id != planned.repository.id {
+        if repository.id != planned.repository.id
+            || repository.git_common_dir != planned.repository.git_common_dir
+        {
             return false;
         }
         let expected_ref = format!("refs/heads/{}", planned.branch_name);
-        matches!(
-            current_branch_full_ref(&target),
-            Ok(Some(current)) if current == expected_ref
-        )
+        repository.current_branch_full_ref.as_deref() == Some(expected_ref.as_str())
+            && matches!(
+                commit_for_local_branch(&repository, &planned.branch_name),
+                Ok(Some(current)) if current == planned.base.commit_oid
+            )
     }
 
     fn rollback_one(&self, entry: &CreatedWorktree) -> Result<(), GitError> {
@@ -1610,6 +1757,9 @@ impl GitWorktreeService {
             .is_empty()
         {
             return Err(GitError::RollbackProvenanceMismatch);
+        }
+        if worktree_has_ignored_files(&target)? {
+            return Err(GitError::WorktreeHasIgnoredFiles);
         }
 
         let args = [

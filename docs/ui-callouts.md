@@ -3,6 +3,11 @@
 UI callouts let a user name a visible WTS region in written or spoken feedback.
 The user does not need to know a React component name or a source file.
 
+Hold Option on macOS, or Alt on Windows and Linux, to select a region for agent feedback.
+Click the highlighted region to open the chat. Release the key to leave selection mode.
+For keyboard selection, focus a control in the region and press Option+Enter or Alt+Enter.
+See [Contextual agent feedback](contextual-agent-feedback.md) for chat, capture, and recovery steps.
+
 ## User flow
 
 1. Press `Command+Shift+L` on macOS.

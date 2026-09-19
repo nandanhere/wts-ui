@@ -28,6 +28,10 @@ use uuid::Uuid;
 const MAX_TASK_ID_BYTES: usize = 128;
 const GATE_POLL_INTERVAL: Duration = Duration::from_millis(20);
 
+#[cfg(test)]
+#[path = "collaboration_dependencies_tests.rs"]
+mod dependency_tests;
+
 /// Stable caller-authored identity used for cancellation and aggregation.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
@@ -146,6 +150,14 @@ pub enum CollaborationPlanError {
     OverlappingTaskScopes,
     #[error("provider confinement is not verified for task `{task_id}`")]
     ProviderConfinementUnavailable { task_id: CollaborationTaskId },
+    #[error("a dependency names a task outside this plan")]
+    UnknownDependency,
+    #[error("a task repeats a dependency")]
+    DuplicateDependency,
+    #[error("a task depends on a later phase")]
+    DependencyPhaseConflict,
+    #[error("the task dependencies contain a cycle")]
+    DependencyCycle,
 }
 
 /// The minimum adapter guarantee required for a mutating collaboration task.
@@ -314,6 +326,7 @@ pub enum CollaborationTaskState {
     Cancelled,
     TimedOut,
     OutputTooLarge,
+    DependencyBlocked,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -422,7 +435,18 @@ impl<A: CollaborationAdapter> CollaborationCoordinator<A> {
         plan: CollaborationPlan,
         control: &CollaborationControl,
     ) -> Result<CollaborationReport, CollaborationPlanError> {
+        self.execute_with_dependencies(plan, BTreeMap::new(), control)
+    }
+
+    /// Run each task only after its declared prerequisites succeed.
+    pub fn execute_with_dependencies(
+        &self,
+        plan: CollaborationPlan,
+        dependencies: BTreeMap<CollaborationTaskId, Vec<CollaborationTaskId>>,
+        control: &CollaborationControl,
+    ) -> Result<CollaborationReport, CollaborationPlanError> {
         let prepared = self.prepare(plan.tasks)?;
+        validate_dependencies(&prepared, &dependencies)?;
         let started_at_unix_ms = now_unix_ms();
         let started = Instant::now();
         let collaboration_id = plan.collaboration_id;
@@ -451,28 +475,74 @@ impl<A: CollaborationAdapter> CollaborationCoordinator<A> {
         }
         let results = Mutex::new(Vec::with_capacity(prompt_digests.len()));
         for grouped in phased.into_values() {
-            let mut groups = grouped.into_values().collect::<Vec<_>>();
-            for tasks in &mut groups {
-                tasks.sort_by(|left, right| left.task_id.cmp(&right.task_id));
-            }
-            let next_group = AtomicUsize::new(0);
-            let worker_count = groups.len().min(self.limits.maximum_parallel_agents);
-            thread::scope(|scope| {
-                for _ in 0..worker_count {
-                    scope.spawn(|| {
-                        loop {
-                            let group_index = next_group.fetch_add(1, Ordering::Relaxed);
-                            let Some(group) = groups.get(group_index) else {
-                                break;
-                            };
-                            for task in group {
-                                let result = self.execute_task(task, control);
-                                recover_lock(&results).push(result);
-                            }
+            let mut pending = grouped.into_values().flatten().collect::<Vec<_>>();
+            pending.sort_by(|left, right| left.task_id.cmp(&right.task_id));
+            while !pending.is_empty() {
+                let completed = recover_lock(&results)
+                    .iter()
+                    .map(|task: &CollaborationTaskResult| (task.task_id.clone(), task.state))
+                    .collect::<BTreeMap<_, _>>();
+                let (wave, waiting): (Vec<_>, Vec<_>) = pending.into_iter().partition(|task| {
+                    dependencies
+                        .get(&task.task_id)
+                        .into_iter()
+                        .flatten()
+                        .all(|parent| completed.contains_key(parent))
+                });
+                debug_assert!(
+                    !wave.is_empty(),
+                    "the validated graph must have a ready task"
+                );
+                pending = waiting;
+                let mut runnable = Vec::new();
+                for task in wave {
+                    let failed = dependencies
+                        .get(&task.task_id)
+                        .into_iter()
+                        .flatten()
+                        .filter(|parent| {
+                            completed.get(*parent) != Some(&CollaborationTaskState::Succeeded)
+                        })
+                        .map(ToString::to_string)
+                        .collect::<Vec<_>>();
+                    if failed.is_empty() {
+                        runnable.push(task);
+                    } else {
+                        let mut output = format!(
+                            "This task did not start. These prerequisites did not succeed: {}.",
+                            failed.join(", ")
+                        );
+                        if output.len() > self.limits.maximum_output_bytes {
+                            output.clear();
                         }
-                    });
+                        recover_lock(&results).push(result(
+                            &task,
+                            CollaborationTaskState::DependencyBlocked,
+                            output,
+                            None,
+                            None,
+                            now_unix_ms(),
+                            0,
+                        ));
+                    }
                 }
-            });
+                let next_task = AtomicUsize::new(0);
+                let worker_count = runnable.len().min(self.limits.maximum_parallel_agents);
+                thread::scope(|scope| {
+                    for _ in 0..worker_count {
+                        scope.spawn(|| {
+                            loop {
+                                let task_index = next_task.fetch_add(1, Ordering::Relaxed);
+                                let Some(task) = runnable.get(task_index) else {
+                                    break;
+                                };
+                                let completed_task = self.execute_task(task, control);
+                                recover_lock(&results).push(completed_task);
+                            }
+                        });
+                    }
+                });
+            }
         }
 
         let mut tasks = results
@@ -811,6 +881,54 @@ struct PreparedTask {
     prompt: String,
     phase: u32,
     timeout: Duration,
+}
+
+fn validate_dependencies(
+    tasks: &[PreparedTask],
+    dependencies: &BTreeMap<CollaborationTaskId, Vec<CollaborationTaskId>>,
+) -> Result<(), CollaborationPlanError> {
+    let phases = tasks
+        .iter()
+        .map(|task| (&task.task_id, task.phase))
+        .collect::<BTreeMap<_, _>>();
+    for (task, parents) in dependencies {
+        let phase = phases
+            .get(task)
+            .ok_or(CollaborationPlanError::UnknownDependency)?;
+        let mut seen = BTreeSet::new();
+        for parent in parents {
+            let parent_phase = phases
+                .get(parent)
+                .ok_or(CollaborationPlanError::UnknownDependency)?;
+            if !seen.insert(parent) {
+                return Err(CollaborationPlanError::DuplicateDependency);
+            }
+            if parent_phase > phase {
+                return Err(CollaborationPlanError::DependencyPhaseConflict);
+            }
+        }
+    }
+    let mut remaining = phases.keys().copied().collect::<BTreeSet<_>>();
+    while !remaining.is_empty() {
+        let ready = remaining
+            .iter()
+            .filter(|task| {
+                dependencies
+                    .get(**task)
+                    .into_iter()
+                    .flatten()
+                    .all(|parent| !remaining.contains(parent))
+            })
+            .copied()
+            .collect::<Vec<_>>();
+        if ready.is_empty() {
+            return Err(CollaborationPlanError::DependencyCycle);
+        }
+        for task in ready {
+            remaining.remove(task);
+        }
+    }
+    Ok(())
 }
 
 fn result(

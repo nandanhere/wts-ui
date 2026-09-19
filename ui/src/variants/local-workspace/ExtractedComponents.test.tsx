@@ -228,7 +228,7 @@ describe("Extracted presentational components in isolation", () => {
     );
 
     expect(screen.getByText("plans-and-kanban")).toBeVisible();
-    expect(screen.getByText("/tmp/ws-1")).toBeVisible();
+    expect(within(screen.getByText("Protected planning files").closest("section")!).getByText("/tmp/ws-1")).toBeVisible();
     expect(screen.getByText("FINDINGS.md")).toBeVisible();
     expect(screen.getByText("plans/PLAN.md")).toBeVisible();
     fireEvent.click(

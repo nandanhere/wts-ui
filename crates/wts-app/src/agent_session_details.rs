@@ -232,6 +232,7 @@ fn provider_name(provider: AgentProvider) -> &'static str {
         AgentProvider::Codex => "Codex",
         AgentProvider::OpenCode => "OpenCode",
         AgentProvider::Hermes => "Hermes",
+        AgentProvider::Copilot => "Copilot",
     }
 }
 

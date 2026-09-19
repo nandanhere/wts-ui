@@ -219,7 +219,7 @@ impl CodexSessionObserver {
         };
         let mut candidates = Vec::new();
         collect_candidates(root, 0, &mut candidates);
-        candidates.sort_by(|left, right| right.modified_at.cmp(&left.modified_at));
+        candidates.sort_by_key(|candidate| std::cmp::Reverse(candidate.modified_at));
         candidates.truncate(MAX_CANDIDATE_FILES);
 
         let mut observed = candidates

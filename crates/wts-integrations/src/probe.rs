@@ -1,9 +1,9 @@
 use crate::model::{
     BlockingCapability, BrowserJourneyCheckStatus, BrowserJourneyDiagnosticCode,
     BrowserJourneyDiscoverySource, BrowserJourneyReadiness, BrowserJourneyReadinessCheck,
-    DiagnosticCode, InstallationState, IntegrationCapability, IntegrationCategory, IntegrationId,
-    IntegrationSnapshot, IntegrationStatus, RuntimeState, SetupSnapshot, SetupState,
-    VerificationKind, WtsSupport,
+    DiagnosticCode, GitSigningDiagnosticCode, GitSigningReadiness, InstallationState,
+    IntegrationCapability, IntegrationCategory, IntegrationId, IntegrationSnapshot,
+    IntegrationStatus, RuntimeState, SetupSnapshot, SetupState, VerificationKind, WtsSupport,
 };
 use crate::open_project::{WTS_OPENPROJECT_TOKEN_ENV, WTS_OPENPROJECT_URL_ENV};
 #[cfg(windows)]
@@ -703,8 +703,109 @@ where
             checked_at_unix_ms,
             repository_count: u64::try_from(repository_count).unwrap_or(u64::MAX),
             integrations,
+            git_signing: Some(self.detect_git_signing()),
             browser_journey_readiness: Some(browser_journey_readiness),
         }
+    }
+
+    fn detect_git_signing(&self) -> GitSigningReadiness {
+        let git = match self.resolver.resolve("git") {
+            Ok(Some(path)) => path,
+            Ok(None) | Err(_) => {
+                return GitSigningReadiness {
+                    ready: false,
+                    commit_signing_enabled: false,
+                    signing_key_configured: false,
+                    gpg_available: false,
+                    private_key_available: false,
+                    detail: "Git is unavailable, so WTS could not check commit signing.".to_owned(),
+                    diagnostic_code: Some(GitSigningDiagnosticCode::GitUnavailable),
+                };
+            }
+        };
+
+        let commit_signing_enabled = self
+            .runner
+            .run(CommandProbe {
+                executable: &git,
+                args: &[
+                    "config",
+                    "--global",
+                    "--type=bool",
+                    "--get",
+                    "commit.gpgsign",
+                ],
+            })
+            .is_ok_and(|output| {
+                std::str::from_utf8(output.stdout()).is_ok_and(|value| value.trim() == "true")
+            });
+        let signing_key = self.git_global_config_value(&git, "user.signingkey");
+        let signing_key_configured = signing_key.is_some();
+        let gpg = self.resolver.resolve("gpg").ok().flatten();
+        let gpg_available = gpg.is_some();
+        let private_key_available = match (gpg.as_deref(), signing_key.as_deref()) {
+            (Some(gpg), Some(signing_key)) => self
+                .runner
+                .run(CommandProbe {
+                    executable: gpg,
+                    args: &["--batch", "--list-secret-keys", signing_key],
+                })
+                .is_ok(),
+            _ => false,
+        };
+        let ready = commit_signing_enabled
+            && signing_key_configured
+            && gpg_available
+            && private_key_available;
+        let (detail, diagnostic_code) = if !commit_signing_enabled {
+            (
+                "Git commit signing is off in the global configuration.",
+                Some(GitSigningDiagnosticCode::CommitSigningDisabled),
+            )
+        } else if !signing_key_configured {
+            (
+                "Git commit signing is on, but no global signing key is configured.",
+                Some(GitSigningDiagnosticCode::SigningKeyNotConfigured),
+            )
+        } else if !gpg_available {
+            (
+                "Git commit signing is on, but GPG was not found on PATH.",
+                Some(GitSigningDiagnosticCode::GpgExecutableMissing),
+            )
+        } else if !private_key_available {
+            (
+                "GPG could not find the configured private signing key.",
+                Some(GitSigningDiagnosticCode::PrivateKeyUnavailable),
+            )
+        } else {
+            (
+                "Git commit signing and the configured private key are ready.",
+                None,
+            )
+        };
+
+        GitSigningReadiness {
+            ready,
+            commit_signing_enabled,
+            signing_key_configured,
+            gpg_available,
+            private_key_available,
+            detail: detail.to_owned(),
+            diagnostic_code,
+        }
+    }
+
+    fn git_global_config_value(&self, git: &Path, key: &str) -> Option<String> {
+        let output = self
+            .runner
+            .run(CommandProbe {
+                executable: git,
+                args: &["config", "--global", "--get", key],
+            })
+            .ok()?;
+        let value = std::str::from_utf8(output.stdout()).ok()?.trim();
+        (!value.is_empty() && value.len() <= 512 && !value.chars().any(char::is_whitespace))
+            .then(|| value.to_owned())
     }
 
     fn detect_warp(&self, checked_at_unix_ms: u64) -> IntegrationSnapshot {
@@ -1497,6 +1598,158 @@ mod tests {
             json!(["openProjectWorkPackageImport"])
         );
         assert!(value["browserJourneyReadiness"].is_object());
+        assert!(value["gitSigning"].is_object());
+        assert_eq!(value["gitSigning"]["ready"], json!(false));
+        assert_eq!(
+            value["gitSigning"]["diagnosticCode"],
+            json!("commitSigningDisabled")
+        );
+    }
+
+    #[test]
+    fn git_signing_check_verifies_the_configured_private_key_without_exposing_it() {
+        let mut resolver = FakeResolver::default();
+        resolver
+            .paths
+            .insert("git".to_owned(), Ok(Some(PathBuf::from("/test-tools/git"))));
+        resolver
+            .paths
+            .insert("gpg".to_owned(), Ok(Some(PathBuf::from("/test-tools/gpg"))));
+        let runner = SequentialRunner::new([
+            Ok(ProbeOutput::new("true\n", "")),
+            Ok(ProbeOutput::new("0123456789ABCDEF\n", "")),
+            Ok(ProbeOutput::new("private key output", "")),
+        ]);
+        let detector =
+            IntegrationDetector::new(resolver, runner, HostIntegrationSignals::default());
+
+        let signing = detector.detect_git_signing();
+
+        assert!(signing.ready);
+        assert!(signing.commit_signing_enabled);
+        assert!(signing.signing_key_configured);
+        assert!(signing.gpg_available);
+        assert!(signing.private_key_available);
+        assert_eq!(signing.diagnostic_code, None);
+        assert!(!signing.detail.contains("0123456789ABCDEF"));
+        let calls = detector.runner.calls.lock().expect("calls lock");
+        assert_eq!(
+            calls.as_slice(),
+            &[
+                (
+                    PathBuf::from("/test-tools/git"),
+                    vec![
+                        "config".to_owned(),
+                        "--global".to_owned(),
+                        "--type=bool".to_owned(),
+                        "--get".to_owned(),
+                        "commit.gpgsign".to_owned(),
+                    ],
+                ),
+                (
+                    PathBuf::from("/test-tools/git"),
+                    vec![
+                        "config".to_owned(),
+                        "--global".to_owned(),
+                        "--get".to_owned(),
+                        "user.signingkey".to_owned(),
+                    ],
+                ),
+                (
+                    PathBuf::from("/test-tools/gpg"),
+                    vec![
+                        "--batch".to_owned(),
+                        "--list-secret-keys".to_owned(),
+                        "0123456789ABCDEF".to_owned(),
+                    ],
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn git_signing_check_uses_git_boolean_semantics() {
+        struct IsolatedGitRunner {
+            config: PathBuf,
+        }
+
+        impl CommandRunner for IsolatedGitRunner {
+            fn run(&self, probe: CommandProbe<'_>) -> Result<ProbeOutput, ProbeFailure> {
+                if probe.executable == Path::new("fixture-gpg") {
+                    return Ok(ProbeOutput::new("fixture private key", ""));
+                }
+                let output = Command::new(probe.executable)
+                    .args(probe.args)
+                    .env("GIT_CONFIG_GLOBAL", &self.config)
+                    .env("GIT_CONFIG_NOSYSTEM", "1")
+                    .env_remove("GIT_CONFIG_COUNT")
+                    .env_remove("GIT_CONFIG_PARAMETERS")
+                    .output()
+                    .expect("isolated Git config process");
+                if !output.status.success() {
+                    return Err(ProbeFailure::UnsuccessfulExit);
+                }
+                Ok(ProbeOutput::new(output.stdout, output.stderr))
+            }
+        }
+
+        let directory = TempDir::new().expect("temporary directory");
+        let config = directory.path().join("gitconfig");
+        let git = SystemPathResolver
+            .resolve("git")
+            .expect("Git discovery")
+            .expect("Git executable");
+        let resolver = FakeResolver {
+            paths: BTreeMap::from([
+                ("git".to_owned(), Ok(Some(git))),
+                ("gpg".to_owned(), Ok(Some(PathBuf::from("fixture-gpg")))),
+            ]),
+        };
+        let detector = IntegrationDetector::new(
+            resolver,
+            IsolatedGitRunner {
+                config: config.clone(),
+            },
+            HostIntegrationSignals::default(),
+        );
+
+        for (value, enabled) in [
+            ("true", true),
+            ("yes", true),
+            ("on", true),
+            ("1", true),
+            ("2", true),
+            ("-1", true),
+            ("TrUe", true),
+            ("false", false),
+            ("no", false),
+            ("off", false),
+            ("0", false),
+            ("", false),
+            ("invalid", false),
+        ] {
+            fs::write(
+                &config,
+                format!("[commit]\ngpgsign = {value}\n[user]\nsigningkey = fixture-key\n"),
+            )
+            .expect("isolated Git configuration");
+
+            let signing = detector.detect_git_signing();
+            assert_eq!(
+                signing.commit_signing_enabled, enabled,
+                "Git value: {value}"
+            );
+            assert_eq!(signing.ready, enabled, "Git value: {value}");
+            assert_eq!(
+                signing.diagnostic_code,
+                if enabled {
+                    None
+                } else {
+                    Some(GitSigningDiagnosticCode::CommitSigningDisabled)
+                },
+                "Git value: {value}",
+            );
+        }
     }
 
     #[test]
@@ -1665,7 +1918,7 @@ mod tests {
     }
 
     #[test]
-    fn probes_only_fixed_version_arguments_and_parses_sanitized_versions() {
+    fn probes_only_fixed_git_and_version_arguments_and_parses_sanitized_versions() {
         let runner = FakeRunner::with_versions();
         let detector = IntegrationDetector::new(
             FakeResolver::with_all_found(),
@@ -1693,8 +1946,23 @@ mod tests {
         );
 
         let calls = detector.runner.calls.lock().expect("calls lock");
-        assert_eq!(calls.len(), EXECUTABLE_PROBES.len());
-        assert!(calls.iter().all(|(_, args)| args == &["--version"]));
+        let version_calls = calls
+            .iter()
+            .filter(|(_, args)| args == &["--version"])
+            .count();
+        assert_eq!(version_calls, EXECUTABLE_PROBES.len());
+        assert!(calls.iter().all(|(_, args)| {
+            args == &["--version"]
+                || args
+                    == &[
+                        "config",
+                        "--global",
+                        "--type=bool",
+                        "--get",
+                        "commit.gpgsign",
+                    ]
+                || args == &["config", "--global", "--get", "user.signingkey"]
+        }));
     }
 
     #[test]

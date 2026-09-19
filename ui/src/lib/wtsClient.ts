@@ -1,3 +1,27 @@
+import { nativePreviewAllowsCommand, NATIVE_PREVIEW_READ_ONLY_MESSAGE } from "./nativePreview";
+import { invalidateAgentSessions } from "./agentSessionDiscovery";
+import { normalizeAgentWorkItemIntegrationPreflight, normalizeAgentWorkItemIntegrationResult, validateIntegrateAgentWorkItem,
+  type AgentWorkItemIntegrationPreflight, type AgentWorkItemIntegrationResult, type IntegrateAgentWorkItemRequest } from "./agentWorkSets";
+export type { AgentWorkItemIntegrationPreflight, AgentWorkItemIntegrationResult, IntegrateAgentWorkItemRequest } from "./agentWorkSets";
+import { normalizeAgentWorkItemPreview, type AgentWorkItemPreview, normalizeAgentWorkSet, normalizeAgentWorkSetList, matchCreatedAgentWorkSet, matchCancelledAgentWorkItem, validateCreateAgentWorkSet, validateCancelAgentWorkItem,
+  type AgentWorkSet, type AgentWorkSetList, type CreateAgentWorkSetRequest, type CancelAgentWorkItemRequest } from "./agentWorkSets";
+export type { AgentWorkItemPreview, AgentWorkSet, AgentWorkItem, AgentWorkSetList, CreateAgentWorkSetRequest, CancelAgentWorkItemRequest } from "./agentWorkSets";
+import { normalizeAgentTurnDecisions, validateRecordAgentTurnDecision, type AgentTurnDecisions, type RecordAgentTurnDecisionRequest } from "./agentTurnDecisions";
+export type { AgentTurnDecisions, AgentTurnDecision, RecordAgentTurnDecisionRequest } from "./agentTurnDecisions";
+import {
+  normalizeAgentConversation, normalizeConversationList, normalizeRegionCapture,
+  matchCreatedConversation, matchAcceptedMessage, matchMutatedMessage, validateCreateConversation, validateSendConversation,
+  validateUpdateConversationMessage, validateCancelConversationMessage,
+  type AgentConversation, type AgentConversationList, type CreateAgentConversationRequest,
+  type SendAgentConversationMessageRequest, type UpdateAgentConversationMessageRequest,
+  type CancelAgentConversationMessageRequest, type RegionCapture,
+} from "./agentConversations";
+import { normalizeAgentTurnChecks, normalizeAgentTurnRestorePreflight, normalizeAgentTurnRestoreResult, validateRunAgentTurnCheck, validateRestoreAgentTurn,
+  type AgentTurnChecks, type RunAgentTurnCheckRequest, type AgentTurnRestorePreflight, type RestoreAgentTurnRequest, type AgentTurnRestoreResult } from "./agentTurnActions";
+export type { AgentTurnChecks, AgentTurnCheck, AgentTurnCheckRun, RunAgentTurnCheckRequest, AgentTurnRestorePreflight, RestoreAgentTurnRequest, AgentTurnRestoreResult } from "./agentTurnActions";
+import { normalizeAgentTurnChanges, validateAgentTurnId, type AgentTurnChanges } from "./agentTurnChanges";
+export type { AgentTurnChanges, AgentTurnChangedFile, AgentTurnCheckpoint } from "./agentTurnChanges";
+
 export type WorkspaceIntent =
   | {
       type: "jira";
@@ -17,7 +41,8 @@ export type WorkspaceProvider =
   | "codex"
   | "openCode"
   | "hermes"
-  | "vsCode";
+  | "vsCode"
+  | "copilot";
 
 export type WorkspacePhase = "draft";
 export type WorkspaceWorkflowState = "ready" | "active" | "review" | "parked";
@@ -241,6 +266,8 @@ export interface GitlabReviewInbox {
 export const GITLAB_REVIEW_INBOX_HTTP_PATH = "/api/v1/reviews/gitlab";
 export const GITLAB_REVIEW_INBOX_TAURI_COMMAND = "get_gitlab_review_inbox";
 export const GITLAB_REVIEW_PATCH_TAURI_COMMAND = "get_gitlab_review_patch";
+export const GET_GITLAB_DISCUSSIONS_TAURI_COMMAND = "get_gitlab_discussions";
+export const REPLY_GITLAB_DISCUSSION_TAURI_COMMAND = "reply_gitlab_discussion";
 export const PUBLISH_GITLAB_REVIEW_COMMENT_TAURI_COMMAND =
   "publish_gitlab_review_comment";
 export const PREPARE_GITLAB_REVIEW_REPOSITORY_TAURI_COMMAND =
@@ -276,6 +303,11 @@ export interface GitlabReviewDiscussion {
   filePath?: string;
   side?: "additions" | "deletions";
   line?: number;
+  position?: {
+    baseCommitOid: string;
+    startCommitOid: string;
+    headCommitOid: string;
+  };
   comments: GitlabReviewDiscussionComment[];
 }
 
@@ -284,6 +316,32 @@ export interface GitlabReviewDiscussionComment {
   body: string;
   authorLogin: string;
   createdAt: string;
+}
+
+export interface GitlabDiscussions {
+  schemaVersion: 1;
+  repositoryId: string;
+  iid: number;
+  scopeId: string;
+  viewerLogin: string;
+  discussions: GitlabReviewDiscussion[];
+  fetchedAtUnixMs: number;
+  fromCache: boolean;
+  truncated: boolean;
+}
+
+export interface GitlabDiscussionReplyRequest {
+  discussionId: string;
+  body: string;
+  workspaceId?: string;
+}
+
+export interface GitlabDiscussionReplyResult {
+  schemaVersion: 1;
+  repositoryId: string;
+  iid: number;
+  discussionId: string;
+  comment: GitlabReviewDiscussionComment;
 }
 
 export interface GitlabReviewCommit {
@@ -300,6 +358,8 @@ export interface GitlabReviewCommentRequest {
   filePath?: string;
   side?: "additions" | "deletions";
   line?: number;
+  workspaceId?: string;
+  expectedPosition?: NonNullable<GitlabReviewDiscussion["position"]>;
 }
 
 export interface PublishGitlabReviewCommentResult {
@@ -480,10 +540,29 @@ export interface BrowserJourneyReadiness {
   chromium: BrowserJourneyReadinessCheck;
 }
 
+export type GitSigningDiagnosticCode =
+  | "gitUnavailable"
+  | "commitSigningDisabled"
+  | "signingKeyNotConfigured"
+  | "gpgExecutableMissing"
+  | "privateKeyUnavailable";
+
+export interface GitSigningReadiness {
+  ready: boolean;
+  commitSigningEnabled: boolean;
+  signingKeyConfigured: boolean;
+  gpgAvailable: boolean;
+  privateKeyAvailable: boolean;
+  detail: string;
+  diagnosticCode?: GitSigningDiagnosticCode;
+}
+
 export interface SetupSnapshot {
   checkedAtUnixMs: number;
   repositoryCount: number;
   integrations: IntegrationSnapshot[];
+  /** Optional for compatibility with setup responses from older WTS builds. */
+  gitSigning?: GitSigningReadiness;
   /**
    * Optional only for compatibility with setup responses produced before the
    * local browser-journey runner existed.
@@ -518,12 +597,15 @@ export interface RepositoryCatalog {
 
 export interface CloneRepositoryRequest {
   remoteUrl: string;
+  branch?: string;
+  shallow?: boolean;
 }
 
 export interface CloneRepositoryResult {
   repository: RepositorySummary;
   repositoryRootDisplayPath: string;
   reusedExisting: boolean;
+  selectedBaseRef?: string;
 }
 
 export const CODE_WORKSPACE_FILE_MAX_BYTES = 48 * 1024;
@@ -727,6 +809,13 @@ export interface GraphWorkspaceSummary {
   detail: string;
 }
 
+export interface WorkspaceSetupRecovery {
+  effectDigest: string;
+  ready: boolean;
+  paths: string[];
+  blockers: string[];
+}
+
 export interface WorkspacePreflight {
   workspaceId: string;
   workspaceDisplayPath: string;
@@ -740,6 +829,7 @@ export interface WorkspacePreflight {
   graph: GraphWorkspaceSummary;
   runtime?: RuntimePlanSelection;
   planning?: WorkspacePlanningSelection;
+  setupRecovery?: WorkspaceSetupRecovery;
 }
 
 export interface MaterializedWorktree {
@@ -800,6 +890,34 @@ export interface WorkspaceRepositoryFileReview {
   contentSha256: string;
   content: string;
   fullPatch: string;
+}
+
+export interface WorkspaceGitlabComparison {
+  schemaVersion: 1;
+  workspaceId: string;
+  repositoryId: string;
+  repositoryLabel: string;
+  iid: number;
+  localHeadCommitOid: string;
+  status: "ready" | "missingCommits" | "diverged";
+  published: GitlabReviewPatch;
+  latestWork?: WorkspaceRepositoryDiff;
+  sinceMr?: WorkspaceRepositoryDiff;
+}
+
+export interface WorkspaceRepositorySource {
+  schemaVersion: 1;
+  workspaceId: string;
+  repositoryId: string;
+  filePath: string;
+  content: string;
+  revision: string;
+}
+
+export interface WorkspaceRepositorySourceSaveRequest {
+  filePath: string;
+  content: string;
+  expectedRevision: string;
 }
 
 export interface WorkspaceRepositoryReviewGraph {
@@ -1096,7 +1214,7 @@ export const DOWNLOAD_AND_INSTALL_UPDATE_TAURI_COMMAND =
   "download_and_install_update";
 export const RELAUNCH_UPDATED_APP_TAURI_COMMAND = "relaunch_updated_app";
 
-export type AgentProvider = "codex" | "openCode" | "hermes";
+export type AgentProvider = "codex" | "openCode" | "hermes" | "copilot";
 export type TerminalProvider = "terminal" | "warp";
 
 export interface WorkspaceCliLaunchResult {
@@ -1129,6 +1247,7 @@ export type WorkspaceRemovalKind =
 
 export type RemovalBlockerCode =
   | "workspaceDrift"
+  | "activeOperation"
   | "worktreeChanges"
   | "ignoredFiles"
   | "planningDocumentsPresent"
@@ -1139,6 +1258,10 @@ export interface RemovalBlocker {
   code: RemovalBlockerCode;
   message: string;
   repositoryLabel?: string;
+  displayPath?: string;
+  expected?: string;
+  observed?: string;
+  recoverySteps?: string[];
 }
 
 export interface RemovalWorktreeSummary {
@@ -1190,6 +1313,37 @@ export interface AgentRunResult {
   succeeded: boolean;
   output: string;
   durationMs: number;
+}
+
+export type CodeReviewScope = "recentChanges" | "totalCode";
+
+export type CodeReviewFindingSeverity = "critical" | "warning" | "suggestion";
+
+export interface CodeReviewFinding {
+  findingId: string;
+  severity: CodeReviewFindingSeverity;
+  filePath: string;
+  line?: number;
+  title: string;
+  explanation: string;
+  suggestedPatch?: string;
+}
+
+export interface CodeReviewActionableStep {
+  stepNumber: number;
+  instruction: string;
+}
+
+export interface WorkspaceCodeReviewResult {
+  workspaceId: string;
+  provider: AgentProvider;
+  scope: CodeReviewScope;
+  model?: string;
+  agent?: string;
+  summary: string;
+  findings: CodeReviewFinding[];
+  actionableSteps: CodeReviewActionableStep[];
+  reviewedAtUnixMs: number;
 }
 
 export type VerificationKind =
@@ -1451,6 +1605,14 @@ export interface WorkspaceAgentReport {
   environment: WorkspaceAgentEnvironmentPlan;
   flows: WorkspaceAgentFlow[];
   detail: string;
+}
+
+export interface WorkspaceVerificationSummary {
+  schemaVersion: 1;
+  workspaceId: string;
+  verificationPlan: WorkspaceVerificationPlan;
+  verificationResult: WorkspaceVerificationResult;
+  verificationHistory: WorkspaceVerificationResult[];
 }
 
 export interface WorkspaceEvidence {
@@ -1880,10 +2042,74 @@ export interface ActivityWatchDailyReview {
   detail: string;
 }
 
+export type AgentConversationPublicationStatus =
+  | "needsCommit"
+  | "ready"
+  | "upToDate";
+
+export interface AgentConversationPublicationPreflight {
+  schemaVersion: 1;
+  conversationId: string;
+  workspaceId: string;
+  repositoryId: string;
+  iid: number;
+  sourceBranch: string;
+  providerHeadCommitOid: string;
+  localHeadCommitOid: string;
+  changedFileCount: number;
+  status: AgentConversationPublicationStatus;
+  effectDigest: string;
+}
+
+export interface AgentConversationPublicationResult {
+  schemaVersion: 1;
+  conversationId: string;
+  workspaceId: string;
+  repositoryId: string;
+  iid: number;
+  remoteName: string;
+  branchName: string;
+  headCommitOid: string;
+}
+
 export interface WorkspaceClient {
+  createAgentConversation?(request: CreateAgentConversationRequest): Promise<AgentConversation>;
+  getAgentConversation?(conversationId: string): Promise<AgentConversation>;
+  getAgentTurnChanges?(conversationId: string, requestId: string): Promise<AgentTurnChanges>;
+  preflightAgentWorkItemIntegration?(workSetId: string, taskId: string): Promise<AgentWorkItemIntegrationPreflight>;
+  integrateAgentWorkItem?(workSetId: string, taskId: string, request: IntegrateAgentWorkItemRequest): Promise<AgentWorkItemIntegrationResult>;
+  openAgentWorkItemPreview?(workSetId: string, taskId: string): Promise<AgentWorkItemPreview>;
+  createAgentWorkSet?(conversationId: string, turnRequestId: string, request: CreateAgentWorkSetRequest): Promise<AgentWorkSet>;
+  getAgentWorkSet?(workSetId: string): Promise<AgentWorkSet>;
+  listAgentWorkSets?(conversationId: string, turnRequestId: string): Promise<AgentWorkSetList>;
+  cancelAgentWorkItem?(workSetId: string, taskId: string, request: CancelAgentWorkItemRequest): Promise<AgentWorkSet>;
+  getAgentTurnDecisions?(conversationId: string, turnRequestId: string): Promise<AgentTurnDecisions>;
+  recordAgentTurnDecision?(conversationId: string, turnRequestId: string, request: RecordAgentTurnDecisionRequest): Promise<AgentTurnDecisions>;
+  getAgentTurnChecks?(conversationId: string, turnRequestId: string): Promise<AgentTurnChecks>;
+  runAgentTurnCheck?(conversationId: string, turnRequestId: string, request: RunAgentTurnCheckRequest): Promise<AgentTurnChecks>;
+  preflightAgentTurnRestore?(conversationId: string, turnRequestId: string): Promise<AgentTurnRestorePreflight>;
+  restoreAgentTurn?(conversationId: string, turnRequestId: string, request: RestoreAgentTurnRequest): Promise<AgentTurnRestoreResult>;
+  listAgentConversations?(): Promise<AgentConversationList>;
+  sendAgentConversationMessage?(conversationId: string, request: SendAgentConversationMessageRequest): Promise<AgentConversation>;
+  updateAgentConversationMessage?(conversationId: string, messageId: string, request: UpdateAgentConversationMessageRequest): Promise<AgentConversation>;
+  cancelAgentConversationMessage?(conversationId: string, messageId: string, request: CancelAgentConversationMessageRequest): Promise<AgentConversation>;
+  preflightAgentConversationPublication?(conversationId: string): Promise<AgentConversationPublicationPreflight>;
+  publishAgentConversationBranch?(conversationId: string, effectDigest: string): Promise<AgentConversationPublicationResult>;
+  captureUiRegion?(request: { rect: { x: number; y: number; width: number; height: number }; viewport: { width: number; height: number; devicePixelRatio: number } }): Promise<RegionCapture>;
+
   getGithubReviewInbox(): Promise<GithubReviewInbox>;
   openGithubReview(repositoryId: string, number: number): Promise<OpenGithubReviewResult>;
   getGitlabReviewInbox(): Promise<GitlabReviewInbox>;
+  getGitlabDiscussions(
+    repositoryId: string,
+    iid: number,
+    workspaceId?: string,
+  ): Promise<GitlabDiscussions>;
+  replyGitlabDiscussion(
+    repositoryId: string,
+    iid: number,
+    request: GitlabDiscussionReplyRequest,
+  ): Promise<GitlabDiscussionReplyResult>;
   getGitlabReviewPatch(
     repositoryId: string,
     iid: number,
@@ -1991,6 +2217,7 @@ export interface WorkspaceClient {
     request: RuntimeAnalysisRequest,
   ): Promise<RuntimeAnalysisResult>;
   preflightWorkspace(workspaceId: string): Promise<WorkspacePreflight>;
+  recoverWorkspaceSetup(workspaceId: string, effectDigest: string): Promise<WorkspacePreflight>;
   getWorkspaceMaterialization(
     workspaceId: string,
   ): Promise<WorkspaceMaterialization | null>;
@@ -2004,6 +2231,22 @@ export interface WorkspaceClient {
     filePath: string,
     expectedPatchSha256: string,
   ): Promise<WorkspaceRepositoryFileReview>;
+  getWorkspaceGitlabComparison(
+    workspaceId: string,
+    repositoryId: string,
+    iid: number,
+    refresh?: boolean,
+  ): Promise<WorkspaceGitlabComparison>;
+  getWorkspaceRepositorySource(
+    workspaceId: string,
+    repositoryId: string,
+    filePath: string,
+  ): Promise<WorkspaceRepositorySource>;
+  saveWorkspaceRepositorySource(
+    workspaceId: string,
+    repositoryId: string,
+    request: WorkspaceRepositorySourceSaveRequest,
+  ): Promise<WorkspaceRepositorySource>;
   getWorkspaceRepositoryReviewGraph(
     workspaceId: string,
     repositoryId: string,
@@ -2100,11 +2343,18 @@ export interface WorkspaceClient {
     prompt: string,
   ): Promise<AgentRunResult>;
   getWorkspaceEvidence(workspaceId: string): Promise<WorkspaceEvidence | null>;
+  getWorkspaceVerificationSummary?(workspaceId: string): Promise<WorkspaceVerificationSummary | null>;
   promoteAgentVerificationCheck(
     workspaceId: string,
     proposalId: string,
   ): Promise<WorkspaceEvidence>;
   runWorkspaceVerification(workspaceId: string): Promise<WorkspaceEvidence>;
+  runWorkspaceCodeReview?(
+    workspaceId: string,
+    provider: AgentProvider,
+    scope: CodeReviewScope,
+    model?: string,
+  ): Promise<WorkspaceCodeReviewResult>;
   runWorkspaceVerificationCheck?(
     workspaceId: string,
     checkId: string,
@@ -2197,12 +2447,14 @@ const providers: readonly WorkspaceProvider[] = [
   "openCode",
   "hermes",
   "vsCode",
+  "copilot",
 ];
 
 const agentProviders: readonly AgentProvider[] = [
   "codex",
   "openCode",
   "hermes",
+  "copilot",
 ];
 
 export const terminalProviders: readonly TerminalProvider[] = [
@@ -2947,6 +3199,150 @@ export function normalizeGitlabReviewInbox(value: unknown): GitlabReviewInbox {
   };
 }
 
+function gitlabDiscussionIdField(value: unknown, path: string): string {
+  const id = stringField(value, path);
+  if (!/^[A-Za-z0-9_-]{1,128}$/.test(id)) return invalidPayload(path);
+  return id;
+}
+
+function gitlabUsernameField(value: unknown, path: string): string {
+  const username = stringField(value, path);
+  if (!/^[A-Za-z0-9_.-]{1,255}$/.test(username)) return invalidPayload(path);
+  return username;
+}
+
+function gitlabCommentBodyField(value: unknown, path: string): string {
+  const body = stringField(value, path);
+  if (Array.from(body).length > 16_384 || /[\0\r]/.test(body)) {
+    return invalidPayload(path);
+  }
+  return body;
+}
+
+function normalizeGitlabReviewDiscussionComment(
+  value: unknown,
+  path: string,
+): GitlabReviewDiscussionComment {
+  const comment = exactRecord(value, path, ["id", "body", "authorLogin", "createdAt"]);
+  const id = integerField(comment.id, `${path}.id`);
+  const createdAt = stringField(comment.createdAt, `${path}.createdAt`);
+  if (id < 1 || Array.from(createdAt).length > 512 || /[\0\r]/.test(createdAt)) {
+    return invalidPayload(path);
+  }
+  return {
+    id,
+    body: gitlabCommentBodyField(comment.body, `${path}.body`),
+    authorLogin: gitlabUsernameField(comment.authorLogin, `${path}.authorLogin`),
+    createdAt,
+  };
+}
+
+function normalizeGitlabReviewDiscussions(
+  value: unknown,
+  fieldPath: string,
+): GitlabReviewDiscussion[] {
+  if (!Array.isArray(value) || value.length > 100) return invalidPayload(fieldPath);
+  let commentCount = 0;
+  return value.map((value, index) => {
+    const path = `${fieldPath}[${index}]`;
+    const discussion = exactRecord(value, path, [
+      "id", "resolvable", "resolved", "automated", "filePath", "side", "line", "position", "comments",
+    ]);
+    if (!Array.isArray(discussion.comments)) return invalidPayload(`${path}.comments`);
+    commentCount += discussion.comments.length;
+    if (commentCount > 200) return invalidPayload(`${path}.comments`);
+    const filePath = discussion.filePath === undefined
+      ? undefined
+      : stringField(discussion.filePath, `${path}.filePath`);
+    const side = discussion.side === undefined
+      ? undefined
+      : enumField(discussion.side, ["additions", "deletions"] as const, `${path}.side`);
+    const line = discussion.line === undefined
+      ? undefined
+      : integerField(discussion.line, `${path}.line`);
+    let position: GitlabReviewDiscussion["position"];
+    if (discussion.position !== undefined) {
+      const refs = exactRecord(discussion.position, `${path}.position`, ["baseCommitOid", "startCommitOid", "headCommitOid"]);
+      const baseCommitOid = stringField(refs.baseCommitOid, `${path}.position.baseCommitOid`);
+      const startCommitOid = stringField(refs.startCommitOid, `${path}.position.startCommitOid`);
+      const headCommitOid = stringField(refs.headCommitOid, `${path}.position.headCommitOid`);
+      if (![baseCommitOid, startCommitOid, headCommitOid].every((oid) => /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(oid))) return invalidPayload(`${path}.position`);
+      position = { baseCommitOid, startCommitOid, headCommitOid };
+    }
+    return {
+      id: gitlabDiscussionIdField(discussion.id, `${path}.id`),
+      resolvable: booleanField(discussion.resolvable, `${path}.resolvable`),
+      resolved: booleanField(discussion.resolved, `${path}.resolved`),
+      automated: booleanField(discussion.automated, `${path}.automated`),
+      ...(filePath ? { filePath } : {}),
+      ...(side ? { side } : {}),
+      ...(line !== undefined ? { line } : {}),
+      ...(position ? { position } : {}),
+      comments: discussion.comments.map((comment, index) =>
+        normalizeGitlabReviewDiscussionComment(comment, `${path}.comments[${index}]`),
+      ),
+    };
+  });
+}
+
+function gitlabDiscussionResponseIdentity(
+  raw: UnknownRecord,
+  path: string,
+  expectedRepositoryId: string,
+  expectedIid: number,
+) {
+  const repositoryId = stringField(raw.repositoryId, `${path}.repositoryId`);
+  const iid = integerField(raw.iid, `${path}.iid`);
+  if (raw.schemaVersion !== 1 || iid < 1 || repositoryId !== expectedRepositoryId || iid !== expectedIid) {
+    return invalidPayload(path);
+  }
+  return { repositoryId, iid };
+}
+
+function normalizeGitlabDiscussions(
+  value: unknown,
+  expectedRepositoryId: string,
+  expectedIid: number,
+): GitlabDiscussions {
+  const path = "gitlabDiscussions";
+  const raw = exactRecord(value, path, [
+    "schemaVersion", "repositoryId", "iid", "scopeId", "viewerLogin",
+    "discussions", "fetchedAtUnixMs", "fromCache", "truncated",
+  ]);
+  const identity = gitlabDiscussionResponseIdentity(raw, path, expectedRepositoryId, expectedIid);
+  const scopeId = stringField(raw.scopeId, `${path}.scopeId`);
+  if (!/^[0-9a-f]{64}$/.test(scopeId)) return invalidPayload(`${path}.scopeId`);
+  return {
+    schemaVersion: 1,
+    ...identity,
+    scopeId,
+    viewerLogin: gitlabUsernameField(raw.viewerLogin, `${path}.viewerLogin`),
+    discussions: normalizeGitlabReviewDiscussions(raw.discussions, `${path}.discussions`),
+    fetchedAtUnixMs: integerField(raw.fetchedAtUnixMs, `${path}.fetchedAtUnixMs`),
+    fromCache: booleanField(raw.fromCache, `${path}.fromCache`),
+    truncated: booleanField(raw.truncated, `${path}.truncated`),
+  };
+}
+
+function normalizeGitlabDiscussionReplyResult(
+  value: unknown,
+  expectedRepositoryId: string,
+  expectedIid: number,
+  expectedDiscussionId: string,
+): GitlabDiscussionReplyResult {
+  const path = "gitlabDiscussionReplyResult";
+  const raw = exactRecord(value, path, ["schemaVersion", "repositoryId", "iid", "discussionId", "comment"]);
+  const identity = gitlabDiscussionResponseIdentity(raw, path, expectedRepositoryId, expectedIid);
+  const discussionId = gitlabDiscussionIdField(raw.discussionId, `${path}.discussionId`);
+  if (discussionId !== expectedDiscussionId) return invalidPayload(`${path}.discussionId`);
+  return {
+    schemaVersion: 1,
+    ...identity,
+    discussionId,
+    comment: normalizeGitlabReviewDiscussionComment(raw.comment, `${path}.comment`),
+  };
+}
+
 export function normalizeGitlabReviewPatch(value: unknown): GitlabReviewPatch {
   const raw = exactRecord(value, "gitlabReviewPatch", [
     "schemaVersion", "repositoryId", "iid", "baseCommitOid",
@@ -2982,49 +3378,7 @@ export function normalizeGitlabReviewPatch(value: unknown): GitlabReviewPatch {
       authoredAt: stringField(commit.authoredAt, `${path}.authoredAt`),
     };
   });
-  if (!Array.isArray(raw.discussions) || raw.discussions.length > 100) {
-    return invalidPayload("gitlabReviewPatch.discussions");
-  }
-  let discussionCommentCount = 0;
-  const discussions = raw.discussions.map((value, index) => {
-    const path = `gitlabReviewPatch.discussions[${index}]`;
-    const discussion = exactRecord(value, path, [
-      "id", "resolvable", "resolved", "automated", "filePath", "side", "line", "comments",
-    ]);
-    if (!Array.isArray(discussion.comments)) return invalidPayload(`${path}.comments`);
-    discussionCommentCount += discussion.comments.length;
-    if (discussionCommentCount > 200) return invalidPayload(`${path}.comments`);
-    const filePath = discussion.filePath === undefined
-      ? undefined
-      : stringField(discussion.filePath, `${path}.filePath`);
-    const side = discussion.side === undefined
-      ? undefined
-      : enumField(discussion.side, ["additions", "deletions"] as const, `${path}.side`);
-    const line = discussion.line === undefined
-      ? undefined
-      : integerField(discussion.line, `${path}.line`);
-    return {
-      id: stringField(discussion.id, `${path}.id`),
-      resolvable: booleanField(discussion.resolvable, `${path}.resolvable`),
-      resolved: booleanField(discussion.resolved, `${path}.resolved`),
-      automated: booleanField(discussion.automated, `${path}.automated`),
-      ...(filePath ? { filePath } : {}),
-      ...(side ? { side } : {}),
-      ...(line !== undefined ? { line } : {}),
-      comments: discussion.comments.map((commentValue, commentIndex) => {
-        const commentPath = `${path}.comments[${commentIndex}]`;
-        const comment = exactRecord(commentValue, commentPath, [
-          "id", "body", "authorLogin", "createdAt",
-        ]);
-        return {
-          id: integerField(comment.id, `${commentPath}.id`),
-          body: stringField(comment.body, `${commentPath}.body`),
-          authorLogin: stringField(comment.authorLogin, `${commentPath}.authorLogin`),
-          createdAt: stringField(comment.createdAt, `${commentPath}.createdAt`),
-        };
-      }),
-    };
-  });
+  const discussions = normalizeGitlabReviewDiscussions(raw.discussions, "gitlabReviewPatch.discussions");
   const selectedCommitOid = raw.selectedCommitOid === undefined
     ? undefined
     : stringField(raw.selectedCommitOid, "gitlabReviewPatch.selectedCommitOid");
@@ -3261,6 +3615,33 @@ function validateGitlabMergeRequestIdentity(
     throw new WorkspaceClientError("A valid GitLab merge request is required", {
       code: "invalid_request",
     });
+  }
+}
+
+function validateGitlabDiscussionWorkspace(workspaceId: string | undefined): void {
+  if (workspaceId === undefined) return;
+  if (typeof workspaceId !== "string" || !workspaceId.trim() || /[\0\r\n]/.test(workspaceId)) {
+    throw new WorkspaceClientError("A valid workspace ID is required", { code: "invalid_request" });
+  }
+}
+
+function validateGitlabDiscussionReplyRequest(
+  value: GitlabDiscussionReplyRequest,
+): GitlabDiscussionReplyRequest {
+  try {
+    const raw = exactRecord(value, "gitlabDiscussionReplyRequest", ["discussionId", "body", "workspaceId"]);
+    const discussionId = gitlabDiscussionIdField(raw.discussionId, "gitlabDiscussionReplyRequest.discussionId");
+    const body = gitlabCommentBodyField(raw.body, "gitlabDiscussionReplyRequest.body");
+    const workspaceId = raw.workspaceId === undefined
+      ? undefined
+      : stringField(raw.workspaceId, "gitlabDiscussionReplyRequest.workspaceId");
+    validateGitlabDiscussionWorkspace(workspaceId);
+    return { discussionId, body, ...(workspaceId === undefined ? {} : { workspaceId }) };
+  } catch (cause) {
+    if (cause instanceof WorkspaceClientError && cause.code === "invalid_response") {
+      throw new WorkspaceClientError("Enter a valid reply for this GitLab discussion", { code: "invalid_request", cause });
+    }
+    throw cause;
   }
 }
 
@@ -4845,6 +5226,10 @@ function normalizeSetupSnapshot(value: unknown): SetupSnapshot {
           raw.browserJourneyReadiness,
           "setupSnapshot.browserJourneyReadiness",
         );
+  const gitSigning =
+    raw.gitSigning === undefined
+      ? undefined
+      : normalizeGitSigningReadiness(raw.gitSigning);
   return {
     checkedAtUnixMs: integerField(
       raw.checkedAtUnixMs,
@@ -4855,9 +5240,49 @@ function normalizeSetupSnapshot(value: unknown): SetupSnapshot {
       "setupSnapshot.repositoryCount",
     ),
     integrations,
+    ...(gitSigning ? { gitSigning } : {}),
     ...(browserJourneyReadiness
       ? { browserJourneyReadiness }
       : {}),
+  };
+}
+
+function normalizeGitSigningReadiness(value: unknown): GitSigningReadiness {
+  const raw = record(value, "setupSnapshot.gitSigning");
+  return {
+    ready: booleanField(raw.ready, "setupSnapshot.gitSigning.ready"),
+    commitSigningEnabled: booleanField(
+      raw.commitSigningEnabled,
+      "setupSnapshot.gitSigning.commitSigningEnabled",
+    ),
+    signingKeyConfigured: booleanField(
+      raw.signingKeyConfigured,
+      "setupSnapshot.gitSigning.signingKeyConfigured",
+    ),
+    gpgAvailable: booleanField(
+      raw.gpgAvailable,
+      "setupSnapshot.gitSigning.gpgAvailable",
+    ),
+    privateKeyAvailable: booleanField(
+      raw.privateKeyAvailable,
+      "setupSnapshot.gitSigning.privateKeyAvailable",
+    ),
+    detail: stringField(raw.detail, "setupSnapshot.gitSigning.detail"),
+    ...(raw.diagnosticCode === undefined
+      ? {}
+      : {
+          diagnosticCode: enumField(
+            raw.diagnosticCode,
+            [
+              "gitUnavailable",
+              "commitSigningDisabled",
+              "signingKeyNotConfigured",
+              "gpgExecutableMissing",
+              "privateKeyUnavailable",
+            ] as const,
+            "setupSnapshot.gitSigning.diagnosticCode",
+          ),
+        }),
   };
 }
 
@@ -4949,6 +5374,7 @@ function normalizeCloneRepositoryResult(value: unknown): CloneRepositoryResult {
     "repository",
     "repositoryRootDisplayPath",
     "reusedExisting",
+    "selectedBaseRef",
   ]);
   return {
     repository: normalizeRepositorySummary(
@@ -4963,6 +5389,14 @@ function normalizeCloneRepositoryResult(value: unknown): CloneRepositoryResult {
       raw.reusedExisting,
       "cloneRepositoryResult.reusedExisting",
     ),
+    ...(raw.selectedBaseRef === undefined
+      ? {}
+      : {
+          selectedBaseRef: stringField(
+            raw.selectedBaseRef,
+            "cloneRepositoryResult.selectedBaseRef",
+          ),
+        }),
   };
 }
 
@@ -5289,6 +5723,39 @@ function normalizeGraph(
   };
 }
 
+function normalizeSetupRecovery(value: unknown): WorkspaceSetupRecovery {
+  const path = "workspacePreflight.setupRecovery";
+  const raw = record(value, path);
+  const boundedList = (field: "paths" | "blockers") => {
+    const values = arrayField(raw[field], `${path}.${field}`);
+    if (values.length > 1024) return invalidPayload(`${path}.${field}`);
+    return values.map((value, index) => {
+      const entryPath = `${path}.${field}[${index}]`;
+      const text = stringField(value, entryPath);
+      if ([...text].length > 4096 || text.includes("\0")) return invalidPayload(entryPath);
+      return text;
+    });
+  };
+  const ready = booleanField(raw.ready, `${path}.ready`);
+  const paths = boundedList("paths");
+  const blockers = boundedList("blockers");
+  if (ready !== (blockers.length === 0)) return invalidPayload(`${path}.ready`);
+  return { effectDigest: normalizeSha256(raw.effectDigest, `${path}.effectDigest`), ready, paths, blockers };
+}
+
+function setupRecoveryDigest(value: string): string {
+  if (typeof value !== "string" || !/^sha256:[0-9a-f]{64}$/.test(value)) {
+    throw new WorkspaceClientError("Review setup again before you clean setup files.", { code: "invalid_request", retryable: false });
+  }
+  return value;
+}
+
+function normalizeRecoveredSetup(value: unknown, workspaceId: string): WorkspacePreflight {
+  const result = normalizePreflight(value);
+  if (result.workspaceId !== workspaceId) return invalidPayload("workspacePreflight.workspaceId");
+  return result;
+}
+
 function normalizePreflight(value: unknown): WorkspacePreflight {
   const raw = record(value, "workspacePreflight");
   if (
@@ -5403,6 +5870,7 @@ function normalizePreflight(value: unknown): WorkspacePreflight {
     graph: normalizeGraph(raw.graph, "workspacePreflight.graph"),
     ...(runtime === undefined ? {} : { runtime }),
     ...(planning === undefined ? {} : { planning }),
+    ...(raw.setupRecovery === undefined ? {} : { setupRecovery: normalizeSetupRecovery(raw.setupRecovery) }),
   };
 }
 
@@ -5590,6 +6058,65 @@ function normalizeWorkspaceRepositoryDiff(
     ),
     ...(reviewGraph === undefined ? {} : { reviewGraph }),
   };
+}
+
+
+function normalizeWorkspaceGitlabComparison(
+  value: unknown, workspaceId: string, repositoryId: string, iid: number,
+): WorkspaceGitlabComparison {
+  const path = "workspaceGitlabComparison";
+  const raw = exactRecord(value, path, ["schemaVersion", "workspaceId", "repositoryId", "repositoryLabel", "iid", "localHeadCommitOid", "status", "published", "latestWork", "sinceMr"]);
+  const status = enumField(raw.status, ["ready", "missingCommits", "diverged"] as const, `${path}.status`);
+  const published = normalizeGitlabReviewPatch(raw.published);
+  const localHeadCommitOid = stringField(raw.localHeadCommitOid, `${path}.localHeadCommitOid`);
+  if (raw.schemaVersion !== 1 || raw.workspaceId !== workspaceId || raw.repositoryId !== repositoryId || raw.iid !== iid ||
+      published.repositoryId !== repositoryId || published.iid !== iid || published.selectedCommitOid !== undefined ||
+      !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(localHeadCommitOid)) return invalidPayload(path);
+  const latestWork = raw.latestWork === undefined ? undefined : normalizeWorkspaceRepositoryDiff(raw.latestWork);
+  const sinceMr = raw.sinceMr === undefined ? undefined : normalizeWorkspaceRepositoryDiff(raw.sinceMr);
+  if (status === "ready") {
+    if (!latestWork || !sinceMr) return invalidPayload(`${path}.localDiffs`);
+    for (const [diff, base] of [[latestWork, published.baseCommitOid], [sinceMr, published.headCommitOid]] as const) {
+      if (diff.schemaVersion !== 1 || diff.workspaceId !== workspaceId || diff.repositoryId !== repositoryId ||
+          diff.baseCommitOid !== base || diff.headCommitOid !== localHeadCommitOid || !diff.patchSha256) return invalidPayload(`${path}.localDiffs`);
+    }
+  } else if (latestWork || sinceMr) return invalidPayload(`${path}.localDiffs`);
+  return {
+    schemaVersion: 1, workspaceId, repositoryId,
+    repositoryLabel: stringField(raw.repositoryLabel, `${path}.repositoryLabel`),
+    iid, localHeadCommitOid, status, published,
+    ...(latestWork ? { latestWork } : {}), ...(sinceMr ? { sinceMr } : {}),
+  };
+}
+
+function validRepositorySourceContent(content: unknown): content is string {
+  return typeof content === "string" && !content.includes("\0") && new TextEncoder().encode(content).byteLength <= 2 * 1024 * 1024;
+}
+
+function requiredRepositorySourcePath(value: string): string {
+  const path = requiredRepositoryFilePath(value);
+  if (path.split("/").some((part) => part.toLowerCase() === ".git")) {
+    throw new WorkspaceClientError("Choose a source file outside Git metadata.", { code: "invalid_request" });
+  }
+  return path;
+}
+
+function validateRepositorySourceSaveRequest(request: WorkspaceRepositorySourceSaveRequest): WorkspaceRepositorySourceSaveRequest {
+  const filePath = requiredRepositorySourcePath(request.filePath);
+  if (!validRepositorySourceContent(request.content) || !/^sha256:[0-9a-f]{64}$/.test(request.expectedRevision)) {
+    throw new WorkspaceClientError("Reload the file and enter valid text of 2 MiB or less.", { code: "invalid_request" });
+  }
+  return { filePath, content: request.content, expectedRevision: request.expectedRevision };
+}
+
+function normalizeWorkspaceRepositorySource(
+  value: unknown, workspaceId: string, repositoryId: string, filePath: string, expectedContent?: string,
+): WorkspaceRepositorySource {
+  const path = "workspaceRepositorySource";
+  const raw = exactRecord(value, path, ["schemaVersion", "workspaceId", "repositoryId", "filePath", "content", "revision"]);
+  if (raw.schemaVersion !== 1 || raw.workspaceId !== workspaceId || raw.repositoryId !== repositoryId || raw.filePath !== filePath ||
+      (expectedContent !== undefined && raw.content !== expectedContent) || !validRepositorySourceContent(raw.content) || typeof raw.revision !== "string" || !/^sha256:[0-9a-f]{64}$/.test(raw.revision)) return invalidPayload(path);
+  return { schemaVersion: 1, workspaceId, repositoryId, filePath, content: raw.content, revision: raw.revision };
 }
 
 function normalizeWorkspaceRepositoryFileReview(
@@ -6333,6 +6860,7 @@ function normalizeWorkspaceRemovalPreflight(
           item.code,
           [
             "workspaceDrift",
+            "activeOperation",
             "worktreeChanges",
             "ignoredFiles",
             "planningDocumentsPresent",
@@ -6346,6 +6874,12 @@ function normalizeWorkspaceRemovalPreflight(
           item.repositoryLabel,
           `${path}.repositoryLabel`,
         ),
+        displayPath: optionalStringField(item.displayPath, `${path}.displayPath`),
+        expected: optionalStringField(item.expected, `${path}.expected`),
+        observed: optionalStringField(item.observed, `${path}.observed`),
+        recoverySteps: item.recoverySteps === undefined
+          ? undefined
+          : stringArray(item.recoverySteps, `${path}.recoverySteps`),
       };
     }),
     warnings: stringArray(
@@ -6494,6 +7028,106 @@ function normalizeWorkspaceVerificationResult(
     }),
     warnings: stringArray(raw.warnings, `${path}.warnings`),
   };
+}
+
+function normalizeWorkspaceVerificationPlan(value: unknown): WorkspaceVerificationPlan {
+  const planRaw = record(value, "workspaceEvidence.verificationPlan");
+  if (!Array.isArray(planRaw.checks)) return invalidPayload("workspaceEvidence.verificationPlan.checks");
+  return {
+    schemaVersion: integerField(
+      planRaw.schemaVersion,
+      "workspaceEvidence.verificationPlan.schemaVersion",
+    ),
+    workspaceId: stringField(
+      planRaw.workspaceId,
+      "workspaceEvidence.verificationPlan.workspaceId",
+    ),
+    revision: integerField(
+      planRaw.revision,
+      "workspaceEvidence.verificationPlan.revision",
+    ),
+    updatedAtUnixMs: integerField(
+      planRaw.updatedAtUnixMs,
+      "workspaceEvidence.verificationPlan.updatedAtUnixMs",
+    ),
+    checks: planRaw.checks.map((check, index) => {
+      const path = `workspaceEvidence.verificationPlan.checks[${index}]`;
+      const item = record(check, path);
+      if (
+        !Array.isArray(item.args) ||
+        !Array.isArray(item.environmentNames) ||
+        !Array.isArray(item.acceptanceFiles)
+      ) {
+        return invalidPayload(path);
+      }
+      return {
+        id: stringField(item.id, `${path}.id`),
+        label: stringField(item.label, `${path}.label`),
+        kind: enumField(
+          item.kind,
+          [
+            "unit",
+            "integration",
+            "ui",
+            "contract",
+            "lint",
+            "build",
+            "custom",
+          ] as const,
+          `${path}.kind`,
+        ),
+        repositoryId:
+          item.repositoryId === null || item.repositoryId === undefined
+            ? null
+            : stringField(item.repositoryId, `${path}.repositoryId`),
+        workingDirectory: stringField(
+          item.workingDirectory,
+          `${path}.workingDirectory`,
+        ),
+        executable: stringField(item.executable, `${path}.executable`),
+        args: stringArray(item.args, `${path}.args`),
+        timeoutMs: integerField(item.timeoutMs, `${path}.timeoutMs`),
+        outputLimitBytes: integerField(
+          item.outputLimitBytes,
+          `${path}.outputLimitBytes`,
+        ),
+        required: booleanField(item.required, `${path}.required`),
+        environmentNames: stringArray(
+          item.environmentNames,
+          `${path}.environmentNames`,
+        ),
+        acceptanceFiles: item.acceptanceFiles.map(
+          (acceptanceFile, acceptanceIndex) => {
+            const acceptancePath = `${path}.acceptanceFiles[${acceptanceIndex}]`;
+            const acceptance = record(acceptanceFile, acceptancePath);
+            return {
+              displayPath: stringField(
+                acceptance.displayPath,
+                `${acceptancePath}.displayPath`,
+              ),
+              sha256: stringField(
+                acceptance.sha256,
+                `${acceptancePath}.sha256`,
+              ),
+            };
+          },
+        ),
+      };
+    }),
+  };
+
+}
+
+function normalizeWorkspaceVerificationSummary(value: unknown, workspaceId: string): WorkspaceVerificationSummary {
+  const raw = record(value, "workspaceVerificationSummary");
+  if (raw.schemaVersion !== 1 || raw.workspaceId !== workspaceId || !Array.isArray(raw.verificationHistory) || raw.verificationHistory.length > 10) return invalidPayload("workspaceVerificationSummary");
+  const verificationPlan = normalizeWorkspaceVerificationPlan(raw.verificationPlan);
+  const verificationResult = normalizeWorkspaceVerificationResult(raw.verificationResult, "workspaceVerificationSummary.verificationResult");
+  const verificationHistory = raw.verificationHistory.map((run, index) => normalizeWorkspaceVerificationResult(run, `workspaceVerificationSummary.verificationHistory[${index}]`));
+  if (verificationPlan.schemaVersion !== 1 || verificationPlan.workspaceId !== workspaceId || verificationPlan.revision < 1
+    || [verificationResult, ...verificationHistory].some(run => run.schemaVersion !== 1 || run.workspaceId !== workspaceId)
+    || verificationHistory.some(run => !["passed", "failed", "blocked", "cancelled"].includes(run.status) || run.completedAtUnixMs === null)) return invalidPayload("workspaceVerificationSummary");
+  return { schemaVersion: 1, workspaceId, verificationPlan, verificationResult, verificationHistory };
 }
 
 function normalizeWorkspaceEvidence(value: unknown): WorkspaceEvidence {
@@ -6650,88 +7284,7 @@ function normalizeWorkspaceEvidence(value: unknown): WorkspaceEvidence {
     ),
   };
 
-  const verificationPlan: WorkspaceVerificationPlan = {
-    schemaVersion: integerField(
-      planRaw.schemaVersion,
-      "workspaceEvidence.verificationPlan.schemaVersion",
-    ),
-    workspaceId: stringField(
-      planRaw.workspaceId,
-      "workspaceEvidence.verificationPlan.workspaceId",
-    ),
-    revision: integerField(
-      planRaw.revision,
-      "workspaceEvidence.verificationPlan.revision",
-    ),
-    updatedAtUnixMs: integerField(
-      planRaw.updatedAtUnixMs,
-      "workspaceEvidence.verificationPlan.updatedAtUnixMs",
-    ),
-    checks: planRaw.checks.map((check, index) => {
-      const path = `workspaceEvidence.verificationPlan.checks[${index}]`;
-      const item = record(check, path);
-      if (
-        !Array.isArray(item.args) ||
-        !Array.isArray(item.environmentNames) ||
-        !Array.isArray(item.acceptanceFiles)
-      ) {
-        return invalidPayload(path);
-      }
-      return {
-        id: stringField(item.id, `${path}.id`),
-        label: stringField(item.label, `${path}.label`),
-        kind: enumField(
-          item.kind,
-          [
-            "unit",
-            "integration",
-            "ui",
-            "contract",
-            "lint",
-            "build",
-            "custom",
-          ] as const,
-          `${path}.kind`,
-        ),
-        repositoryId:
-          item.repositoryId === null || item.repositoryId === undefined
-            ? null
-            : stringField(item.repositoryId, `${path}.repositoryId`),
-        workingDirectory: stringField(
-          item.workingDirectory,
-          `${path}.workingDirectory`,
-        ),
-        executable: stringField(item.executable, `${path}.executable`),
-        args: stringArray(item.args, `${path}.args`),
-        timeoutMs: integerField(item.timeoutMs, `${path}.timeoutMs`),
-        outputLimitBytes: integerField(
-          item.outputLimitBytes,
-          `${path}.outputLimitBytes`,
-        ),
-        required: booleanField(item.required, `${path}.required`),
-        environmentNames: stringArray(
-          item.environmentNames,
-          `${path}.environmentNames`,
-        ),
-        acceptanceFiles: item.acceptanceFiles.map(
-          (acceptanceFile, acceptanceIndex) => {
-            const acceptancePath = `${path}.acceptanceFiles[${acceptanceIndex}]`;
-            const acceptance = record(acceptanceFile, acceptancePath);
-            return {
-              displayPath: stringField(
-                acceptance.displayPath,
-                `${acceptancePath}.displayPath`,
-              ),
-              sha256: stringField(
-                acceptance.sha256,
-                `${acceptancePath}.sha256`,
-              ),
-            };
-          },
-        ),
-      };
-    }),
-  };
+  const verificationPlan = normalizeWorkspaceVerificationPlan(planRaw);
 
   const verificationResult = normalizeWorkspaceVerificationResult(
     resultRaw,
@@ -8449,6 +9002,40 @@ class HttpWorkspaceClient implements WorkspaceClient {
     );
   }
 
+  async getGitlabDiscussions(
+    repositoryId: string,
+    iid: number,
+    workspaceId?: string,
+  ): Promise<GitlabDiscussions> {
+    validateGitlabMergeRequestIdentity(repositoryId, iid);
+    validateGitlabDiscussionWorkspace(workspaceId);
+    const query = workspaceId === undefined ? "" : `?workspaceId=${encodeURIComponent(workspaceId)}`;
+    return normalizeGitlabDiscussions(
+      await this.request(`/api/v1/reviews/gitlab/${encodeURIComponent(repositoryId)}/${iid}/discussions${query}`),
+      repositoryId,
+      iid,
+    );
+  }
+
+  async replyGitlabDiscussion(
+    repositoryId: string,
+    iid: number,
+    request: GitlabDiscussionReplyRequest,
+  ): Promise<GitlabDiscussionReplyResult> {
+    validateGitlabMergeRequestIdentity(repositoryId, iid);
+    const validated = validateGitlabDiscussionReplyRequest(request);
+    return normalizeGitlabDiscussionReplyResult(
+      await this.request(`/api/v1/reviews/gitlab/${encodeURIComponent(repositoryId)}/${iid}/discussions/reply`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(validated),
+      }),
+      repositoryId,
+      iid,
+      validated.discussionId,
+    );
+  }
+
   async getGitlabReviewPatch(
     repositoryId: string,
     iid: number,
@@ -8898,6 +9485,123 @@ class HttpWorkspaceClient implements WorkspaceClient {
     return result;
   }
 
+  async createAgentConversation(request: CreateAgentConversationRequest): Promise<AgentConversation> {
+    validateCreateConversation(request, invalidPayload);
+    const result = normalizeAgentConversation(await this.request("/api/v1/agent-conversations", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(request),
+    }), invalidPayload);
+    return matchCreatedConversation(result, request, invalidPayload);
+  }
+
+  async getAgentConversation(conversationId: string): Promise<AgentConversation> {
+    const id = requiredWorkspaceId(conversationId);
+    return normalizeAgentConversation(await this.request(`/api/v1/agent-conversations/${encodeURIComponent(id)}`), invalidPayload, id);
+  }
+
+  async listAgentConversations(): Promise<AgentConversationList> {
+    return normalizeConversationList(await this.request("/api/v1/agent-conversations"), invalidPayload);
+  }
+
+  async preflightAgentWorkItemIntegration(workSetId: string, taskId: string): Promise<AgentWorkItemIntegrationPreflight> {
+    const id = validateAgentTurnId(workSetId, invalidPayload); const task = validateAgentTurnId(taskId, invalidPayload);
+    return normalizeAgentWorkItemIntegrationPreflight(await this.request(`/api/v1/agent-work-sets/${encodeURIComponent(id)}/items/${encodeURIComponent(task)}/integration-preflight`), invalidPayload, id, task);
+  }
+  async integrateAgentWorkItem(workSetId: string, taskId: string, request: IntegrateAgentWorkItemRequest): Promise<AgentWorkItemIntegrationResult> {
+    const id = validateAgentTurnId(workSetId, invalidPayload); const task = validateAgentTurnId(taskId, invalidPayload); validateIntegrateAgentWorkItem(request, invalidPayload);
+    return normalizeAgentWorkItemIntegrationResult(await this.request(`/api/v1/agent-work-sets/${encodeURIComponent(id)}/items/${encodeURIComponent(task)}/integration`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(request) }), invalidPayload, id, task, request);
+  }
+  async openAgentWorkItemPreview(workSetId: string, taskId: string): Promise<AgentWorkItemPreview> {
+    validateAgentTurnId(workSetId, invalidPayload); validateAgentTurnId(taskId, invalidPayload);
+    throw new WorkspaceClientError("Open this task in the WTS desktop app to use its live preview. You can also open the task workspace.", { code: "preview_desktop_required", retryable: false });
+  }
+  async createAgentWorkSet(conversationId: string, turnRequestId: string, request: CreateAgentWorkSetRequest): Promise<AgentWorkSet> {
+    const conversation = validateAgentTurnId(conversationId, invalidPayload); const turn = validateAgentTurnId(turnRequestId, invalidPayload);
+    validateCreateAgentWorkSet(request, invalidPayload);
+    return matchCreatedAgentWorkSet(normalizeAgentWorkSet(await this.request(`/api/v1/agent-conversations/${encodeURIComponent(conversation)}/messages/${encodeURIComponent(turn)}/work-sets`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(request) }), invalidPayload, request.requestId), invalidPayload, conversation, turn, request);
+  }
+  async getAgentWorkSet(workSetId: string): Promise<AgentWorkSet> {
+    const id = validateAgentTurnId(workSetId, invalidPayload); return normalizeAgentWorkSet(await this.request(`/api/v1/agent-work-sets/${encodeURIComponent(id)}`), invalidPayload, id);
+  }
+  async listAgentWorkSets(conversationId: string, turnRequestId: string): Promise<AgentWorkSetList> {
+    const conversation = validateAgentTurnId(conversationId, invalidPayload); const turn = validateAgentTurnId(turnRequestId, invalidPayload);
+    return normalizeAgentWorkSetList(await this.request(`/api/v1/agent-conversations/${encodeURIComponent(conversation)}/messages/${encodeURIComponent(turn)}/work-sets`), invalidPayload, conversation, turn);
+  }
+  async cancelAgentWorkItem(workSetId: string, taskId: string, request: CancelAgentWorkItemRequest): Promise<AgentWorkSet> {
+    const id = validateAgentTurnId(workSetId, invalidPayload); const task = validateAgentTurnId(taskId, invalidPayload); validateCancelAgentWorkItem(request, invalidPayload);
+    return matchCancelledAgentWorkItem(normalizeAgentWorkSet(await this.request(`/api/v1/agent-work-sets/${encodeURIComponent(id)}/items/${encodeURIComponent(task)}/cancel`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(request) }), invalidPayload, id), invalidPayload, task, request);
+  }
+
+  async getAgentTurnDecisions(conversationId: string, turnRequestId: string): Promise<AgentTurnDecisions> {
+    const id = validateAgentTurnId(conversationId, invalidPayload);
+    const turn = validateAgentTurnId(turnRequestId, invalidPayload);
+    return normalizeAgentTurnDecisions(await this.request(`/api/v1/agent-conversations/${encodeURIComponent(id)}/messages/${encodeURIComponent(turn)}/decisions`), invalidPayload, id, turn);
+  }
+
+  async recordAgentTurnDecision(conversationId: string, turnRequestId: string, request: RecordAgentTurnDecisionRequest): Promise<AgentTurnDecisions> {
+    const id = validateAgentTurnId(conversationId, invalidPayload);
+    const turn = validateAgentTurnId(turnRequestId, invalidPayload);
+    validateRecordAgentTurnDecision(request, invalidPayload);
+    return normalizeAgentTurnDecisions(await this.request(`/api/v1/agent-conversations/${encodeURIComponent(id)}/messages/${encodeURIComponent(turn)}/decisions`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(request) }), invalidPayload, id, turn, request);
+  }
+
+  async getAgentTurnChecks(conversationId: string, turnRequestId: string): Promise<AgentTurnChecks> {
+    const id = validateAgentTurnId(conversationId, invalidPayload);
+    const turn = validateAgentTurnId(turnRequestId, invalidPayload);
+    return normalizeAgentTurnChecks(await this.request(`/api/v1/agent-conversations/${encodeURIComponent(id)}/messages/${encodeURIComponent(turn)}/checks`), invalidPayload, id, turn);
+  }
+
+  async runAgentTurnCheck(conversationId: string, turnRequestId: string, request: RunAgentTurnCheckRequest): Promise<AgentTurnChecks> {
+    const id = validateAgentTurnId(conversationId, invalidPayload);
+    const turn = validateAgentTurnId(turnRequestId, invalidPayload);
+    validateRunAgentTurnCheck(request, invalidPayload);
+    return normalizeAgentTurnChecks(await this.request(`/api/v1/agent-conversations/${encodeURIComponent(id)}/messages/${encodeURIComponent(turn)}/checks`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(request) }), invalidPayload, id, turn, request);
+  }
+
+  async preflightAgentTurnRestore(conversationId: string, turnRequestId: string): Promise<AgentTurnRestorePreflight> {
+    const id = validateAgentTurnId(conversationId, invalidPayload);
+    const turn = validateAgentTurnId(turnRequestId, invalidPayload);
+    return normalizeAgentTurnRestorePreflight(await this.request(`/api/v1/agent-conversations/${encodeURIComponent(id)}/messages/${encodeURIComponent(turn)}/restore-preflight`), invalidPayload, id, turn);
+  }
+
+  async restoreAgentTurn(conversationId: string, turnRequestId: string, request: RestoreAgentTurnRequest): Promise<AgentTurnRestoreResult> {
+    const id = validateAgentTurnId(conversationId, invalidPayload);
+    const turn = validateAgentTurnId(turnRequestId, invalidPayload);
+    validateRestoreAgentTurn(request, invalidPayload);
+    return normalizeAgentTurnRestoreResult(await this.request(`/api/v1/agent-conversations/${encodeURIComponent(id)}/messages/${encodeURIComponent(turn)}/restore`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(request) }), invalidPayload, id, turn, request);
+  }
+
+  async getAgentTurnChanges(conversationId: string, requestId: string): Promise<AgentTurnChanges> {
+    const id = validateAgentTurnId(conversationId, invalidPayload);
+    const request = validateAgentTurnId(requestId, invalidPayload);
+    return normalizeAgentTurnChanges(await this.request(`/api/v1/agent-conversations/${encodeURIComponent(id)}/messages/${encodeURIComponent(request)}/changes`), invalidPayload, id, request);
+  }
+
+  async sendAgentConversationMessage(conversationId: string, request: SendAgentConversationMessageRequest): Promise<AgentConversation> {
+    const id = requiredWorkspaceId(conversationId);
+    validateSendConversation(request, invalidPayload);
+    return matchAcceptedMessage(normalizeAgentConversation(await this.request(`/api/v1/agent-conversations/${encodeURIComponent(id)}/messages`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(request),
+    }), invalidPayload, id), request, invalidPayload);
+  }
+
+  async updateAgentConversationMessage(conversationId: string, messageId: string, request: UpdateAgentConversationMessageRequest): Promise<AgentConversation> {
+    const id = requiredWorkspaceId(conversationId);
+    const message = requiredWorkspaceId(messageId);
+    validateUpdateConversationMessage(request, invalidPayload);
+    return matchMutatedMessage(normalizeAgentConversation(await this.request(`/api/v1/agent-conversations/${encodeURIComponent(id)}/messages/${encodeURIComponent(message)}`, {
+      method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(request),
+    }), invalidPayload, id), message, request, invalidPayload);
+  }
+
+  async cancelAgentConversationMessage(conversationId: string, messageId: string, request: CancelAgentConversationMessageRequest): Promise<AgentConversation> {
+    const id = requiredWorkspaceId(conversationId);
+    const message = requiredWorkspaceId(messageId);
+    validateCancelConversationMessage(request, invalidPayload);
+    return matchMutatedMessage(normalizeAgentConversation(await this.request(`/api/v1/agent-conversations/${encodeURIComponent(id)}/messages/${encodeURIComponent(message)}/cancel`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(request),
+    }), invalidPayload, id), message, request, invalidPayload);
+  }
+
   async getAgentSessionDetail(sessionId: string): Promise<AgentSessionDetail> {
     const session = requiredWorkspaceId(sessionId);
     return normalizeAgentSessionDetail(
@@ -9104,6 +9808,15 @@ class HttpWorkspaceClient implements WorkspaceClient {
     );
   }
 
+  async recoverWorkspaceSetup(workspaceId: string, effectDigest: string): Promise<WorkspacePreflight> {
+    const workspace = requiredWorkspaceId(workspaceId);
+    const digest = setupRecoveryDigest(effectDigest);
+    return normalizeRecoveredSetup(await this.request(
+      `/api/v1/workspaces/${encodeURIComponent(workspace)}/setup-recovery`,
+      { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ effectDigest: digest }) },
+    ), workspace);
+  }
+
   async getWorkspaceMaterialization(
     workspaceId: string,
   ): Promise<WorkspaceMaterialization | null> {
@@ -9132,6 +9845,28 @@ class HttpWorkspaceClient implements WorkspaceClient {
         `/api/v1/workspaces/${encodeURIComponent(workspace)}/repositories/${encodeURIComponent(repository)}/diff`,
       ),
     );
+  }
+
+  async getWorkspaceGitlabComparison(workspaceId: string, repositoryId: string, iid: number, refresh = false): Promise<WorkspaceGitlabComparison> {
+    const workspace = requiredWorkspaceId(workspaceId);
+    const repository = requiredRepositoryId(repositoryId);
+    validateGitlabMergeRequestIdentity(repository, iid);
+    if (typeof refresh !== "boolean") throw new WorkspaceClientError("Choose a valid refresh option.", { code: "invalid_request" });
+    return normalizeWorkspaceGitlabComparison(await this.request(`/api/v1/workspaces/${encodeURIComponent(workspace)}/repositories/${encodeURIComponent(repository)}/gitlab/${iid}/comparison${refresh ? "?refresh=true" : ""}`), workspace, repository, iid);
+  }
+
+  async getWorkspaceRepositorySource(workspaceId: string, repositoryId: string, filePath: string): Promise<WorkspaceRepositorySource> {
+    const workspace = requiredWorkspaceId(workspaceId);
+    const repository = requiredRepositoryId(repositoryId);
+    const path = requiredRepositorySourcePath(filePath);
+    return normalizeWorkspaceRepositorySource(await this.request(`/api/v1/workspaces/${encodeURIComponent(workspace)}/repositories/${encodeURIComponent(repository)}/source?filePath=${encodeURIComponent(path)}`), workspace, repository, path);
+  }
+
+  async saveWorkspaceRepositorySource(workspaceId: string, repositoryId: string, request: WorkspaceRepositorySourceSaveRequest): Promise<WorkspaceRepositorySource> {
+    const workspace = requiredWorkspaceId(workspaceId);
+    const repository = requiredRepositoryId(repositoryId);
+    const validated = validateRepositorySourceSaveRequest(request);
+    return normalizeWorkspaceRepositorySource(await this.request(`/api/v1/workspaces/${encodeURIComponent(workspace)}/repositories/${encodeURIComponent(repository)}/source`, { method: "PUT", body: JSON.stringify(validated) }), workspace, repository, validated.filePath, validated.content);
   }
 
   async getWorkspaceRepositoryFileReview(
@@ -9648,6 +10383,12 @@ class HttpWorkspaceClient implements WorkspaceClient {
     );
   }
 
+  async getWorkspaceVerificationSummary(workspaceId: string): Promise<WorkspaceVerificationSummary | null> {
+    const workspace = requiredWorkspaceId(workspaceId);
+    const payload = await this.request(`/api/v1/workspaces/${encodeURIComponent(workspace)}/verification/summary`);
+    return payload === null ? null : normalizeWorkspaceVerificationSummary(payload, workspace);
+  }
+
   async getWorkspaceEvidence(
     workspaceId: string,
   ): Promise<WorkspaceEvidence | null> {
@@ -9675,6 +10416,26 @@ class HttpWorkspaceClient implements WorkspaceClient {
         { method: "POST" },
       ),
     );
+  }
+
+  async runWorkspaceCodeReview(
+    workspaceId: string,
+    provider: AgentProvider,
+    scope: CodeReviewScope,
+    model?: string,
+  ): Promise<WorkspaceCodeReviewResult> {
+    const workspace = requiredWorkspaceId(workspaceId);
+    return (await this.request(
+      `/api/v1/workspaces/${encodeURIComponent(workspace)}/code-review/run`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          provider,
+          scope,
+          ...(model?.trim() ? { model: model.trim(), agent: model.trim() } : {}),
+        }),
+      },
+    )) as WorkspaceCodeReviewResult;
   }
 
   async runWorkspaceVerificationCheck(
@@ -9892,29 +10653,36 @@ class HttpWorkspaceClient implements WorkspaceClient {
     path: string,
     init: RequestInit = {},
   ): Promise<unknown> {
-    const sessionToken = await this.sessionToken();
-    let response: Response;
+    const changesSessions = init.method !== undefined && !["GET", "HEAD"].includes(init.method) &&
+      /^\/api\/v1\/(?:agent-sessions(?:\/|$)|agent-conversations(?:\/|$)|agent-work-sets(?:\/|$)|workspaces\/[^/]+\/(?:agent-sessions$|agents\/[^/]+\/(?:run|sessions)$|open\/cli\/|code-review\/run$))/.test(path);
+    if (changesSessions) invalidateAgentSessions(this);
     try {
-      response = await this.fetch()(`${this.baseUrl}${path}`, {
-        ...init,
-        headers: {
-          Accept: "application/json",
-          "X-WTS-Session": sessionToken,
-          "X-WTS-Request": "local-ui",
-          ...init.headers,
-        },
-      });
-    } catch (error) {
-      const wrapped = wrapTransportError(error);
-      logHttpTransportFailure(
-        "request",
-        init.method ?? "GET",
-        path,
-        wrapped,
-      );
-      throw wrapped;
+      const sessionToken = await this.sessionToken();
+      let response: Response;
+      try {
+        response = await this.fetch()(`${this.baseUrl}${path}`, {
+          ...init,
+          headers: {
+            Accept: "application/json",
+            "X-WTS-Session": sessionToken,
+            "X-WTS-Request": "local-ui",
+            ...init.headers,
+          },
+        });
+      } catch (error) {
+        const wrapped = wrapTransportError(error);
+        logHttpTransportFailure(
+          "request",
+          init.method ?? "GET",
+          path,
+          wrapped,
+        );
+        throw wrapped;
+      }
+      return await this.readResponse(response);
+    } finally {
+      if (changesSessions) invalidateAgentSessions(this);
     }
-    return this.readResponse(response);
   }
 
   private async readResponse(response: Response): Promise<unknown> {
@@ -9970,6 +10738,39 @@ class TauriWorkspaceClient implements WorkspaceClient {
   async getGitlabReviewInbox(): Promise<GitlabReviewInbox> {
     return normalizeGitlabReviewInbox(
       await this.invoke(GITLAB_REVIEW_INBOX_TAURI_COMMAND),
+    );
+  }
+
+  async getGitlabDiscussions(
+    repositoryId: string,
+    iid: number,
+    workspaceId?: string,
+  ): Promise<GitlabDiscussions> {
+    validateGitlabMergeRequestIdentity(repositoryId, iid);
+    validateGitlabDiscussionWorkspace(workspaceId);
+    return normalizeGitlabDiscussions(
+      await this.invoke(GET_GITLAB_DISCUSSIONS_TAURI_COMMAND, {
+        repositoryId,
+        iid,
+        ...(workspaceId === undefined ? {} : { workspaceId }),
+      }),
+      repositoryId,
+      iid,
+    );
+  }
+
+  async replyGitlabDiscussion(
+    repositoryId: string,
+    iid: number,
+    request: GitlabDiscussionReplyRequest,
+  ): Promise<GitlabDiscussionReplyResult> {
+    validateGitlabMergeRequestIdentity(repositoryId, iid);
+    const validated = validateGitlabDiscussionReplyRequest(request);
+    return normalizeGitlabDiscussionReplyResult(
+      await this.invoke(REPLY_GITLAB_DISCUSSION_TAURI_COMMAND, { repositoryId, iid, request: validated }),
+      repositoryId,
+      iid,
+      validated.discussionId,
     );
   }
 
@@ -10420,6 +11221,14 @@ class TauriWorkspaceClient implements WorkspaceClient {
     );
   }
 
+  async recoverWorkspaceSetup(workspaceId: string, effectDigest: string): Promise<WorkspacePreflight> {
+    const workspace = requiredWorkspaceId(workspaceId);
+    const digest = setupRecoveryDigest(effectDigest);
+    return normalizeRecoveredSetup(await this.invoke("recover_workspace_setup", {
+      workspaceId: workspace, effectDigest: digest,
+    }), workspace);
+  }
+
   async getWorkspaceMaterialization(
     workspaceId: string,
   ): Promise<WorkspaceMaterialization | null> {
@@ -10449,6 +11258,28 @@ class TauriWorkspaceClient implements WorkspaceClient {
         repositoryId: repository,
       }),
     );
+  }
+
+  async getWorkspaceGitlabComparison(workspaceId: string, repositoryId: string, iid: number, refresh = false): Promise<WorkspaceGitlabComparison> {
+    const workspace = requiredWorkspaceId(workspaceId);
+    const repository = requiredRepositoryId(repositoryId);
+    validateGitlabMergeRequestIdentity(repository, iid);
+    if (typeof refresh !== "boolean") throw new WorkspaceClientError("Choose a valid refresh option.", { code: "invalid_request" });
+    return normalizeWorkspaceGitlabComparison(await this.invoke("get_workspace_gitlab_comparison", { workspaceId: workspace, repositoryId: repository, iid, refresh }), workspace, repository, iid);
+  }
+
+  async getWorkspaceRepositorySource(workspaceId: string, repositoryId: string, filePath: string): Promise<WorkspaceRepositorySource> {
+    const workspace = requiredWorkspaceId(workspaceId);
+    const repository = requiredRepositoryId(repositoryId);
+    const path = requiredRepositorySourcePath(filePath);
+    return normalizeWorkspaceRepositorySource(await this.invoke("get_workspace_repository_source", { workspaceId: workspace, repositoryId: repository, filePath: path }), workspace, repository, path);
+  }
+
+  async saveWorkspaceRepositorySource(workspaceId: string, repositoryId: string, request: WorkspaceRepositorySourceSaveRequest): Promise<WorkspaceRepositorySource> {
+    const workspace = requiredWorkspaceId(workspaceId);
+    const repository = requiredRepositoryId(repositoryId);
+    const validated = validateRepositorySourceSaveRequest(request);
+    return normalizeWorkspaceRepositorySource(await this.invoke("save_workspace_repository_source", { workspaceId: workspace, repositoryId: repository, request: validated }), workspace, repository, validated.filePath, validated.content);
   }
 
   async getWorkspaceRepositoryFileReview(
@@ -10923,6 +11754,28 @@ class TauriWorkspaceClient implements WorkspaceClient {
     );
   }
 
+  async runWorkspaceCodeReview(
+    workspaceId: string,
+    provider: AgentProvider,
+    scope: CodeReviewScope,
+    model?: string,
+  ): Promise<WorkspaceCodeReviewResult> {
+    const workspace = requiredWorkspaceId(workspaceId);
+    return (await this.invoke("run_workspace_code_review", {
+      workspaceId: workspace,
+      provider,
+      scope,
+      model: model?.trim() || null,
+      agent: model?.trim() || null,
+    })) as WorkspaceCodeReviewResult;
+  }
+
+  async getWorkspaceVerificationSummary(workspaceId: string): Promise<WorkspaceVerificationSummary | null> {
+    const workspace = requiredWorkspaceId(workspaceId);
+    const payload = await this.invoke("get_workspace_verification_summary", { workspaceId: workspace });
+    return payload === null ? null : normalizeWorkspaceVerificationSummary(payload, workspace);
+  }
+
   async getWorkspaceEvidence(
     workspaceId: string,
   ): Promise<WorkspaceEvidence | null> {
@@ -11109,6 +11962,122 @@ class TauriWorkspaceClient implements WorkspaceClient {
     return result;
   }
 
+  async createAgentConversation(request: CreateAgentConversationRequest): Promise<AgentConversation> {
+    validateCreateConversation(request, invalidPayload);
+    return matchCreatedConversation(normalizeAgentConversation(await this.invoke("create_agent_conversation", { request }), invalidPayload), request, invalidPayload);
+  }
+
+  async getAgentConversation(conversationId: string): Promise<AgentConversation> {
+    const id = requiredWorkspaceId(conversationId);
+    return normalizeAgentConversation(await this.invoke("get_agent_conversation", { conversationId: id }), invalidPayload, id);
+  }
+
+  async listAgentConversations(): Promise<AgentConversationList> {
+    return normalizeConversationList(await this.invoke("list_agent_conversations", {}), invalidPayload);
+  }
+
+  async preflightAgentWorkItemIntegration(workSetId: string, taskId: string): Promise<AgentWorkItemIntegrationPreflight> {
+    const id = validateAgentTurnId(workSetId, invalidPayload); const task = validateAgentTurnId(taskId, invalidPayload);
+    return normalizeAgentWorkItemIntegrationPreflight(await this.invoke("preflight_agent_work_item_integration", { workSetId: id, taskId: task }), invalidPayload, id, task);
+  }
+  async integrateAgentWorkItem(workSetId: string, taskId: string, request: IntegrateAgentWorkItemRequest): Promise<AgentWorkItemIntegrationResult> {
+    const id = validateAgentTurnId(workSetId, invalidPayload); const task = validateAgentTurnId(taskId, invalidPayload); validateIntegrateAgentWorkItem(request, invalidPayload);
+    return normalizeAgentWorkItemIntegrationResult(await this.invoke("integrate_agent_work_item", { workSetId: id, taskId: task, request }), invalidPayload, id, task, request);
+  }
+  async openAgentWorkItemPreview(workSetId: string, taskId: string): Promise<AgentWorkItemPreview> {
+    const id = validateAgentTurnId(workSetId, invalidPayload); const task = validateAgentTurnId(taskId, invalidPayload);
+    return normalizeAgentWorkItemPreview(await this.invoke("open_agent_work_item_preview", { workSetId: id, taskId: task }), invalidPayload, id, task);
+  }
+  async createAgentWorkSet(conversationId: string, turnRequestId: string, request: CreateAgentWorkSetRequest): Promise<AgentWorkSet> {
+    const conversation = validateAgentTurnId(conversationId, invalidPayload); const turn = validateAgentTurnId(turnRequestId, invalidPayload);
+    validateCreateAgentWorkSet(request, invalidPayload);
+    return matchCreatedAgentWorkSet(normalizeAgentWorkSet(await this.invoke("create_agent_work_set", { conversationId: conversation, turnRequestId: turn, request }), invalidPayload, request.requestId), invalidPayload, conversation, turn, request);
+  }
+  async getAgentWorkSet(workSetId: string): Promise<AgentWorkSet> {
+    const id = validateAgentTurnId(workSetId, invalidPayload); return normalizeAgentWorkSet(await this.invoke("get_agent_work_set", { workSetId: id }), invalidPayload, id);
+  }
+  async listAgentWorkSets(conversationId: string, turnRequestId: string): Promise<AgentWorkSetList> {
+    const conversation = validateAgentTurnId(conversationId, invalidPayload); const turn = validateAgentTurnId(turnRequestId, invalidPayload);
+    return normalizeAgentWorkSetList(await this.invoke("list_agent_work_sets", { conversationId: conversation, requestId: turn }), invalidPayload, conversation, turn);
+  }
+  async cancelAgentWorkItem(workSetId: string, taskId: string, request: CancelAgentWorkItemRequest): Promise<AgentWorkSet> {
+    const id = validateAgentTurnId(workSetId, invalidPayload); const task = validateAgentTurnId(taskId, invalidPayload); validateCancelAgentWorkItem(request, invalidPayload);
+    return matchCancelledAgentWorkItem(normalizeAgentWorkSet(await this.invoke("cancel_agent_work_item", { workSetId: id, taskId: task, request }), invalidPayload, id), invalidPayload, task, request);
+  }
+
+  async getAgentTurnDecisions(conversationId: string, turnRequestId: string): Promise<AgentTurnDecisions> {
+    const id = validateAgentTurnId(conversationId, invalidPayload);
+    const turn = validateAgentTurnId(turnRequestId, invalidPayload);
+    return normalizeAgentTurnDecisions(await this.invoke("get_agent_turn_decisions", { conversationId: id, requestId: turn }), invalidPayload, id, turn);
+  }
+
+  async recordAgentTurnDecision(conversationId: string, turnRequestId: string, request: RecordAgentTurnDecisionRequest): Promise<AgentTurnDecisions> {
+    const id = validateAgentTurnId(conversationId, invalidPayload);
+    const turn = validateAgentTurnId(turnRequestId, invalidPayload);
+    validateRecordAgentTurnDecision(request, invalidPayload);
+    return normalizeAgentTurnDecisions(await this.invoke("record_agent_turn_decision", { conversationId: id, turnRequestId: turn, request }), invalidPayload, id, turn, request);
+  }
+
+  async getAgentTurnChecks(conversationId: string, turnRequestId: string): Promise<AgentTurnChecks> {
+    const id = validateAgentTurnId(conversationId, invalidPayload);
+    const turn = validateAgentTurnId(turnRequestId, invalidPayload);
+    return normalizeAgentTurnChecks(await this.invoke("get_agent_turn_checks", { conversationId: id, requestId: turn }), invalidPayload, id, turn);
+  }
+
+  async runAgentTurnCheck(conversationId: string, turnRequestId: string, request: RunAgentTurnCheckRequest): Promise<AgentTurnChecks> {
+    const id = validateAgentTurnId(conversationId, invalidPayload);
+    const turn = validateAgentTurnId(turnRequestId, invalidPayload);
+    validateRunAgentTurnCheck(request, invalidPayload);
+    return normalizeAgentTurnChecks(await this.invoke("run_agent_turn_check", { conversationId: id, turnRequestId: turn, request }), invalidPayload, id, turn, request);
+  }
+
+  async preflightAgentTurnRestore(conversationId: string, turnRequestId: string): Promise<AgentTurnRestorePreflight> {
+    const id = validateAgentTurnId(conversationId, invalidPayload);
+    const turn = validateAgentTurnId(turnRequestId, invalidPayload);
+    return normalizeAgentTurnRestorePreflight(await this.invoke("preflight_agent_turn_restore", { conversationId: id, requestId: turn }), invalidPayload, id, turn);
+  }
+
+  async restoreAgentTurn(conversationId: string, turnRequestId: string, request: RestoreAgentTurnRequest): Promise<AgentTurnRestoreResult> {
+    const id = validateAgentTurnId(conversationId, invalidPayload);
+    const turn = validateAgentTurnId(turnRequestId, invalidPayload);
+    validateRestoreAgentTurn(request, invalidPayload);
+    return normalizeAgentTurnRestoreResult(await this.invoke("restore_agent_turn", { conversationId: id, turnRequestId: turn, request }), invalidPayload, id, turn, request);
+  }
+
+  async getAgentTurnChanges(conversationId: string, requestId: string): Promise<AgentTurnChanges> {
+    const id = validateAgentTurnId(conversationId, invalidPayload);
+    const request = validateAgentTurnId(requestId, invalidPayload);
+    return normalizeAgentTurnChanges(await this.invoke("get_agent_turn_changes", { conversationId: id, requestId: request }), invalidPayload, id, request);
+  }
+
+  async sendAgentConversationMessage(conversationId: string, request: SendAgentConversationMessageRequest): Promise<AgentConversation> {
+    const id = requiredWorkspaceId(conversationId);
+    validateSendConversation(request, invalidPayload);
+    return matchAcceptedMessage(normalizeAgentConversation(await this.invoke("send_agent_conversation_message", { conversationId: id, request }), invalidPayload, id), request, invalidPayload);
+  }
+
+  async updateAgentConversationMessage(conversationId: string, messageId: string, request: UpdateAgentConversationMessageRequest): Promise<AgentConversation> {
+    const id = requiredWorkspaceId(conversationId);
+    const message = requiredWorkspaceId(messageId);
+    validateUpdateConversationMessage(request, invalidPayload);
+    return matchMutatedMessage(normalizeAgentConversation(await this.invoke("update_agent_conversation_message", {
+      conversationId: id, messageId: message, request,
+    }), invalidPayload, id), message, request, invalidPayload);
+  }
+
+  async cancelAgentConversationMessage(conversationId: string, messageId: string, request: CancelAgentConversationMessageRequest): Promise<AgentConversation> {
+    const id = requiredWorkspaceId(conversationId);
+    const message = requiredWorkspaceId(messageId);
+    validateCancelConversationMessage(request, invalidPayload);
+    return matchMutatedMessage(normalizeAgentConversation(await this.invoke("cancel_agent_conversation_message", {
+      conversationId: id, messageId: message, request,
+    }), invalidPayload, id), message, request, invalidPayload);
+  }
+
+  async captureUiRegion(request: { rect: { x: number; y: number; width: number; height: number }; viewport: { width: number; height: number; devicePixelRatio: number } }): Promise<RegionCapture> {
+    return normalizeRegionCapture(await this.invoke("capture_ui_region", { request }), invalidPayload);
+  }
+
   async getAgentSessionDetail(sessionId: string): Promise<AgentSessionDetail> {
     return normalizeAgentSessionDetail(
       await this.invoke("get_agent_session_detail", {
@@ -11214,13 +12183,27 @@ class TauriWorkspaceClient implements WorkspaceClient {
     command: string,
     args?: Record<string, unknown>,
   ): Promise<unknown> {
+    const changesSessions = [
+      "start_agent_session", "launch_agent_session", "heartbeat_agent_session", "finish_agent_session", "fail_agent_session", "stop_agent_session",
+      "create_agent_conversation", "send_agent_conversation_message", "update_agent_conversation_message", "cancel_agent_conversation_message",
+      "create_agent_work_set", "cancel_agent_work_item", "run_workspace_agent", "run_workspace_code_review", "open_workspace_cli",
+    ].includes(command);
+    if (changesSessions) invalidateAgentSessions(this);
     try {
+      if (!nativePreviewAllowsCommand(command)) {
+        throw new WorkspaceClientError(NATIVE_PREVIEW_READ_ONLY_MESSAGE, {
+          code: "preview_read_only",
+          retryable: false,
+        });
+      }
       const invoke =
         this.invokeOverride ??
         (await import("@tauri-apps/api/core")).invoke;
       return await invoke(command, args);
     } catch (error) {
       throw wrapTransportError(error);
+    } finally {
+      if (changesSessions) invalidateAgentSessions(this);
     }
   }
 }
@@ -11284,6 +12267,27 @@ function requiredVerificationCheckId(checkId: string): string {
 const MAX_REPOSITORY_BASE_INPUT_BYTES = 256;
 const MAX_REPOSITORY_REMOTE_URL_BYTES = 2_048;
 
+function optionalCloneBranch(branch: string | undefined): string | undefined {
+  const value = branch?.trim();
+  if (!value) return undefined;
+  if (
+    new TextEncoder().encode(value).byteLength > MAX_REPOSITORY_BASE_INPUT_BYTES ||
+    value.startsWith("-") ||
+    value.startsWith("/") ||
+    value.endsWith("/") ||
+    value.endsWith(".") ||
+    value.includes("..") ||
+    value.includes("//") ||
+    value.includes("@{") ||
+    /[\s\u0000-\u001f\u007f~^:?*\[\\]/.test(value)
+  ) {
+    throw new WorkspaceClientError("Enter a valid Git branch name", {
+      code: "invalid_request",
+    });
+  }
+  return value;
+}
+
 function validateCloneRepositoryRequest(
   request: CloneRepositoryRequest,
 ): CloneRepositoryRequest {
@@ -11333,7 +12337,12 @@ function validateCloneRepositoryRequest(
     );
   }
 
-  return { remoteUrl };
+  const branch = optionalCloneBranch(request.branch);
+  return {
+    remoteUrl,
+    ...(branch ? { branch } : {}),
+    ...(request.shallow ? { shallow: true } : {}),
+  };
 }
 
 function requiredRepositoryBaseSelection(

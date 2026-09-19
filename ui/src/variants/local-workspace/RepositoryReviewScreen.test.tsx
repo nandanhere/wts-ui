@@ -1,5 +1,6 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import userEvent from "@testing-library/user-event";
 import type {
   MaterializedWorktree,
   GitlabReviewPatch,
@@ -15,6 +16,11 @@ import {
   RepositoryReviewScreen,
   REVIEW_PATCH_POLL_INTERVAL_MS,
 } from "./RepositoryReviewScreen";
+import type { GitlabConversationsController } from "./gitlabDiscussions";
+import { reviewSession } from "./workingChangesState";
+import { gitlabDiscussionDrafts } from "./gitlabDiscussionDrafts";
+
+afterEach(() => gitlabDiscussionDrafts.clear());
 
 const baseCommitOid = "0123456789abcdef0123456789abcdef01234567";
 const headCommitOid = "fedcba9876543210fedcba9876543210fedcba98";
@@ -93,6 +99,313 @@ function deferred<T>() {
 }
 
 describe("RepositoryReviewScreen repository selection", () => {
+  function unreadController(workspaceId: string): GitlabConversationsController {
+    return {
+      entries: [15, 16].map((iid) => ({
+        target: { key: `stratus-${iid}`, repositoryId: "provider_stratus", worktreeRepositoryId: "stratus-api", iid, label: `team/stratus-api !${iid}`, workspaceId },
+        state: "ready", error: "", unreadCommentIds: iid === 16 ? [160, 161, 162, 163, 164, 165, 166] : [],
+        snapshot: {
+          schemaVersion: 1, repositoryId: "provider_stratus", iid, scopeId: String(iid).repeat(32), viewerLogin: "me", fetchedAtUnixMs: 1, fromCache: false, truncated: false,
+          discussions: [{ id: `thread-${iid}`, resolvable: true, resolved: true, automated: false, filePath: "src/api.ts", line: 34, side: "additions", comments: Array.from({ length: iid === 16 ? 7 : 1 }, (_, index) => ({ id: iid * 10 + index, body: `MR ${iid} reply ${index + 1}`, authorLogin: "reviewer", createdAt: "2026-09-17T09:00:00Z" })) }],
+        },
+      })),
+      loading: false, error: "", unreadCount: 7, refresh: vi.fn(), markRead: vi.fn(), acceptReply: vi.fn(),
+    };
+  }
+
+  it("returns to the unread thread file after the user selects another code file", async () => {
+    const workspaceId = "ws_unread_return_file"; const fake = fakeWorkspaceClient(); const controller = unreadController(workspaceId); controller.entries = controller.entries.filter(entry => entry.target.iid === 16);
+    const local = repositoryDiff(workspaceId, "stratus-api"); local.patch = local.patch.replaceAll("src/stratus-api.ts", "src/api.ts") + local.patch.replaceAll("src/stratus-api.ts", "src/other.ts");
+    fake.getWorkspaceGitlabComparison.mockResolvedValue({ schemaVersion: 1, workspaceId, repositoryId: "stratus-api", repositoryLabel: "stratus-api", iid: 16, localHeadCommitOid: headCommitOid, status: "ready", published: { schemaVersion: 1, repositoryId: "stratus-api", iid: 16, baseCommitOid, startCommitOid: baseCommitOid, headCommitOid, patch: local.patch, patchTruncated: false, fromCache: false, fetchedAtUnixMs: 1, commits: [], discussions: [] }, latestWork: local, sinceMr: local });
+    reviewSession(fake.client, workspaceId).files["stratus-api:stratus-16"] = "src/api.ts";
+    render(<RepositoryReviewScreen client={fake.client} workspaceId={workspaceId} materialization={materialization(workspaceId, [worktree("stratus-api")])} initialRepositoryId="stratus-api" onOpenVerification={vi.fn()} onRepositoryChange={vi.fn()} gitlabConversations={controller} />);
+    fireEvent.click(await screen.findByRole("button", { name: /^src\/other.ts In MR/ })); expect(screen.getByRole("button", { name: /^src\/other.ts In MR/ })).toHaveAttribute("aria-current", "true");
+    fireEvent.click(screen.getByRole("button", { name: "Open 7 unread comments in stratus-api !16" })); await screen.findByRole("button", { name: /src\/api.ts:\+34/ }); fireEvent.click(screen.getByRole("tab", { name: "Code" }));
+    expect(screen.getByRole("button", { name: /^src\/api.ts In MR/ })).toHaveAttribute("aria-current", "true");
+  });
+
+  it("omits the single MR selector while keeping repository choice and the exact unread conversation reachable", async () => {
+    const workspaceId = "ws_single_mr_controls";
+    const fake = fakeWorkspaceClient();
+    const controller = unreadController(workspaceId);
+    controller.entries = [controller.entries[1]!];
+    const onRepositoryChange = vi.fn();
+    render(<RepositoryReviewScreen client={fake.client} gitlabConversations={controller} initialRepositoryId="stratus-api" materialization={materialization(workspaceId, [worktree("seahorse"), worktree("stratus-api")])} onRepositoryChange={onRepositoryChange} workspaceId={workspaceId} />);
+    expect(screen.queryByRole("combobox", { name: "Merge request" })).not.toBeInTheDocument();
+    expect(within(screen.getByTestId("repository-review-toolbar")).getByText("team/stratus-api !16")).toBeVisible();
+    expect(screen.getByRole("combobox", { name: "Repository to review" })).toBeEnabled();
+    fireEvent.change(screen.getByRole("combobox", { name: "Repository to review" }), { target: { value: "seahorse" } });
+    expect(screen.getByRole("combobox", { name: "Repository to review" })).toHaveValue("seahorse");
+    fireEvent.click(screen.getByRole("button", { name: "Open 7 unread comments in stratus-api !16" }));
+    expect(screen.getByRole("combobox", { name: "Repository to review" })).toHaveValue("stratus-api");
+    expect(await screen.findByText("MR 16 reply 7", { selector: "article p" })).toBeVisible();
+    expect(screen.getByRole("tab", { name: "Conversations, 7 unread comments" })).toHaveAttribute("aria-selected", "true");
+    expect(onRepositoryChange).toHaveBeenLastCalledWith("stratus-api", "user");
+    fireEvent.click(screen.getByRole("tab", { name: "Code" }));
+    expect(screen.getByRole("combobox", { name: "Code comparison" })).toBeVisible();
+  });
+
+  it("returns from an agent result to its exact MR thread instead of the first MR", async () => {
+    const workspaceId = "ws_return_feedback_thread";
+    const fake = fakeWorkspaceClient();
+    const controller = unreadController(workspaceId);
+    const target = controller.entries[1]!;
+    render(<RepositoryReviewScreen client={fake.client} gitlabConversations={controller}
+      initialRepositoryId="seahorse" materialization={materialization(workspaceId, [worktree("seahorse"), worktree("stratus-api")])}
+      onRepositoryChange={vi.fn()} workspaceId={workspaceId} feedbackSelectionReturn={{ requestId: "return-16", source: {
+        kind: "gitlabDiscussion", workspaceId, repositoryId: "stratus-api", providerRepositoryId: "provider_stratus",
+        iid: 16, discussionId: "thread-16", scopeId: target.snapshot!.scopeId, comments: target.snapshot!.discussions[0]!.comments,
+      } }} />);
+    expect(await screen.findByText("MR 16 reply 7", { selector: "article p" })).toBeVisible();
+    expect(screen.getByRole("combobox", { name: "Repository to review" })).toHaveValue("stratus-api");
+    expect(screen.getByRole("combobox", { name: "Merge request" })).toHaveValue("stratus-16");
+    expect(screen.getByRole("tab", { name: "Conversations, 7 unread comments" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.queryByText("MR 15 reply 1", { selector: "article p" })).not.toBeInTheDocument();
+  });
+
+  it("keeps the current review when a saved thread belongs to a different GitLab scope", async () => {
+    const workspaceId = "ws_return_changed_scope";
+    const fake = fakeWorkspaceClient();
+    const controller = unreadController(workspaceId);
+    const notice = vi.fn();
+    render(<RepositoryReviewScreen client={fake.client} gitlabConversations={controller}
+      initialRepositoryId="stratus-api" materialization={materialization(workspaceId, [worktree("stratus-api")])}
+      onRepositoryChange={vi.fn()} onNotice={notice} workspaceId={workspaceId} feedbackSelectionReturn={{ requestId: "return-old-scope", source: {
+        kind: "gitlabDiscussion", workspaceId, repositoryId: "stratus-api", providerRepositoryId: "provider_stratus",
+        iid: 16, discussionId: "thread-16", scopeId: "old-account", comments: controller.entries[1]!.snapshot!.discussions[0]!.comments,
+      } }} />);
+    await waitFor(() => expect(notice).toHaveBeenCalledWith(expect.stringContaining("saved conversation is not available"), "error"));
+    expect(screen.getByRole("tab", { name: "Code" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("combobox", { name: "Merge request" })).toHaveValue("stratus-15");
+  });
+
+  it("opens the shared agent chat from a repository conversation with the exact workspace and MR source", async () => {
+    const workspaceId = "ws_agent_handoff";
+    const fake = fakeWorkspaceClient();
+    const controller = unreadController(workspaceId);
+    const source = controller.entries[1]!;
+    delete source.target.workspaceId;
+    source.target.title = "Fix API retries";
+    const position = { baseCommitOid: "a".repeat(40), startCommitOid: "b".repeat(40), headCommitOid: "c".repeat(40) };
+    source.snapshot!.discussions[0]!.position = position;
+    const listener = vi.fn();
+    window.addEventListener("wts:agent-feedback-requested", listener);
+    try {
+      render(<RepositoryReviewScreen client={fake.client} gitlabConversations={controller} initialRepositoryId="seahorse" materialization={materialization(workspaceId, [worktree("seahorse"), worktree("stratus-api")])} onRepositoryChange={vi.fn()} workspaceId={workspaceId} />);
+      fireEvent.click(screen.getByRole("button", { name: "Open 7 unread comments in stratus-api !16" }));
+      fireEvent.click(await screen.findByRole("button", { name: "Ask agent to fix" }));
+      expect(listener).toHaveBeenCalledOnce();
+      expect(listener.mock.calls[0]![0].detail).toEqual({
+        kind: "gitlabDiscussion", workspaceId, repositoryId: "stratus-api", providerRepositoryId: "provider_stratus", iid: 16, discussionId: "thread-16", scopeId: "16".repeat(32), mergeRequestLabel: "team/stratus-api !16", title: "Fix API retries", filePath: "src/api.ts", side: "additions", line: 34, position,
+        resolved: true, automated: false, comments: source.snapshot!.discussions[0]!.comments, fetchedAtUnixMs: 1, fromCache: false, truncated: false,
+      });
+      expect(fake.replyGitlabDiscussion).not.toHaveBeenCalled();
+      expect(fake.publishGitlabReviewComment).not.toHaveBeenCalled();
+    } finally { window.removeEventListener("wts:agent-feedback-requested", listener); }
+  });
+
+  it.each(["seahorse", "stratus-api"])("opens the exact unread MR from %s without changing code selection first", async (selectedRepository) => {
+    const user = userEvent.setup();
+    const workspaceId = `ws_unread_${selectedRepository}`;
+    const fake = fakeWorkspaceClient();
+    const controller = unreadController(workspaceId);
+    const onRepositoryChange = vi.fn();
+    render(<RepositoryReviewScreen client={fake.client} gitlabConversations={controller} initialRepositoryId={selectedRepository} materialization={materialization(workspaceId, [worktree("seahorse"), worktree("stratus-api")])} onRepositoryChange={onRepositoryChange} workspaceId={workspaceId} />);
+    const inbox = screen.getByRole("navigation", { name: "Unread MR comments" });
+    expect(inbox).toHaveTextContent("7 unread comments");
+    expect(screen.getByRole("combobox", { name: "Repository to review" })).toHaveValue(selectedRepository);
+    await user.click(screen.getByRole("combobox", { name: "Repository to review" }));
+    expect(await screen.findByRole("option", { name: "stratus-api · 7 unread" })).toBeVisible();
+    await user.keyboard("{Escape}");
+    expect(screen.getByRole("tab", { name: "Conversations" })).not.toHaveTextContent("7");
+    expect(controller.markRead).not.toHaveBeenCalled();
+    fireEvent.click(within(inbox).getByRole("button", { name: "Open 7 unread comments in stratus-api !16" }));
+    expect(screen.getByRole("combobox", { name: "Repository to review" })).toHaveValue("stratus-api");
+    expect(screen.getByRole("combobox", { name: "Merge request" })).toHaveValue("stratus-16");
+    expect(screen.getByRole("tab", { name: "Conversations, 7 unread comments" })).toHaveAttribute("aria-selected", "true");
+    expect(await screen.findByText("MR 16 reply 7", { selector: "article p" })).toBeVisible();
+    expect(onRepositoryChange).toHaveBeenCalledWith("stratus-api", "user");
+    await waitFor(() => expect(controller.markRead).toHaveBeenCalled());
+    for (const [target, scope, comments] of vi.mocked(controller.markRead).mock.calls) {
+      expect(target).toBe("stratus-16");
+      expect(scope).toBe("16".repeat(32));
+      expect(comments.map((comment) => comment.id)).toEqual([160, 161, 162, 163, 164, 165, 166]);
+    }
+  });
+
+  it("keeps saved unread comments reachable after a refresh fails without marking them read", async () => {
+    const workspaceId = "ws_unread_cached";
+    const fake = fakeWorkspaceClient();
+    const controller = unreadController(workspaceId);
+    const entry = controller.entries[1]!;
+    entry.state = "error";
+    entry.error = "GitLab is unavailable.";
+    entry.snapshot!.fromCache = true;
+    render(<RepositoryReviewScreen client={fake.client} gitlabConversations={controller} initialRepositoryId="seahorse" materialization={materialization(workspaceId, [worktree("seahorse"), worktree("stratus-api")])} onRepositoryChange={vi.fn()} workspaceId={workspaceId} />);
+    fireEvent.click(screen.getByRole("button", { name: "Open 7 unread comments in stratus-api !16" }));
+    expect(await screen.findByText("MR 16 reply 7", { selector: "article p" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Reply to GitLab" })).toBeDisabled();
+    expect(controller.markRead).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "Refresh conversations" })).toBeEnabled();
+  });
+
+  it("offers workspace repair after a local changes read fails", async () => {
+    const fake = fakeWorkspaceClient();
+    fake.getWorkspaceRepositoryDiff.mockRejectedValue(new Error("The worktree moved or changed."));
+    const onOpenWorkspaceStatus = vi.fn();
+    render(<RepositoryReviewScreen client={fake.client} materialization={materialization("ws_repair", [worktree("repo_api")])} onRepositoryChange={vi.fn()} workspaceId="ws_repair" onOpenWorkspaceStatus={onOpenWorkspaceStatus} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Open workspace status" }));
+    expect(onOpenWorkspaceStatus).toHaveBeenCalledOnce();
+    expect(fake.getWorkspaceRepositoryDiff).toHaveBeenCalledOnce();
+  });
+
+  it("keeps the MR title and branch context while switching review tabs", async () => {
+    const fake = fakeWorkspaceClient();
+    const target = { key: "mr16", repositoryId: "repo_api", worktreeRepositoryId: "repo_api", iid: 16, label: "team/api !16", title: "Add one-time boot profiles", sourceBranch: "feat/boot", targetBranch: "main", status: "open" as const, authorLogin: "sam" };
+    const controller: GitlabConversationsController = { entries: [{ target, state: "error", error: "Unavailable", unreadCommentIds: [] }], loading: false, error: "", unreadCount: 0, refresh: vi.fn(), markRead: vi.fn(), acceptReply: vi.fn() };
+    render(<RepositoryReviewScreen client={fake.client} gitlabConversations={controller} materialization={materialization("ws_title", [worktree("repo_api")])} onRepositoryChange={vi.fn()} workspaceId="ws_title" />);
+    expect(screen.getByRole("heading", { name: target.title })).toBeVisible();
+    expect(screen.getByText("feat/boot")).toBeVisible();
+    expect(screen.getByText("main")).toBeVisible();
+    const conversations = screen.getByRole("tab", { name: "Conversations" });
+    expect(conversations).not.toHaveTextContent("0");
+    fireEvent.click(conversations);
+    expect(screen.getByRole("heading", { name: target.title })).toBeVisible();
+  });
+
+  it("shares the MR selection between code and conversations and restores it on return", async () => {
+    const workspaceId = "ws_shared_mr";
+    const fake = fakeWorkspaceClient();
+    fake.getWorkspaceGitlabComparison.mockImplementation(async (workspace, repository, iid) => ({
+      schemaVersion: 1, workspaceId: workspace, repositoryId: repository, repositoryLabel: repository, iid,
+      localHeadCommitOid: headCommitOid, status: "ready",
+      published: { schemaVersion: 1, repositoryId: repository, iid, baseCommitOid, startCommitOid: baseCommitOid, headCommitOid, commits: [], discussions: [], patch: repositoryDiff(workspace, repository).patch, patchTruncated: false, fromCache: false, fetchedAtUnixMs: 1 },
+      latestWork: repositoryDiff(workspace, repository),
+      sinceMr: { ...repositoryDiff(workspace, repository), baseCommitOid: headCommitOid },
+    }));
+    const conversations: GitlabConversationsController = {
+      entries: [9, 10].map((iid) => ({
+        target: { key: `orders-${iid}`, repositoryId: "provider_orders", worktreeRepositoryId: "repo_orders", iid, label: `Orders !${iid}`, workspaceId }, state: "ready", error: "", unreadCommentIds: [],
+        snapshot: { schemaVersion: 1, repositoryId: "provider_orders", iid, scopeId: "a".repeat(64), viewerLogin: "me", fetchedAtUnixMs: 1, fromCache: false, truncated: false, discussions: [{ id: `thread-${iid}`, resolvable: false, resolved: false, automated: false, comments: [{ id: iid, body: `MR ${iid} conversation`, authorLogin: "dave", createdAt: "2026-09-17T09:00:00Z" }] }] },
+      })), loading: false, error: "", unreadCount: 0, refresh: vi.fn(), markRead: vi.fn(), acceptReply: vi.fn(),
+    };
+    const props = { client: fake.client, gitlabConversations: conversations, initialRepositoryId: "repo_orders", materialization: materialization(workspaceId, [worktree("repo_orders")]), onRepositoryChange: vi.fn(), workspaceId };
+    const first = render(<RepositoryReviewScreen {...props} />);
+    await waitFor(() => expect(fake.getWorkspaceGitlabComparison).toHaveBeenCalledWith(workspaceId, "repo_orders", 9, false));
+    fireEvent.change(screen.getByRole("combobox", { name: "Merge request" }), { target: { value: "orders-10" } });
+    await waitFor(() => expect(fake.getWorkspaceGitlabComparison).toHaveBeenCalledWith(workspaceId, "repo_orders", 10, false));
+    fireEvent.click(screen.getByRole("tab", { name: "Conversations" }));
+    fireEvent.click(screen.getByRole("button", { name: /General discussion/ }));
+    expect(screen.getByText("MR 10 conversation", { selector: "article p" })).toBeVisible();
+    fireEvent.change(screen.getByRole("textbox", { name: "Reply" }), { target: { value: "Keep the shared MR reply." } });
+    first.unmount();
+    render(<RepositoryReviewScreen {...props} />);
+    expect(screen.getByRole("tab", { name: "Conversations" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("combobox", { name: "Merge request" })).toHaveValue("orders-10");
+    fireEvent.click(screen.getByRole("button", { name: /General discussion/ }));
+    expect(screen.getByRole("textbox", { name: "Reply" })).toHaveValue("Keep the shared MR reply.");
+    const ids = [...document.querySelectorAll("[data-ui]")].map((element) => element.getAttribute("data-ui"));
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  it("ignores discussions from an obsolete provider request after switching merge requests", async () => {
+    const workspaceId = "ws_review_race";
+    const fake = fakeWorkspaceClient();
+    const old = deferred<GitlabReviewPatch>();
+    const patch = (repositoryId: string, iid: number, body: string): GitlabReviewPatch => ({
+      schemaVersion: 1, repositoryId, iid, baseCommitOid, startCommitOid: baseCommitOid, headCommitOid,
+      commits: [],
+      discussions: [{ id: `discussion-${iid}`, resolvable: false, resolved: false, automated: false, comments: [{ id: iid, body, authorLogin: "dave", createdAt: "2026-09-17T09:00:00Z" }] }],
+      patch: repositoryDiff(workspaceId, "repo_review").patch,
+      patchTruncated: false, fromCache: false, fetchedAtUnixMs: 1,
+    });
+    fake.getGitlabReviewPatch.mockReturnValueOnce(old.promise).mockResolvedValueOnce(patch("provider_new", 10, "New MR feedback"));
+    const props = { client: fake.client, initialRepositoryId: "repo_review", materialization: materialization(workspaceId, [worktree("repo_review")]), onRepositoryChange: () => undefined, workspaceId };
+    const { rerender } = render(<RepositoryReviewScreen {...props} gitlabReview={{ repositoryId: "provider_old", number: 9, repository: "platform/repo_review" }} />);
+    await waitFor(() => expect(fake.getGitlabReviewPatch).toHaveBeenCalledWith("provider_old", 9));
+    rerender(<RepositoryReviewScreen {...props} gitlabReview={{ repositoryId: "provider_new", number: 10, repository: "platform/repo_review" }} />);
+    expect(await screen.findByText("New MR feedback")).toBeVisible();
+    await act(async () => { old.resolve(patch("provider_old", 9, "Old MR feedback")); await old.promise; });
+    expect(screen.getByText("New MR feedback")).toBeVisible();
+    expect(screen.queryByText("Old MR feedback")).not.toBeInTheDocument();
+  });
+
+  it.each(["loading", "empty", "error"] as const)("opens GitLab conversations while the local diff is %s", async (diffState) => {
+    const workspaceId = "ws_conversations";
+    const fake = fakeWorkspaceClient();
+    const pendingLocalDiff = deferred<WorkspaceRepositoryDiff>();
+    if (diffState === "loading") {
+      fake.getWorkspaceRepositoryDiff.mockImplementation((_, repositoryId) => repositoryId === "repo_orders"
+        ? pendingLocalDiff.promise
+        : Promise.resolve(repositoryDiff(workspaceId, repositoryId)));
+    } else if (diffState === "error") {
+      fake.getWorkspaceRepositoryDiff.mockRejectedValue(new Error("Local diff unavailable"));
+    } else {
+      fake.getWorkspaceRepositoryDiff.mockResolvedValue(repositoryDiff(workspaceId, "repo_orders", false));
+    }
+    const conversations: GitlabConversationsController = {
+      entries: [{
+        target: { key: "orders-9", repositoryId: "provider_orders", worktreeRepositoryId: "repo_orders", iid: 9, label: "Orders !9", workspaceId },
+        state: "ready",
+        error: "",
+        unreadCommentIds: [41],
+        snapshot: {
+          schemaVersion: 1,
+          repositoryId: "provider_orders",
+          iid: 9,
+          scopeId: "a".repeat(64),
+          viewerLogin: "sam",
+          fetchedAtUnixMs: 1,
+          fromCache: false,
+          truncated: false,
+          discussions: [{
+            id: "discussion-general",
+            resolvable: false,
+            resolved: false,
+            automated: false,
+            comments: [{ id: 41, body: "Please explain the retry limit.", authorLogin: "dave", createdAt: "2026-09-17T09:00:00Z" }],
+          }],
+        },
+      }],
+      loading: false,
+      error: "",
+      unreadCount: 1,
+      refresh: vi.fn(),
+      markRead: vi.fn(),
+      acceptReply: vi.fn(),
+    };
+    render(<RepositoryReviewScreen
+      client={fake.client}
+      gitlabConversations={conversations}
+      initialRepositoryId={diffState === "loading" ? undefined : "repo_orders"}
+      materialization={materialization(workspaceId, [worktree("repo_orders"), worktree("repo_other")])}
+      onRepositoryChange={() => undefined}
+      workspaceId={workspaceId}
+    />);
+    expect(conversations.markRead).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("tab", { name: /Conversations.*1 unread/i }));
+    fireEvent.click(await screen.findByRole("button", { name: /General discussion/i }));
+    expect(await screen.findByRole("textbox", { name: "Reply" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Reply to GitLab" })).toBeDisabled();
+    await waitFor(() => expect(conversations.markRead).toHaveBeenCalledWith(
+      "orders-9", "a".repeat(64), conversations.entries[0]!.snapshot!.discussions[0]!.comments,
+    ));
+    if (diffState === "loading") {
+      await act(async () => { pendingLocalDiff.resolve(repositoryDiff(workspaceId, "repo_orders", false)); await pendingLocalDiff.promise; });
+      expect(screen.getByRole("combobox", { name: "Repository to review" })).toHaveValue("repo_orders");
+      expect(screen.getByRole("textbox", { name: "Reply" })).toBeVisible();
+    }
+    fireEvent.change(screen.getByRole("textbox", { name: "Reply" }), { target: { value: "Keep my reply draft." } });
+    fireEvent.keyDown(screen.getByRole("tab", { name: /Conversations/ }), { key: "ArrowLeft" });
+    expect(screen.getByRole("tab", { name: "Code" })).toHaveFocus();
+    expect(screen.queryByRole("textbox", { name: "Reply" })).not.toBeInTheDocument();
+    vi.mocked(conversations.markRead).mockClear();
+    fireEvent(document, new Event("visibilitychange"));
+    expect(conversations.markRead).not.toHaveBeenCalled();
+    fireEvent.keyDown(screen.getByRole("tab", { name: "Code" }), { key: "ArrowRight" });
+    expect(screen.getByRole("textbox", { name: "Reply" })).toHaveValue("Keep my reply draft.");
+  });
+
   it("keeps the loaded review mounted while the background poll checks GitLab", async () => {
     const workspaceId = "ws_stable_gitlab_review";
     const fake = fakeWorkspaceClient();
@@ -314,7 +627,7 @@ describe("RepositoryReviewScreen repository selection", () => {
       [workspaceId, "repo_changed"],
     ]);
     expect(onRepositoryChange).toHaveBeenCalledOnce();
-    expect(onRepositoryChange).toHaveBeenCalledWith("repo_changed");
+    expect(onRepositoryChange).toHaveBeenCalledWith("repo_changed", "automatic");
     expect(
       screen.getByRole("combobox", { name: "Repository to review" }),
     ).toHaveValue("repo_changed");

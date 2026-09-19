@@ -1,0 +1,14 @@
+
+Running 2 tests using 1 worker
+
+4:43:15 PM [vite] (client) page reload playwright-report/index.html
+(node:21720) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+4:43:15 PM [vite] (client) page reload playwright-report/index.html
+4:43:15 PM [vite] (client) page reload playwright-report/trace/index.html
+4:43:15 PM [vite] (client) page reload playwright-report/trace/snapshot.html
+4:43:15 PM [vite] (client) page reload playwright-report/trace/uiMode.html
+  ✓  1 [chromium] › e2e/product-polish.spec.ts:12:3 › full app navigation and content baseline in light (13.0s)
+  ✓  2 [chromium] › e2e/product-polish.spec.ts:12:3 › full app navigation and content baseline in dark (8.2s)
+
+  2 passed (22.5s)

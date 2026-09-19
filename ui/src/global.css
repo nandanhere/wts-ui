@@ -3,7 +3,8 @@
   --wts-font-sans:
     -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif;
   --wts-font-mono:
-    "SFMono-Regular", "Cascadia Code", Consolas, monospace;
+    "SF Mono", "SFMono-Regular", Menlo, Monaco, "Cascadia Code", Consolas,
+    "Liberation Mono", monospace;
   --wts-ink: #17233a;
   --wts-text: #344563;
   --wts-muted: #5f6f86;
@@ -45,6 +46,10 @@
   --wts-control-height: 44px;
   --wts-control-height-compact: 44px;
   --wts-control-active: translateY(1px);
+  --wts-motion-fast: 120ms;
+  --wts-motion-panel: 180ms;
+  --wts-motion-exit: 100ms;
+  --wts-ease-out: cubic-bezier(0.2, 0, 0, 1);
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
@@ -112,4 +117,43 @@ textarea {
 ::selection {
   color: var(--wts-selection-ink);
   background: var(--wts-selection);
+}
+
+/* Fade dialogs without moving their controls. Radix retains closing dialogs. */
+[data-ui][role="dialog"][data-state="open"] {
+  animation: wtsPanelIn var(--wts-motion-panel) var(--wts-ease-out);
+}
+
+[data-ui][role="dialog"][data-state="closed"] {
+  animation: wtsPanelOut var(--wts-motion-exit) ease-in forwards;
+  pointer-events: none;
+}
+
+@keyframes wtsPanelIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes wtsPanelOut {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+
+/* Include portals and feedback controls outside the workspace shell. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-delay: 0ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    transition-delay: 0ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+[data-feedback-reveal="true"] {
+  outline: 2px solid var(--wts-blue);
+  outline-offset: -2px;
 }

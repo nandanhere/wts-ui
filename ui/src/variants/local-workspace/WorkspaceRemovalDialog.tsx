@@ -16,7 +16,8 @@ import { Glyph } from "./Glyph";
 import type { Workspace } from "./LocalWorkspace";
 import styles from "./LocalWorkspace.module.css";
 import { ProtectedFilePreviewBoundary } from "./ProtectedFilePreviewBoundary";
-import { canAssertDestructiveWorkspaceRemoval } from "./workspaceRemoval";
+import { canAssertDestructiveWorkspaceRemoval, removalRecoveryReport, removalRecoverySteps } from "./workspaceRemoval";
+import { RecoveryCopyButton } from "./RecoveryCopyButton";
 
 const ProtectedFileCodeView = lazy(() => import("./ProtectedFileCodeView"));
 
@@ -38,10 +39,16 @@ export interface WorkspaceRemovalDialogProps {
   onOpenChange: (open: boolean) => void;
   workspace: Workspace | undefined;
   preflight: WorkspaceRemovalPreflight | null;
-  state: "loading" | "ready" | "removing" | "error";
+  state: "loading" | "ready" | "repairing" | "removing" | "error";
   error: string;
   onRetry: () => void;
   onConfirm: (deleteProtectedPaths: boolean) => void;
+  onRegisterChanges?: () => void;
+  onReviewChanges?: () => void;
+  onOpenPlans?: () => void;
+  onOpenWorkspace?: () => void;
+  onOpenVerification?: () => void;
+  onOpenIntegrations?: () => void;
 }
 
 export const WorkspaceRemovalDialog = memo(function WorkspaceRemovalDialog({
@@ -53,6 +60,12 @@ export const WorkspaceRemovalDialog = memo(function WorkspaceRemovalDialog({
   error,
   onRetry,
   onConfirm,
+  onRegisterChanges,
+  onReviewChanges,
+  onOpenPlans,
+  onOpenWorkspace,
+  onOpenVerification,
+  onOpenIntegrations,
 }: WorkspaceRemovalDialogProps) {
   const [confirmed, setConfirmed] = useState(false);
   const [protectedDeletionAcknowledged, setProtectedDeletionAcknowledged] =
@@ -76,6 +89,13 @@ export const WorkspaceRemovalDialog = memo(function WorkspaceRemovalDialog({
   }, [preflight?.effectDigest]);
 
   useEffect(() => {
+    if (state === "loading" || state === "repairing") {
+      setConfirmed(false);
+      setProtectedDeletionAcknowledged(false);
+    }
+  }, [state]);
+
+  useEffect(() => {
     if (!open || state !== "removing") return;
     const frame = window.requestAnimationFrame(() => {
       progressRef.current?.focus();
@@ -85,6 +105,7 @@ export const WorkspaceRemovalDialog = memo(function WorkspaceRemovalDialog({
 
   if (!workspace) return null;
   const materialized = preflight?.kind === "materializedWorkspace";
+  const busy = state === "loading" || state === "repairing" || state === "removing";
   const ready = Boolean(preflight?.ready);
   const protectedPaths = preflight?.protectedPaths ?? [];
   const protectedFilePreviews = protectedPaths.flatMap(
@@ -148,6 +169,7 @@ export const WorkspaceRemovalDialog = memo(function WorkspaceRemovalDialog({
           </header>
 
           <div className={styles.removalBody}>
+            {state === "repairing" && <p role="status">WTS checks the workspace records.</p>}
             {state === "removing" && (
               <div
                 className={styles.removalProgress}
@@ -301,11 +323,40 @@ export const WorkspaceRemovalDialog = memo(function WorkspaceRemovalDialog({
                         ? "Removal needs confirmation"
                         : "Removal is blocked"}
                     </h3>
+                    {!canAssertDestructiveDeletion && <p>Resolve these items before removal.</p>}
+                    <div className={styles.removalRecoveryActions}>
+                      <code>{preflight.workspaceDisplayPath}</code>
+                      <RecoveryCopyButton label="Copy workspace path" text={preflight.workspaceDisplayPath} disabled={busy} />
+                      <RecoveryCopyButton label="Copy recovery details" text={removalRecoveryReport(preflight)} disabled={busy} />
+                    </div>
+                    <div className={styles.removalRecoveryActions}>
+                      {onRegisterChanges && preflight.blockers.some((blocker) => blocker.code === "workspaceDrift") && <button disabled={busy} className={styles.secondaryButton} onClick={onRegisterChanges} type="button">Register changes &amp; re-index</button>}
+                      {onReviewChanges && preflight.blockers.some((blocker) => blocker.code === "worktreeChanges" || blocker.code === "ignoredFiles") && <button disabled={busy} className={styles.secondaryButton} onClick={onReviewChanges} type="button">Review changes</button>}
+                      {onOpenPlans && preflight.blockers.some((blocker) => blocker.code === "planningDocumentsPresent") && <button disabled={busy} className={styles.secondaryButton} onClick={onOpenPlans} type="button">Open Plans</button>}
+                      {preflight.blockers.some((blocker) => blocker.code === "activeOperation") && <>
+                        {onOpenWorkspace && <button disabled={busy} className={styles.secondaryButton} onClick={onOpenWorkspace} type="button">Open workspace</button>}
+                        {onOpenVerification && <button disabled={busy} className={styles.secondaryButton} onClick={onOpenVerification} type="button">Open Verify</button>}
+                      </>}
+                      {onOpenIntegrations && preflight.blockers.some((blocker) => blocker.code === "gitUnavailable") && <button disabled={busy} className={styles.secondaryButton} onClick={onOpenIntegrations} type="button">Open integrations</button>}
+                    </div>
                     <ul>
                       {preflight.blockers.map((blocker, index) => (
-                        <li key={`${blocker.code}-${index}`}>
+                        <li className={styles.removalBlocker} key={`${blocker.code}-${index}`}>
                           <b>{blocker.repositoryLabel ?? "Workspace"}</b>
-                          <span>{blocker.message}</span>
+                          <div>
+                            <p>{blocker.message}</p>
+                            {blocker.displayPath && <div className={styles.removalRecoveryActions}>
+                              <code>{blocker.displayPath}</code>
+                              <RecoveryCopyButton label={`Copy path for ${blocker.repositoryLabel ?? "Workspace"}`} text={blocker.displayPath} disabled={busy}>Copy path</RecoveryCopyButton>
+                            </div>}
+                            {(blocker.expected || blocker.observed) && <dl className={styles.removalFacts}>
+                              {blocker.expected && <><dt>Expected</dt><dd>{blocker.expected}</dd></>}
+                              {blocker.observed && <><dt>Found</dt><dd>{blocker.observed}</dd></>}
+                            </dl>}
+                            <ol className={styles.removalSteps} aria-label={`Next steps for ${blocker.repositoryLabel ?? "Workspace"}`}>
+                              {removalRecoverySteps(blocker).map((step) => <li key={step}>{step}</li>)}
+                            </ol>
+                          </div>
                         </li>
                       ))}
                     </ul>
@@ -478,7 +529,7 @@ export const WorkspaceRemovalDialog = memo(function WorkspaceRemovalDialog({
                     <Button
                       className={styles.secondaryButton}
                       onPress={onRetry}
-                      isDisabled={state === "loading" || state === "removing"}
+                      isDisabled={busy}
                     >
                       <Glyph name="refresh" size={14} />
                       Check again

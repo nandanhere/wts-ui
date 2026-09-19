@@ -136,7 +136,7 @@ fn observe_bucket(
             Some((path, modified_at))
         })
         .collect::<Vec<_>>();
-    candidates.sort_by(|left, right| right.1.cmp(&left.1));
+    candidates.sort_by_key(|candidate| std::cmp::Reverse(candidate.1));
     candidates.truncate(MAX_SESSION_FILES_PER_BUCKET);
     observed.extend(
         candidates.into_iter().filter_map(|(path, modified_at)| {

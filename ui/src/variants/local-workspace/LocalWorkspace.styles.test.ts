@@ -52,4 +52,24 @@ describe("LocalWorkspace style contract", () => {
     expect(bodyRule).toMatch(/overflow-y:\s*auto;/);
     expect(footerRule).toMatch(/flex:\s*0 0 auto;/);
   });
+
+  it("keeps the repository remote control inside its grid column", () => {
+    const rowRule = localWorkspaceStylesheet.match(
+      /\.sourceRepositoryRow\s*\{([\s\S]*?)\n\}/,
+    )?.[1];
+    const selectRules = [
+      ...localWorkspaceStylesheet.matchAll(
+        /\.sourceRepositorySelect\s*\{([\s\S]*?)\n\}/g,
+      ),
+    ].map((match) => match[1]);
+
+    expect(rowRule).toMatch(
+      /grid-template-columns:\s*minmax\(0,\s*1fr\)\s*auto\s*clamp\(160px,\s*28vw,\s*260px\);/,
+    );
+    expect(selectRules).toContainEqual(expect.stringMatching(/width:\s*100%;/));
+    expect(selectRules).toContainEqual(expect.stringMatching(/min-width:\s*0;/));
+    expect(selectRules).toContainEqual(
+      expect.stringMatching(/max-width:\s*260px;/),
+    );
+  });
 });

@@ -1,3 +1,4 @@
+import { observeWorkspaceVerificationSummary } from "./workspaceAttention";
 import {
   useCallback,
   useEffect,
@@ -21,6 +22,7 @@ import { sendDesktopNotification } from "./desktopNotifications";
 import { loadTimeReviewSchedule } from "./timeReviewSchedule";
 import { notificationForWorkspaceVerification } from "./workspaceNotifications";
 import { VerificationFeedbackPanel } from "./VerificationFeedbackPanel";
+import { WorkspaceCodeReviewCard } from "./WorkspaceCodeReviewCard";
 import styles from "./VerificationPanel.module.css";
 
 type DisplayStatus =
@@ -231,6 +233,9 @@ function cacheWorkspaceEvidence(
     evidenceCacheByClient.set(client, cache);
   }
   cache.set(workspaceId, { evidence, refreshedAt });
+  observeWorkspaceVerificationSummary(client, { schemaVersion: 1, workspaceId,
+    verificationPlan: evidence.verificationPlan, verificationResult: evidence.verificationResult,
+    verificationHistory: evidence.verificationHistory ?? [] });
 }
 
 function boundPlanningPrompt(prompt: string) {
@@ -1075,6 +1080,42 @@ function VerificationHistory({ evidence }: { evidence: WorkspaceEvidence }) {
   );
 }
 
+export interface VerificationAttentionSelection {
+  requestId: string;
+  workspaceId: string;
+  checkId: string;
+  planRevision: number;
+  runStartedAt: number;
+}
+
+function SelectedCheckResult({ evidence, selection }: {
+  evidence: WorkspaceEvidence | null;
+  selection: VerificationAttentionSelection;
+}) {
+  const ref = useRef<HTMLElement>(null);
+  const [dismissed, setDismissed] = useState("");
+  const run = evidence && [evidence.verificationResult, ...(evidence.verificationHistory ?? [])].find(item =>
+    item.planRevision === selection.planRevision && item.startedAtUnixMs === selection.runStartedAt);
+  const result = run?.checks.find(item => item.checkId === selection.checkId);
+  const label = evidence?.verificationPlan.revision === selection.planRevision
+    ? evidence.verificationPlan.checks.find(item => item.id === selection.checkId)?.label ?? selection.checkId
+    : selection.checkId;
+  useEffect(() => {
+    ref.current?.scrollIntoView?.({ block: "nearest" });
+    ref.current?.focus({ preventScroll: true });
+  }, [selection.requestId]);
+  if (dismissed === selection.requestId) return null;
+  return <section ref={ref} tabIndex={-1} className={styles.selectedResult}
+    aria-label="Selected check result" data-ui="verification.selected-result" data-ui-label="Selected check result">
+    <header><b>{label}</b><button type="button" onClick={() => setDismissed(selection.requestId)}>Close result</button></header>
+    {!evidence ? <p>WTS cannot find the saved evidence for this result. Select Check again to reload it.</p> : result ? <>
+      <p>{checkStatusLabel(result.status)} · {new Date(selection.runStartedAt).toLocaleString()}</p>
+      <pre>{result.detail || "This check has no saved output."}</pre>
+      {result.logDisplayPath && <p>Log: <code>{result.logDisplayPath}</code></p>}
+    </> : <p>This check result is no longer in the saved history. {evidence.verificationPlan.checks.length ? "The current checks remain below." : "No checks are configured."}</p>}
+  </section>;
+}
+
 export function VerificationPanel({
   client,
   materialized,
@@ -1084,6 +1125,7 @@ export function VerificationPanel({
   onIndexGraph,
   onPrepareCliTask,
   onVerificationFailed,
+  revealCheck,
 }: {
   client: WorkspaceClient;
   materialized: boolean;
@@ -1093,6 +1135,7 @@ export function VerificationPanel({
   onIndexGraph?: () => Promise<unknown>;
   onPrepareCliTask?: (prompt: string) => void;
   onVerificationFailed?: () => void;
+  revealCheck?: VerificationAttentionSelection;
 }) {
   const initialCachedEvidence = materialized
     ? cachedWorkspaceEvidence(client, workspaceId)
@@ -1116,19 +1159,23 @@ export function VerificationPanel({
   >(null);
   const [error, setError] = useState("");
   const [errorAction, setErrorAction] = useState<
-    "load" | "run" | "graph" | null
+    "load" | "run" | "graph" | "cancel" | null
   >(null);
   const [automation, setAutomation] = useState(loadWorkspaceAutomation);
   const generation = useRef(0);
+  const scopeGeneration = useRef(0);
   const evidenceRequest = useRef<Promise<boolean> | null>(null);
+  const evidenceReadVersion = useRef(0);
+  const terminalEvidenceVersion = useRef(0);
   const retryVerification = useRef<(() => void) | null>(null);
   const busy = useRef(false);
   const verificationRunning = useRef(false);
   const operationalClient = client;
+  const runActive = state === "running" || evidence?.verificationResult.status === "running";
 
   busy.current =
-    state === "running" || buildingGraph || promotingProposalId !== null;
-  verificationRunning.current = state === "running";
+    runActive || buildingGraph || promotingProposalId !== null;
+  verificationRunning.current = runActive;
 
   const load = useCallback((background = false): Promise<boolean> => {
     if (evidenceRequest.current) {
@@ -1137,6 +1184,7 @@ export function VerificationPanel({
     const requestGeneration = background
       ? generation.current
       : ++generation.current;
+    const readVersion = evidenceReadVersion.current;
     if (!background) {
       setState("loading");
     }
@@ -1147,7 +1195,7 @@ export function VerificationPanel({
     request = (async () => {
       try {
         const next = await client.getWorkspaceEvidence(workspaceId);
-        if (requestGeneration !== generation.current) return false;
+        if (requestGeneration !== generation.current || readVersion !== evidenceReadVersion.current) return false;
         const refreshedAt = Date.now();
         if (next) {
           cacheWorkspaceEvidence(client, workspaceId, next, refreshedAt);
@@ -1157,9 +1205,13 @@ export function VerificationPanel({
         setEvidence(next);
         setLastRefreshedAt(refreshedAt);
         setState((current) => current === "running" ? current : "ready");
+        if (next?.verificationResult.status !== "running") {
+          terminalEvidenceVersion.current += 1;
+          setActiveOperation((current) => current === "cancel" ? null : current);
+        }
         return true;
       } catch (reason) {
-        if (requestGeneration !== generation.current) return false;
+        if (requestGeneration !== generation.current || readVersion !== evidenceReadVersion.current) return false;
         setError(
           reason instanceof Error
             ? reason.message
@@ -1174,7 +1226,7 @@ export function VerificationPanel({
         if (evidenceRequest.current === request) {
           evidenceRequest.current = null;
         }
-        if (requestGeneration === generation.current) {
+        if (requestGeneration === generation.current && readVersion === evidenceReadVersion.current) {
           setEvidenceRefreshing(false);
         }
       }
@@ -1184,6 +1236,7 @@ export function VerificationPanel({
   }, [client, workspaceId]);
 
   useEffect(() => {
+    scopeGeneration.current += 1;
     generation.current += 1;
     evidenceRequest.current = null;
     const cached = materialized
@@ -1204,6 +1257,7 @@ export function VerificationPanel({
     setState(cached ? "ready" : "loading");
     void load(Boolean(cached));
     return () => {
+      scopeGeneration.current += 1;
       generation.current += 1;
     };
     // load is intentionally scoped to the selected workspace identity.
@@ -1310,8 +1364,9 @@ export function VerificationPanel({
     failureNotice: string,
     request: () => Promise<WorkspaceEvidence>,
   ): Promise<void> => {
-    if (!evidence || !hasPlan || state === "running") return;
-    const requestGeneration = generation.current;
+    if (!evidence || !hasPlan || runActive) return;
+    const requestGeneration = ++generation.current;
+    evidenceRequest.current = null;
     retryVerification.current = () => {
       void performVerification(
         operation,
@@ -1338,6 +1393,8 @@ export function VerificationPanel({
       setLastRefreshedAt(refreshedAt);
       setState("ready");
       setActiveOperation(null);
+      setError("");
+      setErrorAction(null);
       const nextStatus = deriveStatus(next, false);
       onNotice(`${workspaceKey} · verification ${statusLabel(nextStatus).toLowerCase()}`);
       const notification = notificationForWorkspaceVerification(
@@ -1354,6 +1411,8 @@ export function VerificationPanel({
       }
     } catch (reason) {
       if (requestGeneration !== generation.current) return;
+      generation.current += 1;
+      evidenceRequest.current = null;
       setError(
         reason instanceof Error
           ? reason.message
@@ -1400,35 +1459,43 @@ export function VerificationPanel({
 
   const cancelRun = async () => {
     if (
-      state !== "running" ||
+      !runActive || activeOperation === "cancel" ||
       !operationalClient.cancelWorkspaceVerification
     ) {
       return;
     }
-    const requestGeneration = ++generation.current;
+    const requestGeneration = generation.current;
+    const terminalVersion = terminalEvidenceVersion.current;
+    const previousOperation = activeOperation;
     setActiveOperation("cancel");
+    setError("");
+    setErrorAction(null);
     onNotice(`${workspaceKey} · cancelling verification…`);
     try {
       const next =
         await operationalClient.cancelWorkspaceVerification(workspaceId);
-      if (requestGeneration !== generation.current) return;
+      if (requestGeneration !== generation.current || terminalVersion !== terminalEvidenceVersion.current) return;
+      const stillRunning = next.verificationResult.status === "running";
+      if (!stillRunning) generation.current += 1;
+      evidenceReadVersion.current += 1;
+      evidenceRequest.current = null;
+      setEvidenceRefreshing(false);
       const refreshedAt = Date.now();
       cacheWorkspaceEvidence(client, workspaceId, next, refreshedAt);
       setEvidence(next);
       setLastRefreshedAt(refreshedAt);
       setState("ready");
-      setActiveOperation(null);
-      onNotice(`${workspaceKey} · verification cancelled`);
+      setActiveOperation(stillRunning ? "cancel" : null);
+      onNotice(`${workspaceKey} · ${stillRunning ? "cancellation requested; waiting for checks to stop" : `verification ${statusLabel(deriveStatus(next, false)).toLowerCase()}`}`);
     } catch (reason) {
-      if (requestGeneration !== generation.current) return;
+      if (requestGeneration !== generation.current || terminalVersion !== terminalEvidenceVersion.current) return;
       setError(
         reason instanceof Error
           ? reason.message
           : "Verification could not be cancelled.",
       );
-      setErrorAction(null);
-      setState("error");
-      setActiveOperation(null);
+      setErrorAction("cancel");
+      setActiveOperation(previousOperation);
       onNotice(`${workspaceKey} · verification could not be cancelled`);
     }
   };
@@ -1461,17 +1528,20 @@ export function VerificationPanel({
 
   const buildGraph = async () => {
     if (!onIndexGraph || buildingGraph) return;
+    const scope = scopeGeneration.current;
     setBuildingGraph(true);
     setError("");
     setErrorAction(null);
     onNotice(`${workspaceKey} · building workspace graph…`);
     try {
       await onIndexGraph();
+      if (scope !== scopeGeneration.current) return;
       const refreshed = await load();
-      if (refreshed) {
+      if (scope === scopeGeneration.current && refreshed) {
         onNotice(`${workspaceKey} · workspace graph ready`);
       }
     } catch (reason) {
+      if (scope !== scopeGeneration.current) return;
       setError(
         reason instanceof Error
           ? reason.message
@@ -1480,7 +1550,7 @@ export function VerificationPanel({
       setErrorAction("graph");
       onNotice(`${workspaceKey} · workspace graph could not be built`);
     } finally {
-      setBuildingGraph(false);
+      if (scope === scopeGeneration.current) setBuildingGraph(false);
     }
   };
 
@@ -1493,6 +1563,7 @@ export function VerificationPanel({
 
   const promoteAgentCheck = async (proposalId: string) => {
     if (promotingProposalId) return;
+    const scope = scopeGeneration.current;
     setPromotingProposalId(proposalId);
     setError("");
     setErrorAction(null);
@@ -1502,6 +1573,7 @@ export function VerificationPanel({
         workspaceId,
         proposalId,
       );
+      if (scope !== scopeGeneration.current) return;
       const refreshedAt = Date.now();
       cacheWorkspaceEvidence(client, workspaceId, next, refreshedAt);
       setEvidence(next);
@@ -1509,6 +1581,7 @@ export function VerificationPanel({
       setState("ready");
       onNotice(`${workspaceKey} · reviewed check added; ready to run`);
     } catch (reason) {
+      if (scope !== scopeGeneration.current) return;
       setError(
         reason instanceof Error
           ? reason.message
@@ -1517,17 +1590,19 @@ export function VerificationPanel({
       setErrorAction(null);
       onNotice(`${workspaceKey} · proposed check could not be added`);
     } finally {
-      setPromotingProposalId(null);
+      if (scope === scopeGeneration.current) setPromotingProposalId(null);
     }
   };
 
   const retryErrorAction = () => {
     if (errorAction === "load") {
-      void load();
+      void load(runActive);
     } else if (errorAction === "run") {
       retryVerification.current?.();
     } else if (errorAction === "graph") {
       void buildGraph();
+    } else if (errorAction === "cancel") {
+      void cancelRun();
     } else {
       setError("");
     }
@@ -1604,6 +1679,7 @@ export function VerificationPanel({
         data-ui="verification.not-configured"
         data-ui-label="Verification not configured"
       >
+        {revealCheck?.workspaceId === workspaceId && <SelectedCheckResult evidence={null} selection={revealCheck} />}
         <span className={styles.emptyIcon}>
           <Icon name="test" />
         </span>
@@ -1629,6 +1705,7 @@ export function VerificationPanel({
         data-ui="verification.no-checks-panel"
         data-ui-label="Verification suggestions panel"
       >
+        {revealCheck?.workspaceId === workspaceId && <SelectedCheckResult evidence={evidence} selection={revealCheck} />}
         <section
           aria-labelledby="verification-no-checks-title"
           className={styles.summary}
@@ -1713,6 +1790,13 @@ export function VerificationPanel({
           />
         </details>
 
+        <WorkspaceCodeReviewCard
+          client={client}
+          onNotice={onNotice}
+          workspaceId={workspaceId}
+          workspaceKey={workspaceKey}
+        />
+
         <footer className={styles.evidenceFooter}>
           <span>
             Evidence stays local at{" "}
@@ -1729,6 +1813,7 @@ export function VerificationPanel({
       data-ui="verification.panel"
       data-ui-label="Verification panel"
     >
+      {revealCheck?.workspaceId === workspaceId && <SelectedCheckResult evidence={evidence} selection={revealCheck} />}
       <section
         aria-busy={displayStatus === "running"}
         className={styles.summary}
@@ -1780,7 +1865,7 @@ export function VerificationPanel({
           {hasPlan && displayStatus === "failed" && (
             <button
               className={styles.secondaryButton}
-              disabled={state === "running"}
+              disabled={runActive}
               onClick={() =>
                 void (operationalClient.rerunFailedWorkspaceVerification
                   ? rerunFailed()
@@ -1794,7 +1879,7 @@ export function VerificationPanel({
             </button>
           )}
           {hasPlan &&
-            state === "running" &&
+            runActive &&
             operationalClient.cancelWorkspaceVerification && (
               <button
                 className={styles.cancelButton}
@@ -1809,11 +1894,11 @@ export function VerificationPanel({
           {hasPlan && (
             <button
               className={styles.primaryButton}
-              disabled={state === "running"}
+              disabled={runActive}
               onClick={() => void run()}
             >
-              {state === "running" ? <i /> : <Icon name="play" />}
-              {state === "running"
+              {runActive ? <i /> : <Icon name="play" />}
+              {runActive
                 ? activeOperation === "all"
                   ? "All checks are active"
                   : "Run in progress"
@@ -1902,6 +1987,13 @@ export function VerificationPanel({
         </div>
       )}
 
+      <WorkspaceCodeReviewCard
+        client={client}
+        onNotice={onNotice}
+        workspaceId={workspaceId}
+        workspaceKey={workspaceKey}
+      />
+
       {hasPlan && (
         <div
           className={styles.checks}
@@ -1949,7 +2041,7 @@ export function VerificationPanel({
                         ? (checkId, label) => void runCheck(checkId, label)
                         : undefined
                     }
-                    running={state === "running"}
+                    running={runActive}
                   />
                 ))}
               </div>

@@ -24,12 +24,13 @@ pub use github_reviews::{
     GithubReviewsAdapter, GithubTrustedRepository,
 };
 pub use gitlab_merge_requests::{
-    GitlabAccountState, GitlabAccountStatus, GitlabCliState, GitlabIntegrationStatus,
-    GitlabMergeRequest, GitlabMergeRequestDiagnosticCode, GitlabMergeRequestInbox,
-    GitlabMergeRequestInboxState, GitlabMergeRequestStatus, GitlabMergeRequestsAdapter,
-    GitlabReview, GitlabReviewCommentRequest, GitlabReviewCommit, GitlabReviewDiscussion,
-    GitlabReviewDiscussionComment, GitlabReviewInbox, GitlabReviewPatch, GitlabReviewState,
-    GitlabReviewTrustedRepository, GitlabTrustedRepository, PublishGitlabReviewCommentResult,
+    GitlabAccountState, GitlabAccountStatus, GitlabCliState, GitlabDiscussions,
+    GitlabIntegrationStatus, GitlabMergeRequest, GitlabMergeRequestDiagnosticCode,
+    GitlabMergeRequestInbox, GitlabMergeRequestInboxState, GitlabMergeRequestStatus,
+    GitlabMergeRequestsAdapter, GitlabReview, GitlabReviewCommentRequest, GitlabReviewCommit,
+    GitlabReviewDiscussion, GitlabReviewDiscussionComment, GitlabReviewDiscussionPosition,
+    GitlabReviewInbox, GitlabReviewPatch, GitlabReviewState, GitlabReviewTrustedRepository,
+    GitlabTrustedRepository, PublishGitlabReviewCommentResult, ReplyGitlabDiscussionResult,
 };
 pub use jira_mcp::{
     JiraActiveIssue, JiraActiveIssueList, JiraIssue, JiraMcpAdapter, JiraMcpError,

@@ -624,7 +624,7 @@ fn parse_stack_manifest(
             ports: vec![RuntimePortCandidate {
                 port_id: port.id.clone(),
                 environment: Some(port.environment.clone()),
-                preferred_port: None,
+                preferred_port: manifest_base_port(&manifest.id).checked_add(port.offset),
                 policy: RuntimePortPolicy::Prefer,
                 confidence: RuntimeConfidence::Declared,
                 evidence: vec![port_evidence],
@@ -635,6 +635,21 @@ fn parse_stack_manifest(
         });
     }
     Some(services)
+}
+
+fn manifest_base_port(manifest_id: &str) -> u16 {
+    match manifest_id {
+        "frontend-backend" => 47000,
+        "api-worker" => 47100,
+        "event-driven" => 47200,
+        _ => {
+            let hash = manifest_id.bytes().fold(0u32, |acc, byte| {
+                acc.wrapping_mul(31).wrapping_add(u32::from(byte))
+            });
+            let slot = (hash % 120) as u16;
+            48000 + slot * 100
+        }
+    }
 }
 
 fn dependency_cycle(processes: &[StackProcess]) -> bool {
@@ -1592,7 +1607,7 @@ mod tests {
             .find(|service| service.service_id == "frontend")
             .expect("frontend service");
         assert_eq!(frontend.dependencies, ["backend"]);
-        assert_eq!(frontend.ports[0].preferred_port, None);
+        assert_eq!(frontend.ports[0].preferred_port, Some(47001));
         assert_eq!(frontend.command, ["node", "src/server.mjs"]);
         assert!(
             result
@@ -1600,6 +1615,75 @@ mod tests {
                 .iter()
                 .all(|service| !service.command.iter().any(|part| part == "npm"))
         );
+    }
+
+    #[test]
+    fn event_driven_stack_manifest_auto_allocates_preferred_ports_from_offsets() {
+        let manifest = br#"{
+          "schemaVersion": 1,
+          "id": "event-driven",
+          "description": "A command API, asynchronous event projector, and read API.",
+          "ports": [
+            {"id":"command","environment":"COMMAND_API_PORT","offset":0},
+            {"id":"projector","environment":"PROJECTOR_PORT","offset":1},
+            {"id":"read","environment":"READ_API_PORT","offset":2}
+          ],
+          "processes": [
+            {
+              "id":"command-api",
+              "workingDirectory":"command-api",
+              "executable":"node",
+              "arguments":["src/server.mjs"],
+              "dependencies":[],
+              "health":{"port":"command","path":"/health"}
+            },
+            {
+              "id":"projector",
+              "workingDirectory":"projector",
+              "executable":"node",
+              "arguments":["src/projector.mjs"],
+              "dependencies":["command-api"],
+              "health":{"port":"projector","path":"/health"}
+            },
+            {
+              "id":"read-api",
+              "workingDirectory":"read-api",
+              "executable":"node",
+              "arguments":["src/server.mjs"],
+              "dependencies":["projector"],
+              "health":{"port":"read","path":"/health"}
+            }
+          ],
+          "smoke":{"workingDirectory":".","executable":"node","arguments":["smoke.mjs"]}
+        }"#;
+        let (_temporary, source) = repository(&[("wts-stack.json", manifest)]);
+
+        let result = analyze_runtime(&[source]).expect("manifest analysis");
+
+        assert_eq!(result.services.len(), 3);
+        let command_api = result
+            .services
+            .iter()
+            .find(|service| service.service_id == "command-api")
+            .expect("command-api service");
+        assert_eq!(command_api.ports[0].port_id, "command");
+        assert_eq!(command_api.ports[0].preferred_port, Some(47200));
+
+        let projector = result
+            .services
+            .iter()
+            .find(|service| service.service_id == "projector")
+            .expect("projector service");
+        assert_eq!(projector.ports[0].port_id, "projector");
+        assert_eq!(projector.ports[0].preferred_port, Some(47201));
+
+        let read_api = result
+            .services
+            .iter()
+            .find(|service| service.service_id == "read-api")
+            .expect("read-api service");
+        assert_eq!(read_api.ports[0].port_id, "read");
+        assert_eq!(read_api.ports[0].preferred_port, Some(47202));
     }
 
     #[test]

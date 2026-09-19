@@ -176,8 +176,8 @@ it writes the agent inbox inside a materialized fixture workspace, refreshes
 the UI, promotes a fixed Cargo command, reruns the revised plan, and expects all
 three trusted checks to pass.
 
-The pull-request gate runs that focused real-backend browser flow, rather than
-the entire Playwright catalog:
+The pull-request gate runs the real-backend critical flow, responsive layout
+checks, and workspace board drag tests:
 
 ```bash
 bash scripts/test-pr.sh
@@ -189,6 +189,12 @@ and verification execution, the complete React behavior suite, and the
 production UI build. It uploads failure-only Playwright traces, screenshots,
 videos, and the HTML report from `ui/test-results/` and
 `ui/playwright-report/`.
+
+The fast gate also runs the desktop preparation, installation, and update
+contract tests. A separate macOS job builds the interface and desktop
+application. It runs the native application and desktop tests, including
+macOS-specific contracts. Run that job locally on macOS with
+`bash scripts/test-macos.sh`.
 
 The slower self-hosting lane remains opt-in locally:
 
@@ -799,9 +805,9 @@ bash scripts/test-fast.sh
 ```
 
 Each phase is named and timed, and the command ends with one concise pass/fail
-summary. The harness contract test also parses the checked-in workflow
-contracts, runs `bash -n` over every gate entrypoint, and simulates a failed
-self-host run to prove redaction and deterministic cleanup.
+summary. The harness tests inspect workflow contracts and run each gate with
+fake tool executables. They check invoked commands and failure propagation.
+They also check Bash syntax and failed self-host cleanup.
 
 ### Pull-request gate
 
@@ -816,12 +822,36 @@ Target: under ten minutes.
 - changed visual snapshots reviewed when applicable
 - dependency and secret scan
 
-Implemented in `.github/workflows/pull-request.yml`. It installs the pinned
-Node/Rust toolchains and Chromium, then invokes `scripts/test-pr.sh`. The real
-browser portion is deliberately scoped to `e2e/critical-path.spec.ts`, which
-creates and materializes repositories through the real Rust loopback host,
-publishes an agent report, promotes its check, and executes the revised
-verification plan.
+GitLab uses `.gitlab-ci.yml` for merge-request pipelines and manual web
+pipelines. Push events do not create duplicate pipelines.
+The Linux job uses the `backend-docker-large` runner tag and runs
+`scripts/test-pr.sh`. The macOS job uses the `mac-vm-large` runner tag and runs
+`scripts/test-macos.sh`.
+
+Both jobs call `scripts/test-gitlab.sh`. The script installs Node 22.13.1 and
+Rust 1.95.0 under the checkout's ignored `.tools/gitlab-ci` directory.
+The Rust version supports the locked SQLite dependencies.
+The script downloads the Rust installer for the runner's architecture from
+`static.rust-lang.org` and checks its SHA-256 checksum before execution.
+It also checks the Node archive checksum before extraction.
+It preserves the runner's home directory, shell files, and default toolchain.
+The macOS runner must have Xcode command line tools.
+The Linux container installs Tauri prerequisites and Chromium.
+
+GitLab caches the local toolchains and Rust build output by job and lockfiles.
+Each job uses four Cargo build jobs and four Rust test threads.
+The fast gate limits the React suite to two workers, with one worker as the
+minimum.
+Failed jobs retain gate logs and Playwright reports for 14 days.
+The harness tests exercise tool installation, platform selection, checksum
+failure, and gate failure with fake executables.
+
+The GitHub workflow in `.github/workflows/pull-request.yml` calls the same
+gate scripts. The browser gate runs `critical-path.spec.ts`,
+`responsive-polish.spec.ts`, and `workspace-board-dnd.spec.ts`.
+The critical flow creates repositories through the Rust loopback host,
+publishes an agent report, promotes its check, and runs the revised plan.
+The other suites check layout and persisted board actions.
 
 ### Nightly gate
 

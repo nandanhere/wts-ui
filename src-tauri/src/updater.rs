@@ -687,7 +687,6 @@ fn serve_connection(
     let manifest_path = format!("/{token}/manifest");
     let artifact_route = format!("/{token}/artifact");
     match request_line
-        .trim_end()
         .split_whitespace()
         .collect::<Vec<_>>()
         .as_slice()

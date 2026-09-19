@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-preflight-agent-work-item-integration"
+description = "Enables the preflight_agent_work_item_integration command without any pre-configured scope."
+commands.allow = ["preflight_agent_work_item_integration"]
+
+[[permission]]
+identifier = "deny-preflight-agent-work-item-integration"
+description = "Denies the preflight_agent_work_item_integration command without any pre-configured scope."
+commands.deny = ["preflight_agent_work_item_integration"]

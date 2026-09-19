@@ -55,7 +55,7 @@ troubleshooting.
 Core development:
 
 - Node.js and npm
-- Rust 1.85 or later
+- Rust 1.95 or later
 - Git
 
 Desktop development:
@@ -184,6 +184,7 @@ targets from re-inspected, catalog-owned repository origins.
 | --- | --- | --- |
 | `WTS_REPOSITORY_ROOTS` | Trusted repository roots as a platform path list | Unset |
 | `WTS_REPOSITORY_ROOT` | One trusted repository root | `WTS_WORKSPACE_ROOT` |
+| `WTS_UI_REPOSITORY_ROOT` | Source checkout for contextual UI agent changes | Current source checkout in desktop development |
 | `WTS_WORKSPACE_ROOT` | Parent directory for managed workspaces | `$HOME/cd` |
 | `WTS_DATA_DIR` | SQLite registry and application data | Platform data directory |
 | `WTS_ADDR` | Browser-host loopback listener | `127.0.0.1:3000` |

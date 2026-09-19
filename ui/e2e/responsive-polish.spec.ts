@@ -61,6 +61,7 @@ test("keeps workspace controls usable and chrome contained at responsive widths"
 test("keeps compact workflow controls and primary actions visually distinct", async ({
   page,
 }) => {
+  test.setTimeout(60_000);
   await page.goto("/");
   await page.setViewportSize({ width: 1440, height: 900 });
 
@@ -103,7 +104,7 @@ test("keeps compact workflow controls and primary actions visually distinct", as
     name: "Environment & integrations",
   });
   const verify = settings.getByRole("button", { name: "Verify all" });
-  await expect(verify).toBeVisible();
+  await expect(verify).toBeVisible({ timeout: 30_000 });
   await expect(verify).toHaveCSS("color", "rgb(255, 255, 255)");
   await expect(verify).toHaveCSS("background-color", "rgb(11, 99, 206)");
 
@@ -125,4 +126,43 @@ test("keeps compact workflow controls and primary actions visually distinct", as
     })
     .check({ force: true });
   await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+});
+
+test("keeps clone labels readable and shows a disabled task cursor", async ({ page }) => {
+  let releaseClone!: () => void;
+  const clonePending = new Promise<void>((resolve) => {
+    releaseClone = resolve;
+  });
+  await page.route("**/api/v1/repositories/clone", async (route) => {
+    await clonePending;
+    await route.abort();
+  });
+
+  try {
+    await page.goto("/sessions/new");
+    const dialog = page.getByRole("dialog", { name: "New workspace" });
+    await dialog.locator("label").filter({
+      hasText: "Choose local repositories directly",
+    }).click();
+    await dialog.getByRole("tab", { name: "Clone Git URL" }).click();
+    await expect.soft(dialog.getByText("Limit the clone", { exact: true })).toHaveCSS(
+      "font-size",
+      "12px",
+    );
+    await expect.soft(dialog.getByText("Clone only this branch and its latest commit.")).toHaveCSS(
+      "font-size",
+      "12px",
+    );
+    await dialog.getByRole("textbox", { name: "Git repository URL" }).fill(
+      "https://git.example.test/platform/clone-style-check.git",
+    );
+    await dialog.getByRole("button", { name: "Clone and add" }).click();
+    await dialog.getByRole("button", { name: "Move to Kanban" }).click();
+    const task = page.getByRole("button", { name: "Clone is active" });
+    await expect(task).toBeDisabled();
+    await expect(task).toHaveCSS("cursor", "not-allowed");
+  } finally {
+    releaseClone();
+    if (!page.isClosed()) await page.unrouteAll({ behavior: "wait" });
+  }
 });

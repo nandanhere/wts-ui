@@ -562,6 +562,58 @@ fn manual_removal_blocks_untracked_and_ignored_files() {
     assert!(repository.has_branch("wts/blocked"));
 }
 
+#[test]
+fn rollback_preserves_ignored_files_and_allows_retry_after_they_are_moved() {
+    let repository = TestRepository::new("api");
+    fs::write(repository.root.join(".gitignore"), "*.local\n").expect("ignore file");
+    run(Some(&repository.root), ["add", ".gitignore"]);
+    run(Some(&repository.root), ["commit", "-m", "add ignore rule"]);
+    let original_head = output(Some(&repository.root), ["rev-parse", "HEAD"]);
+    let workspace_parent = tempfile::tempdir().expect("workspace parent");
+    let workspace_root = workspace_parent.path().join("rollback-workspace");
+    let service = GitWorktreeService::new();
+    let receipt = service
+        .materialize_workspace(&WorkspaceWorktreeRequest::new(
+            &workspace_root,
+            "wts/ignored-rollback",
+            vec![RepositoryRequest::new(&repository.root)],
+        ))
+        .expect("materialize");
+    let created = &receipt.worktrees[0];
+    let ignored_path = created.target_path.join("notes.local");
+    let ignored_bytes = b"User notes that Git does not track.\n";
+    fs::write(&ignored_path, ignored_bytes).expect("ignored user file");
+    assert!(
+        output(Some(&created.target_path), ["status", "--porcelain"]).is_empty(),
+        "the fixture must not appear in the ordinary status check"
+    );
+
+    let blocked = service.rollback(&receipt);
+
+    assert_eq!(
+        fs::read(&ignored_path).expect("rollback must preserve ignored user files"),
+        ignored_bytes
+    );
+    assert_eq!(blocked.failures.len(), 1);
+    assert!(blocked.removed.is_empty());
+    assert!(!blocked.workspace_root_removed);
+    assert!(repository.has_branch("wts/ignored-rollback"));
+    assert_eq!(repository.head_branch(), "main");
+    assert_eq!(
+        output(Some(&repository.root), ["rev-parse", "HEAD"]),
+        original_head
+    );
+
+    let saved_notes = workspace_parent.path().join("saved-notes.local");
+    fs::rename(&ignored_path, &saved_notes).expect("user moves the ignored notes outside");
+    let retry = service.rollback(&receipt);
+    assert!(retry.failures.is_empty());
+    assert!(retry.workspace_root_removed);
+    assert!(!workspace_root.exists());
+    assert!(!repository.has_branch("wts/ignored-rollback"));
+    assert_eq!(fs::read(saved_notes).expect("saved notes"), ignored_bytes);
+}
+
 fn run<const N: usize>(repository: Option<&Path>, args: [&str; N]) {
     let status = command(repository, args).status().expect("start Git");
     assert!(status.success(), "Git command failed");

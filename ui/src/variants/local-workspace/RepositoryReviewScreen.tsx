@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import type { FeedbackSelectionReturn } from "../../lib/agentFeedbackNavigation";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import type {
   WorkspaceAgentReport,
   WorkspaceClient,
@@ -11,9 +12,16 @@ import type {
   GitlabReviewTarget,
 } from "../../lib/wtsClient";
 import { useTheme } from "../../theme";
+import { openAgentFeedback } from "../../lib/agentFeedbackEvents";
 import { Glyph } from "./Glyph";
 import { SelectMenu } from "../../components/SelectMenu";
 import { RepositoryPatchViewer } from "./RepositoryPatchViewer";
+import { WorkspaceCodeReviewCard } from "./WorkspaceCodeReviewCard";
+import { GitlabDiscussionsPanel } from "./GitlabDiscussionsPanel";
+import { MergeRequestWorkingChanges } from "./MergeRequestWorkingChanges";
+import { reviewSession } from "./workingChangesState";
+import { getCachedRepositoryReview, loadRepositoryReview } from "./repositoryReviewCache";
+import type { GitlabConversationEntry, GitlabConversationsController } from "./gitlabDiscussions";
 import styles from "./RepositoryReviewScreen.module.css";
 
 interface RepositoryReviewScreenProps {
@@ -21,12 +29,22 @@ interface RepositoryReviewScreenProps {
   initialRepositoryId?: string;
   materialization: WorkspaceMaterialization;
   onOpenVerification?: () => void;
-  onRepositoryChange: (repositoryId: string) => void;
+  onRepositoryChange: (repositoryId: string, navigation?: "user" | "automatic") => void;
   workspaceId: string;
   gitlabReview?: GitlabReviewTarget & Partial<GitlabReview>;
+  gitlabConversations?: GitlabConversationsController;
+  feedbackSelectionReturn?: FeedbackSelectionReturn;
+  workspaceKey?: string;
+  onNotice?: (message: string, kind?: "info" | "error") => void;
+  onOpenIntegrations?: () => void;
+  onOpenWorkspaceStatus?: () => void;
 }
 
 export const REVIEW_PATCH_POLL_INTERVAL_MS = 60_000;
+
+function worktreeScope(worktree: WorkspaceMaterialization["worktrees"][number] | undefined): string {
+  return worktree ? JSON.stringify([worktree.repositoryId, worktree.baseCommitOid, worktree.branchName, worktree.targetDisplayPath]) : "";
+}
 
 export function RepositoryReviewScreen({
   client,
@@ -36,8 +54,28 @@ export function RepositoryReviewScreen({
   onRepositoryChange,
   workspaceId,
   gitlabReview,
+  gitlabConversations,
+  feedbackSelectionReturn,
+  workspaceKey,
+  onNotice,
+  onOpenIntegrations,
+  onOpenWorkspaceStatus,
 }: RepositoryReviewScreenProps) {
   const { resolvedTheme } = useTheme();
+  const [showAiReview, setShowAiReview] = useState(false);
+  const changeViewId = useId();
+  const session = reviewSession(client, workspaceId);
+  const [, setSessionRevision] = useState(0);
+  const [changeView, setChangeView] = useState({ workspaceId, mode: session.mode });
+  const [revealConversation, setRevealConversation] = useState<{
+    requestId: number;
+    targetKey: string;
+    scopeId: string;
+    discussionId: string;
+  }>();
+  const revealRequestId = useRef(0);
+  const handledFeedbackReturn = useRef<string | undefined>(undefined);
+  const changeMode = gitlabConversations ? changeView.workspaceId === workspaceId ? changeView.mode : session.mode : "code";
   const defaultRepositoryId = useMemo(
     () =>
       materialization.worktrees.find(
@@ -78,10 +116,27 @@ export function RepositoryReviewScreen({
     );
   }, [gitlabPatchTarget, materialization.worktrees]);
   const [repositoryId, setRepositoryId] = useState(initialRepositoryId || "");
-  const [diff, setDiff] = useState<WorkspaceRepositoryDiff | null>(null);
+  const currentRepositoryId = repositoryId || defaultRepositoryId;
+  const conversationEntries = gitlabConversations?.entries.filter(
+    (entry) => entry.target.worktreeRepositoryId === currentRepositoryId,
+  ) ?? [];
+  const selectedConversation = conversationEntries.find((entry) => entry.target.key === session.targets[currentRepositoryId]) ?? conversationEntries[0];
+  const managedTarget = selectedConversation?.target;
+  const managedTargetKey = managedTarget?.key;
+  const selectedConversationScope = JSON.stringify([managedTargetKey, selectedConversation?.snapshot?.scopeId]);
+  const selectConversationTarget = (key: string) => {
+    session.targets[currentRepositoryId] = key;
+    setSessionRevision((value) => value + 1);
+  };
+  const initialWorktree = materialization.worktrees.find((worktree) => worktree.repositoryId === (initialRepositoryId || defaultRepositoryId));
+  const initialCachedDiff = !gitlabReview && initialWorktree ? getCachedRepositoryReview(client, workspaceId, initialWorktree) : undefined;
+  const [diffRecord, setDiffRecord] = useState({ value: initialCachedDiff ?? null as WorkspaceRepositoryDiff | null, client, scope: worktreeScope(initialWorktree) });
+  const diffWorktree = materialization.worktrees.find((worktree) => worktree.repositoryId === diffRecord.value?.repositoryId);
+  const diff = diffRecord.client === client && diffRecord.value?.workspaceId === workspaceId && diffRecord.scope === worktreeScope(diffWorktree) ? diffRecord.value : null;
+  const setDiff = (value: WorkspaceRepositoryDiff | null) => setDiffRecord({ value, client, scope: worktreeScope(materialization.worktrees.find((worktree) => worktree.repositoryId === value?.repositoryId)) });
   const [reviewGraph, setReviewGraph] =
     useState<WorkspaceRepositoryReviewGraph | null>(null);
-  const [state, setState] = useState<"loading" | "ready" | "error">("loading");
+  const [state, setState] = useState<"loading" | "ready" | "error">(initialCachedDiff ? "ready" : "loading");
   const [error, setError] = useState("");
   const [requestRevision, setRequestRevision] = useState(0);
   const [reviewCommits, setReviewCommits] = useState<GitlabReviewCommit[]>([]);
@@ -100,6 +155,8 @@ export function RepositoryReviewScreen({
   const [reportRevision, setReportRevision] = useState(0);
   const onRepositoryChangeRef = useRef(onRepositoryChange);
   const displayedRequestRef = useRef<{
+    client: WorkspaceClient;
+    worktreeScope: string;
     repositoryId: string;
     requestRevision: number;
     workspaceId: string;
@@ -123,6 +180,7 @@ export function RepositoryReviewScreen({
   }, [initialRepositoryId, materialization.worktrees]);
 
   useEffect(() => {
+    if (managedTargetKey) return;
     const hasRepository = (candidate: string) =>
       materialization.worktrees.some(
         (worktree) => worktree.repositoryId === candidate,
@@ -166,9 +224,12 @@ export function RepositoryReviewScreen({
       setState("ready");
       return;
     }
+    const directWorktree = materialization.worktrees.find((worktree) => worktree.repositoryId === directRepositoryId);
     if (
       directRepositoryId &&
-      displayedRequestRef.current?.workspaceId === workspaceId &&
+      displayedRequestRef.current?.client === client &&
+      displayedRequestRef.current.worktreeScope === worktreeScope(directWorktree) &&
+      displayedRequestRef.current.workspaceId === workspaceId &&
       displayedRequestRef.current.repositoryId === directRepositoryId &&
       displayedRequestRef.current.requestRevision === requestRevision &&
       displayedRequestRef.current.providerHeadCommitOid === gitlabPatchTarget?.headCommitOid &&
@@ -178,20 +239,25 @@ export function RepositoryReviewScreen({
     }
     let current = true;
     const forceProviderRefresh = forceProviderRefreshRef.current;
-    const preserveDisplayedReview =
+    const cachedDiff = !gitlabPatchTarget && directWorktree ? getCachedRepositoryReview(client, workspaceId, directWorktree) : undefined;
+    const preserveDisplayedReview = Boolean(cachedDiff) ||
       state === "ready" &&
-      diff !== null &&
+      diff !== null && diff.workspaceId === workspaceId && diff.repositoryId === directRepositoryId &&
       (preserveDisplayedReviewRef.current ||
         (gitlabPatchTarget !== undefined &&
           diff.repositoryId === directRepositoryId));
     forceProviderRefreshRef.current = false;
     preserveDisplayedReviewRef.current = false;
     displayedRequestRef.current = null;
-    if (!preserveDisplayedReview) {
+    if (cachedDiff) {
+      setDiff(cachedDiff);
+      setState("ready");
+    } else if (!preserveDisplayedReview) {
       setState("loading");
       setDiff(null);
     }
     setError("");
+    if (!gitlabPatchTarget) setCheckingReviewUpdates(true);
     void (async () => {
       let firstCleanDiff: WorkspaceRepositoryDiff | null = null;
       let firstError: unknown = null;
@@ -231,7 +297,7 @@ export function RepositoryReviewScreen({
                       "WTS returned changes for a different GitLab review.",
                     );
                   }
-                  if (!selectedCommitOid) {
+                  if (current && !selectedCommitOid) {
                     const previousHead = providerHeadCommitRef.current;
                     if (patch.fromCache) {
                       setReviewUpdateMessage(
@@ -246,9 +312,11 @@ export function RepositoryReviewScreen({
                     }
                     providerHeadCommitRef.current = patch.headCommitOid;
                   }
-                  setReviewPatchFromCache(patch.fromCache);
-                  setReviewCommits(patch.commits);
-                  setReviewDiscussions(patch.discussions);
+                  if (current) {
+                    setReviewPatchFromCache(patch.fromCache);
+                    setReviewCommits(patch.commits);
+                    setReviewDiscussions(patch.discussions);
+                  }
                   return {
                     schemaVersion: 1 as const,
                     workspaceId,
@@ -263,7 +331,7 @@ export function RepositoryReviewScreen({
                     untrackedPathsTruncated: false,
                   };
                 })
-            : await client.getWorkspaceRepositoryDiff(workspaceId, candidateId);
+            : await loadRepositoryReview(client, workspaceId, materialization.worktrees.find((worktree) => worktree.repositoryId === candidateId)!);
           if (!current) return;
           if (
             result.workspaceId !== workspaceId ||
@@ -274,6 +342,8 @@ export function RepositoryReviewScreen({
           firstCleanDiff ??= result;
           if (result.patch || result.untrackedPaths.length) {
             displayedRequestRef.current = {
+              client,
+              worktreeScope: worktreeScope(materialization.worktrees.find((worktree) => worktree.repositoryId === candidateId)),
               repositoryId: candidateId,
               requestRevision,
               workspaceId,
@@ -284,7 +354,7 @@ export function RepositoryReviewScreen({
             setDiff(result);
             setState("ready");
             if (!explicitRepositoryId && candidateId !== repositoryId) {
-              onRepositoryChangeRef.current(candidateId);
+              onRepositoryChangeRef.current(candidateId, "automatic");
             }
             return;
           }
@@ -298,6 +368,8 @@ export function RepositoryReviewScreen({
       if (!current) return;
       if (firstCleanDiff) {
         displayedRequestRef.current = {
+          client,
+          worktreeScope: worktreeScope(materialization.worktrees.find((worktree) => worktree.repositoryId === firstCleanDiff.repositoryId)),
           repositoryId: firstCleanDiff.repositoryId,
           requestRevision,
           workspaceId,
@@ -311,11 +383,15 @@ export function RepositoryReviewScreen({
           !explicitRepositoryId &&
           firstCleanDiff.repositoryId !== repositoryId
         ) {
-          onRepositoryChangeRef.current(firstCleanDiff.repositoryId);
+          onRepositoryChangeRef.current(firstCleanDiff.repositoryId, "automatic");
         }
         return;
       }
       if (preserveDisplayedReview) {
+        if (!gitlabPatchTarget) {
+          setError(firstError instanceof Error ? firstError.message : "WTS could not refresh the local changes.");
+          return;
+        }
         setReviewUpdateMessage(
           firstError instanceof Error && firstError.message.trim()
             ? `WTS could not check GitLab: ${firstError.message}`
@@ -337,6 +413,7 @@ export function RepositoryReviewScreen({
     };
   }, [
     client,
+    managedTargetKey,
     initialRepositoryId,
     materialization.worktrees,
     repositoryId,
@@ -348,7 +425,7 @@ export function RepositoryReviewScreen({
   ]);
 
   useEffect(() => {
-    if (!gitlabPatchTarget) return;
+    if (!gitlabPatchTarget || managedTargetKey) return;
     const check = () => {
       forceProviderRefreshRef.current = true;
       preserveDisplayedReviewRef.current = true;
@@ -358,7 +435,19 @@ export function RepositoryReviewScreen({
     };
     const interval = window.setInterval(check, REVIEW_PATCH_POLL_INTERVAL_MS);
     return () => window.clearInterval(interval);
-  }, [gitlabPatchTarget]);
+  }, [gitlabPatchTarget, managedTargetKey]);
+
+  useEffect(() => {
+    if (gitlabPatchTarget || managedTargetKey || changeMode !== "code") return;
+    const check = () => {
+      if (document.visibilityState !== "visible") return;
+      displayedRequestRef.current = null;
+      setRequestRevision((value) => value + 1);
+    };
+    const interval = window.setInterval(check, 10_000);
+    window.addEventListener("focus", check);
+    return () => { window.clearInterval(interval); window.removeEventListener("focus", check); };
+  }, [changeMode, gitlabPatchTarget, managedTargetKey]);
 
   useEffect(() => {
     setReviewGraph(diff?.reviewGraph ?? null);
@@ -441,10 +530,38 @@ export function RepositoryReviewScreen({
     return risks.length;
   }, [diff, report]);
 
+  useEffect(() => {
+    const request = feedbackSelectionReturn;
+    const source = request?.source;
+    if (!request || source?.kind !== "gitlabDiscussion" || source.workspaceId !== workspaceId ||
+      handledFeedbackReturn.current === request.requestId || !gitlabConversations) return;
+    const matches = gitlabConversations.entries.filter(entry =>
+      entry.target.worktreeRepositoryId === source.repositoryId && entry.target.iid === source.iid &&
+      (!source.providerRepositoryId || entry.target.repositoryId === source.providerRepositoryId));
+    if (gitlabConversations.loading || matches.some(entry => entry.state === "loading" && !entry.snapshot)) return;
+    handledFeedbackReturn.current = request.requestId;
+    const entry = matches.length === 1 ? matches[0] : undefined;
+    const snapshot = entry?.snapshot;
+    const discussion = snapshot?.discussions.find(item => item.id === source.discussionId);
+    if (!entry || !snapshot || !discussion || (source.scopeId && source.scopeId !== snapshot.scopeId)) {
+      onNotice?.("The saved conversation is not available in the current GitLab context. Its original context remains in Agent feedback.", "error");
+      return;
+    }
+    session.targets[source.repositoryId] = entry.target.key;
+    session.mode = "conversations";
+    session.discussions[JSON.stringify([entry.target.key, snapshot.scopeId])] = discussion.id;
+    if (discussion.filePath) session.files[`${source.repositoryId}:${entry.target.key}`] = discussion.filePath;
+    setRepositoryId(source.repositoryId);
+    setChangeView({ workspaceId, mode: "conversations" });
+    setRevealConversation({ requestId: ++revealRequestId.current, targetKey: entry.target.key, scopeId: snapshot.scopeId, discussionId: discussion.id });
+    setSessionRevision(value => value + 1);
+    onRepositoryChangeRef.current(source.repositoryId, "automatic");
+  }, [feedbackSelectionReturn, gitlabConversations, onNotice, session, workspaceId]);
+
   const selectRepository = (nextRepositoryId: string) => {
     setRepositoryId(nextRepositoryId);
     setRequestRevision((current) => current + 1);
-    onRepositoryChange(nextRepositoryId);
+    onRepositoryChange(nextRepositoryId, "user");
   };
 
   const retryRepositoryRequest = () => {
@@ -460,6 +577,40 @@ export function RepositoryReviewScreen({
     setReviewUpdateMessage("");
     setRequestRevision((value) => value + 1);
   };
+  const unreadEntries = gitlabConversations?.entries.filter((entry) => entry.unreadCommentIds.length > 0) ?? [];
+  const repositoryUnreadCount = (id: string) => unreadEntries
+    .filter((entry) => entry.target.worktreeRepositoryId === id)
+    .reduce((total, entry) => total + entry.unreadCommentIds.length, 0);
+  const unreadConversations = selectedConversation?.unreadCommentIds.length ?? 0;
+  const conversationCount = selectedConversation?.snapshot?.discussions.length ?? 0;
+  const conversationsKnown = Boolean(selectedConversation?.snapshot);
+  const matchingReview = gitlabReview?.number === managedTarget?.iid ? gitlabReview : undefined;
+  const mrTitle = managedTarget?.title || matchingReview?.title || (managedTarget ? `Merge request !${managedTarget.iid}` : "");
+  const mrStatus = managedTarget?.status ?? matchingReview?.status;
+  const sourceBranch = managedTarget?.sourceBranch ?? matchingReview?.sourceBranch;
+  const targetBranch = managedTarget?.targetBranch ?? matchingReview?.targetBranch;
+
+  const selectChangeMode = (mode: "code" | "conversations") => {
+    if (mode === "conversations" && !repositoryId) setRepositoryId(currentRepositoryId);
+    session.mode = mode;
+    setChangeView({ workspaceId, mode });
+  };
+
+  const openUnreadConversation = (entry: GitlabConversationEntry) => {
+    const nextRepositoryId = entry.target.worktreeRepositoryId;
+    session.targets[nextRepositoryId] = entry.target.key;
+    const unread = new Set(entry.unreadCommentIds);
+    const discussion = entry.snapshot?.discussions.find((item) => item.comments.some((comment) => unread.has(comment.id)));
+    if (discussion && entry.snapshot) {
+      const scope = JSON.stringify([entry.target.key, entry.snapshot.scopeId]);
+      session.discussions[scope] = discussion.id;
+      if (discussion.filePath) session.files[`${nextRepositoryId}:${entry.target.key}`] = discussion.filePath;
+      setRevealConversation({ requestId: ++revealRequestId.current, targetKey: entry.target.key, scopeId: entry.snapshot.scopeId, discussionId: discussion.id });
+    }
+    selectRepository(nextRepositoryId);
+    session.mode = "conversations";
+    setChangeView({ workspaceId, mode: "conversations" });
+  };
 
   return (
     <section
@@ -472,19 +623,26 @@ export function RepositoryReviewScreen({
     >
       <header
         className={styles.header}
+        data-mr={Boolean(managedTarget) || undefined}
         data-ui="repository-review.header"
         data-ui-label="Repository review toolbar"
         data-testid="repository-review-toolbar"
       >
         <div>
-          <h2>{diff ? `${diff.repositoryLabel} changes` : "Find changed code"}</h2>
-          <p>
-            {gitlabReview
+          <h2 title={managedTarget ? mrTitle : undefined}>{managedTarget ? mrTitle : changeMode === "conversations" ? "Repository conversations" : diff ? `${diff.repositoryLabel} changes` : "Find changed code"}</h2>
+          {managedTarget ? <div className={styles.mrMetadata}>
+            {mrStatus && <span className={styles.mrStatus} data-status={mrStatus}>{mrStatus === "open" ? "Open" : mrStatus === "merged" ? "Merged" : "Closed"}</span>}
+            <span className={styles.mrLabel} title={managedTarget.label}>{managedTarget.label}</span>
+            {sourceBranch && targetBranch && <span className={styles.branches}><code>{sourceBranch}</code><Glyph name="arrow" size={12} /><code>{targetBranch}</code></span>}
+          </div> : <p>
+            {changeMode === "conversations"
+              ? "Read and reply to GitLab conversations."
+              : gitlabReview
               ? `GitLab MR !${gitlabReview.number} · Select a changed line to comment in GitLab.`
               : diff
               ? `${diff.baseCommitOid.slice(0, 8)} to ${diff.headCommitOid.slice(0, 8)}`
               : "WTS checks repositories for local changes"}
-          </p>
+          </p>}
         </div>
         <label>
           <span>Repository</span>
@@ -495,12 +653,13 @@ export function RepositoryReviewScreen({
           >
             {materialization.worktrees.map((worktree) => (
               <option key={worktree.repositoryId} value={worktree.repositoryId}>
-                {worktree.label}
+                {worktree.label}{repositoryUnreadCount(worktree.repositoryId) > 0 ? ` · ${repositoryUnreadCount(worktree.repositoryId)} unread` : ""}
               </option>
             ))}
           </SelectMenu>
         </label>
-        {gitlabReview && (
+        {managedTarget && conversationEntries.length > 1 && <label><span>Merge request</span><SelectMenu aria-label="Merge request" value={managedTarget.key} onChange={selectConversationTarget}>{conversationEntries.map((entry) => <option key={entry.target.key} value={entry.target.key}>{entry.target.label}{entry.unreadCommentIds.length > 0 ? ` · ${entry.unreadCommentIds.length} unread` : ""}</option>)}</SelectMenu></label>}
+        {changeMode === "code" && gitlabReview && !managedTarget && (
           <label>
             <span>Changes</span>
             <SelectMenu
@@ -526,6 +685,8 @@ export function RepositoryReviewScreen({
             </SelectMenu>
           </label>
         )}
+        {changeMode === "code" && !managedTarget && !gitlabReview && <button className={styles.toolbarAction} disabled={checkingReviewUpdates} onClick={retryRepositoryRequest} type="button">Refresh changes</button>}
+        {changeMode === "code" && !managedTarget && <>
         <span
           className={styles.graphStatus}
           data-ready={materialization.graph.status === "ready" || undefined}
@@ -571,7 +732,87 @@ export function RepositoryReviewScreen({
             Verification
           </button>
         )}
+        {workspaceKey && (
+          <button
+            aria-expanded={showAiReview}
+            className={styles.toolbarAction}
+            onClick={() => setShowAiReview((prev) => !prev)}
+            type="button"
+          >
+            {showAiReview ? "Hide AI review" : "AI review"}
+          </button>
+        )}
+        </>}
       </header>
+      {unreadEntries.length > 0 && (
+        <nav className={styles.unreadInbox} aria-label="Unread MR comments" data-ui="repository-review.unread" data-ui-label="Unread comment links">
+          <span className={styles.unreadSummary}>
+            <Glyph name="comment" size={14} />
+            <strong>{gitlabConversations!.unreadCount} unread {gitlabConversations!.unreadCount === 1 ? "comment" : "comments"}</strong>
+            <span>in this workspace</span>
+          </span>
+          <div className={styles.unreadTargets}>
+            {unreadEntries.map((entry) => {
+              const label = materialization.worktrees.find((tree) => tree.repositoryId === entry.target.worktreeRepositoryId)?.label ?? entry.target.label;
+              const count = entry.unreadCommentIds.length;
+              return <button key={entry.target.key} type="button" onClick={() => openUnreadConversation(entry)} aria-label={`Open ${count} unread ${count === 1 ? "comment" : "comments"} in ${label} !${entry.target.iid}`}>
+                <span>{label} <span className={styles.unreadMr}>!{entry.target.iid}</span></span>
+                <b>{count}</b>
+                {entry.snapshot?.fromCache && <small>Saved</small>}
+                <Glyph name="arrow" size={12} />
+              </button>;
+            })}
+          </div>
+        </nav>
+      )}
+      {gitlabConversations && (
+        <div className={styles.changeViews} role="tablist" aria-label="Change views" data-ui="repository-review.views" data-ui-label="Change views">
+          {(["code", "conversations"] as const).map((mode) => (
+            <button
+              aria-controls={`${changeViewId}-${mode}-panel`}
+              aria-selected={changeMode === mode}
+              aria-label={mode === "code" ? "Code" : `Conversations${unreadConversations ? `, ${unreadConversations} unread comments` : ""}`}
+              data-view={mode}
+              id={`${changeViewId}-${mode}-tab`}
+              key={mode}
+              onClick={() => selectChangeMode(mode)}
+              onKeyDown={(event) => {
+                if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+                event.preventDefault();
+                const next = event.key === "Home" ? "code" : event.key === "End" ? "conversations" : mode === "code" ? "conversations" : "code";
+                selectChangeMode(next);
+                event.currentTarget.parentElement?.querySelector<HTMLButtonElement>(`[data-view="${next}"]`)?.focus();
+              }}
+              role="tab"
+              tabIndex={changeMode === mode ? 0 : -1}
+              type="button"
+            >
+              {mode === "code" ? "Code" : <>Conversations {conversationsKnown && <span className={styles.conversationCount}>{conversationCount}</span>}{unreadConversations > 0 && <span className={styles.unreadBadge}>{unreadConversations} unread</span>}</>}
+            </button>
+          ))}
+        </div>
+      )}
+      <div className={styles.codeContent} hidden={changeMode !== "code"} role={gitlabConversations ? "tabpanel" : undefined} id={`${changeViewId}-code-panel`} aria-labelledby={gitlabConversations ? `${changeViewId}-code-tab` : undefined}>
+      {managedTarget && gitlabConversations ? <MergeRequestWorkingChanges
+        key={`${workspaceId}:${currentRepositoryId}:${managedTarget.key}`}
+        client={client} workspaceId={workspaceId} repositoryId={currentRepositoryId}
+        target={managedTarget} controller={gitlabConversations} active={changeMode === "code"}
+        onOpenIntegrations={onOpenIntegrations}
+        initialFile={session.files[`${currentRepositoryId}:${managedTarget.key}`]}
+        selectedDiscussionId={session.discussions[selectedConversationScope]}
+        onSelectConversation={(discussion) => { session.discussions[selectedConversationScope] = discussion.id; setSessionRevision((value) => value + 1); }}
+        onFileChange={(path) => { session.files[`${currentRepositoryId}:${managedTarget.key}`] = path; setSessionRevision((value) => value + 1); }}
+      /> : <>
+      {showAiReview && workspaceKey && (
+        <div style={{ padding: "12px 16px", borderBottom: "1px solid var(--wts-line)" }}>
+          <WorkspaceCodeReviewCard
+            client={client}
+            onNotice={onNotice}
+            workspaceId={workspaceId}
+            workspaceKey={workspaceKey}
+          />
+        </div>
+      )}
       {gitlabReview && (
         <div
           className={styles.reviewPrompt}
@@ -603,6 +844,7 @@ export function RepositoryReviewScreen({
           </button>
         </div>
       )}
+      {error && state === "ready" && <div className={styles.warning} role="alert">{error} The displayed changes remain available. <button onClick={retryRepositoryRequest} type="button">Retry changes</button>{onOpenWorkspaceStatus && <button onClick={onOpenWorkspaceStatus} type="button">Open workspace status</button>}{gitlabReview && onOpenIntegrations && <button onClick={onOpenIntegrations} type="button">Check GitLab connection</button>}</div>}
       {reviewUpdateMessage && (
         <div className={styles.reviewUpdate} role="status">
           {reviewUpdateMessage}
@@ -621,6 +863,8 @@ export function RepositoryReviewScreen({
           <button onClick={retryRepositoryRequest} type="button">
             Try again
           </button>
+          {onOpenWorkspaceStatus && <button onClick={onOpenWorkspaceStatus} type="button">Open workspace status</button>}
+          {gitlabReview && onOpenIntegrations && <button onClick={onOpenIntegrations} type="button">Check GitLab connection</button>}
         </div>
       ) : diff && (diff.patch || diff.untrackedPaths.length > 0) ? (
         <>
@@ -694,6 +938,20 @@ export function RepositoryReviewScreen({
           </div>
           <b>No local changes</b>
           <p>The workspace is up to date with the target branch.</p>
+        </div>
+      )}
+      </>}
+      </div>
+      {gitlabConversations && (
+        <div className={styles.conversationsContent} hidden={changeMode !== "conversations"} role="tabpanel" id={`${changeViewId}-conversations-panel`} aria-labelledby={`${changeViewId}-conversations-tab`}>
+          <GitlabDiscussionsPanel active={changeMode === "conversations"} client={client} controller={gitlabConversations} repositoryId={currentRepositoryId}
+            workspaceId={workspaceId} onAskAgentToFix={openAgentFeedback}
+            revealConversation={revealConversation}
+            onOpenIntegrations={onOpenIntegrations}
+            selectedDiscussionId={managedTarget ? session.discussions[selectedConversationScope] : undefined}
+            selectedTargetKey={managedTarget?.key} onTargetChange={selectConversationTarget} hideTargetSelector={Boolean(managedTarget)}
+            onSelectConversation={(discussion) => { if (managedTarget) { session.discussions[selectedConversationScope] = discussion.id; if (discussion.filePath) session.files[`${currentRepositoryId}:${managedTarget.key}`] = discussion.filePath; setSessionRevision((value) => value + 1); } }}
+          />
         </div>
       )}
     </section>

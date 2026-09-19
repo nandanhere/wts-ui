@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-preflight-agent-turn-restore"
+description = "Enables the preflight_agent_turn_restore command without any pre-configured scope."
+commands.allow = ["preflight_agent_turn_restore"]
+
+[[permission]]
+identifier = "deny-preflight-agent-turn-restore"
+description = "Denies the preflight_agent_turn_restore command without any pre-configured scope."
+commands.deny = ["preflight_agent_turn_restore"]

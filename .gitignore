@@ -61,6 +61,7 @@ next-env.d.ts
 # generated local knowledge graph and WTS state
 /graphify-out/
 /.wts/
+/artifacts/
 
 # invention notes may affect filing strategy; keep local until counsel approves
 /docs/*.private.md

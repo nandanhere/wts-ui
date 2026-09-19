@@ -113,6 +113,12 @@ pub enum GitError {
     #[error("the requested worktree file exceeds the accepted byte budget")]
     WorktreeFileTooLarge,
 
+    #[error("The source file changed. Reload the file before you save.")]
+    WorktreeFileConflict,
+
+    #[error("The source file revision is invalid.")]
+    InvalidWorktreeFileRevision,
+
     #[error("the selected commit contains too many runtime candidate files")]
     TooManyCommitFiles,
 
@@ -180,6 +186,9 @@ pub enum GitError {
 
     #[error("Git exceeded the local execution deadline")]
     CommandTimedOut,
+
+    #[error("WTS could not save setup progress. Check the data folder and try again.")]
+    MaterializationObserverFailed,
 
     #[error("local filesystem operation failed")]
     Filesystem,
