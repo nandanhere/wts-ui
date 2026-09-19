@@ -12,11 +12,13 @@ test("creates, materializes, and verifies a multi-repository workspace", async (
   await expect(create).toBeVisible();
   await create
     .locator("label")
-    .filter({ hasText: "Repository set" })
+    .filter({ hasText: "Choose local repositories directly" })
     .click();
-  await create.getByRole("textbox", { name: "Repositories" }).fill(
-    "storefront-ui, checkout-api",
-  );
+  for (const repository of ["storefront-ui", "checkout-api"]) {
+    await create.getByRole("combobox", { name: "Repository to add" }).click();
+    await page.getByRole("option", { name: new RegExp(`^${repository} ·`) }).click();
+    await create.getByRole("button", { name: "Add repository" }).click();
+  }
   await create.getByRole("button", { name: /Review repositories/i }).click();
 
   await expect(
@@ -40,7 +42,8 @@ test("creates, materializes, and verifies a multi-repository workspace", async (
     "background-color",
     "rgb(21, 122, 85)",
   );
-  await expect(progressSteps.nth(1).locator("span").first()).toHaveCSS(
+  await expect(progressSteps.nth(1)).toHaveAttribute("aria-current", "step");
+  await expect(progressSteps.nth(1).getByText("2", { exact: true })).toHaveCSS(
     "background-color",
     "rgb(11, 99, 206)",
   );
@@ -64,7 +67,7 @@ test("creates, materializes, and verifies a multi-repository workspace", async (
     "Service analysis could not finish",
   );
   const planHeading = create.getByRole("heading", {
-    name: "Workspace plan",
+    name: "Does this plan match the task?",
   });
   await expect(
     repositorySelectionChanged
@@ -100,6 +103,9 @@ test("creates, materializes, and verifies a multi-repository workspace", async (
     servicesConfigured = true;
     await expect(checkoutService).toBeChecked();
     await expect(create.getByText("cargo run", { exact: true })).toBeVisible();
+    await expect(create.getByRole("button", {
+      name: /Auto-allocate free port for checkout api api/i,
+    })).toHaveCSS("font-size", "12px");
     await create
       .getByRole("spinbutton", {
         name: /Preferred port for checkout api api/i,
@@ -119,7 +125,7 @@ test("creates, materializes, and verifies a multi-repository workspace", async (
   ).toBeVisible();
   if (servicesConfigured) {
     await expect(
-      create.getByText(/checkout api · api 46100 \(prefer\)/i),
+      create.getByText("api: 46100 · prefer", { exact: true }),
     ).toBeVisible();
   }
   await create.getByRole("button", { name: /Save workspace plan/i }).click();
@@ -136,7 +142,10 @@ test("creates, materializes, and verifies a multi-repository workspace", async (
   await expect(
     page.getByRole("table", { name: "Workspace creation effects" }),
   ).toBeVisible();
-  await page.getByRole("button", { name: "Create workspace" }).click();
+  await page
+    .getByRole("tabpanel", { name: "Workspace", exact: true })
+    .getByRole("button", { name: "Create workspace" })
+    .click();
   const workspaceFacts = page.getByRole("region", {
     name: "Workspace facts",
   });
@@ -159,11 +168,15 @@ test("creates, materializes, and verifies a multi-repository workspace", async (
   await expect(
     page.getByRole("heading", { name: "Workspace plan" }),
   ).toHaveCount(0);
+  await page.getByRole("button", { name: "Workspace actions", exact: true }).click();
+  await page.getByRole("menuitem", { name: "Open with…" }).click();
+  const launcher = page.getByRole("dialog", { name: "Open workspace", exact: true });
   await expect(
-    page.getByRole("button", { name: "Open workspace in VS Code" }),
+    launcher.getByRole("button", { name: "Open workspace in VS Code" }),
   ).toBeEnabled();
+  await launcher.getByRole("button", { name: "Close open workspace" }).click();
 
-  await page.getByRole("tab", { name: "Verification" }).click();
+  await page.getByRole("tab", { name: "Verify", exact: true }).click();
   await expect(
     page.getByRole("heading", { name: "Not run" }),
   ).toBeVisible();
@@ -176,14 +189,14 @@ test("creates, materializes, and verifies a multi-repository workspace", async (
   await expect(page.getByText("2 of 2 checks passed")).toBeVisible();
 
   await page
-    .getByText("Coverage planning", { exact: true })
+    .getByText("Improve coverage", { exact: true })
     .click();
   const planning = page.getByRole("region", {
-    name: "Expand verification coverage",
+    name: "Find gaps in verification",
   });
   await expect(planning).toBeVisible();
   await page
-    .getByText("Agent-reported analysis", { exact: true })
+    .getByText("Evidence and history", { exact: true })
     .click();
   const agentReport = page.getByRole("region", {
     name: "No agent findings yet",
@@ -275,17 +288,16 @@ test("creates, materializes, and verifies a multi-repository workspace", async (
   await agentReport
     .getByRole("button", { name: "Refresh findings" })
     .click();
-  const reported = page.getByRole("region", { name: "Agent findings" });
+  const reported = page.getByRole("region", { name: "Supporting evidence" });
   await expect(reported).toBeVisible();
-  await reported.getByRole("tab", { name: /Findings/ }).click();
   await expect(
     reported.getByText("Checkout retries need deterministic coverage"),
   ).toBeVisible();
-  await reported.getByRole("tab", { name: /Coverage/ }).click();
+  await reported.getByText("Suggested checks", { exact: true }).click();
   await expect(
     reported.getByText("cargo test --quiet", { exact: true }),
   ).toBeVisible();
-  await reported.getByRole("tab", { name: /Flows/ }).click();
+  await reported.getByText("System behavior (agent-reported)", { exact: true }).click();
   await reported.getByText("Repeat a checkout request").click();
   await expect(
     reported.getByText(
@@ -301,7 +313,6 @@ test("creates, materializes, and verifies a multi-repository workspace", async (
       )
     );
   });
-  await reported.getByRole("tab", { name: /Coverage/ }).click();
   await reported
     .getByRole("button", { name: "Add to verification" })
     .click();
@@ -338,15 +349,23 @@ test("creates, materializes, and verifies a multi-repository workspace", async (
     .getByRole("button", { name: "Prepare verification brief" })
     .click();
   await expect(
-    page.getByRole("tab", { name: "CLI" }),
+    page.getByRole("tab", { name: "Verify", exact: true }),
   ).toHaveAttribute("aria-selected", "true");
-  const cli = page.getByRole("region", {
-    name: /Start an agent in/i,
-  });
+  const brief = page.getByRole("region", { name: "Verification brief ready" });
+  await expect(brief).toBeVisible();
+  await brief.getByText("Review prepared brief", { exact: true }).click();
+  await expect(brief.getByLabel("Prepared verification brief")).toContainText(
+    /Read graphify-out\/graph\.json/,
+  );
+  await expect(brief.getByLabel("Prepared verification brief")).toContainText(
+    /Do not execute the proposal/,
+  );
+  await expect(brief.getByLabel("Prepared verification brief")).toContainText(
+    /\.wts\/agent-report\.json/,
+  );
+  await brief.getByRole("button", { name: "Open Codex with brief" }).click();
+  const cli = page.getByRole("dialog", { name: "Open workspace", exact: true });
   await expect(cli).toBeVisible();
-  await expect(
-    cli.getByRole("group", { name: "Open workspace with" }),
-  ).toBeVisible();
   await expect(
     cli.getByRole("group", { name: "Terminal application" }),
   ).toBeVisible();
@@ -354,15 +373,6 @@ test("creates, materializes, and verifies a multi-repository workspace", async (
   await expect(
     cli.getByText(/foreground session, not a hidden job/i),
   ).toHaveCount(0);
-  await expect(page.getByLabel("Prepared CLI task")).toContainText(
-    /Read graphify-out\/graph\.json/,
-  );
-  await expect(page.getByLabel("Prepared CLI task")).toContainText(
-    /Do not execute the proposal/,
-  );
-  await expect(page.getByLabel("Prepared CLI task")).toContainText(
-    /\.wts\/agent-report\.json/,
-  );
   await expect(
     cli.getByRole("button", { name: "Open Codex with WTS.md" }),
   ).toBeVisible();

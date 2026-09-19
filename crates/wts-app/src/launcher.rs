@@ -708,7 +708,7 @@ fn terminal_cli_script(provider: AgentProvider) -> &'static str {
             r#"on run argv
 set workspacePath to item 1 of argv
 set reportHelperDirectory to item 2 of argv
-set launchCommand to "cd " & quoted form of workspacePath & " && PATH=" & quoted form of reportHelperDirectory & ":$PATH exec codex --sandbox workspace-write --ask-for-approval on-request"
+set launchCommand to "cd " & quoted form of workspacePath & " && export WTS_WORKSPACE_DIR=" & quoted form of workspacePath & " && PATH=" & quoted form of reportHelperDirectory & ":$PATH exec codex --sandbox workspace-write --ask-for-approval on-request"
 tell application "Terminal"
     activate
     do script launchCommand
@@ -719,7 +719,7 @@ end run"#
             r#"on run argv
 set workspacePath to item 1 of argv
 set reportHelperDirectory to item 2 of argv
-set launchCommand to "cd " & quoted form of workspacePath & " && PATH=" & quoted form of reportHelperDirectory & ":$PATH exec opencode ."
+set launchCommand to "cd " & quoted form of workspacePath & " && export WTS_WORKSPACE_DIR=" & quoted form of workspacePath & " && PATH=" & quoted form of reportHelperDirectory & ":$PATH exec opencode ."
 tell application "Terminal"
     activate
     do script launchCommand
@@ -731,7 +731,18 @@ end run"#
 set workspacePath to item 1 of argv
 set reportHelperDirectory to item 2 of argv
 set managedScopePath to item 3 of argv
-set launchCommand to "cd " & quoted form of workspacePath & " && PATH=" & quoted form of reportHelperDirectory & ":$PATH HERMES_MANAGED_DIR=" & quoted form of managedScopePath & " exec hermes chat --tui"
+set launchCommand to "cd " & quoted form of workspacePath & " && export WTS_WORKSPACE_DIR=" & quoted form of workspacePath & " && PATH=" & quoted form of reportHelperDirectory & ":$PATH HERMES_MANAGED_DIR=" & quoted form of managedScopePath & " exec hermes chat --tui"
+tell application "Terminal"
+    activate
+    do script launchCommand
+end tell
+end run"#
+        }
+        AgentProvider::Copilot => {
+            r#"on run argv
+set workspacePath to item 1 of argv
+set reportHelperDirectory to item 2 of argv
+set launchCommand to "cd " & quoted form of workspacePath & " && export WTS_WORKSPACE_DIR=" & quoted form of workspacePath & " && PATH=" & quoted form of reportHelperDirectory & ":$PATH exec copilot"
 tell application "Terminal"
     activate
     do script launchCommand
@@ -748,14 +759,20 @@ fn shell_single_quote(value: &str) -> String {
 
 #[cfg(target_os = "macos")]
 fn provider_cli_command(
+    workspace: &Path,
     provider: AgentProvider,
     hermes_scope: Option<&Path>,
     report_helper_directory: &Path,
 ) -> Result<String, LaunchFailure> {
+    let workspace_str = workspace.to_str().ok_or(LaunchFailure::Rejected)?;
     let path = report_helper_directory
         .to_str()
         .ok_or(LaunchFailure::Rejected)?;
-    let prefix = format!("PATH={}:\"$PATH\" ", shell_single_quote(path));
+    let prefix = format!(
+        "export WTS_WORKSPACE_DIR={} && PATH={}:\"$PATH\" ",
+        shell_single_quote(workspace_str),
+        shell_single_quote(path)
+    );
     match provider {
         AgentProvider::Codex => Ok(format!(
             "{prefix}exec codex --sandbox workspace-write --ask-for-approval on-request"
@@ -770,6 +787,7 @@ fn provider_cli_command(
                 shell_single_quote(scope)
             ))
         }
+        AgentProvider::Copilot => Ok(format!("{prefix}exec copilot")),
     }
 }
 
@@ -779,6 +797,7 @@ fn warp_tab_config_identity(provider: AgentProvider) -> (&'static str, &'static 
         AgentProvider::Codex => ("wts_managed_codex_cli", "WTS · Codex"),
         AgentProvider::OpenCode => ("wts_managed_opencode_cli", "WTS · OpenCode"),
         AgentProvider::Hermes => ("wts_managed_hermes_cli", "WTS · Hermes"),
+        AgentProvider::Copilot => ("wts_managed_copilot_cli", "WTS · Copilot"),
     }
 }
 
@@ -811,9 +830,9 @@ fn warp_tab_config(
     hermes_scope: Option<&Path>,
     report_helper_directory: &Path,
 ) -> Result<String, LaunchFailure> {
-    let workspace = workspace.to_str().ok_or(LaunchFailure::Rejected)?;
+    let workspace_str = workspace.to_str().ok_or(LaunchFailure::Rejected)?;
     let (_, display_name) = warp_tab_config_identity(provider);
-    let workspace_label = workspace
+    let workspace_label = workspace_str
         .rsplit('/')
         .find(|part| !part.is_empty())
         .unwrap_or("workspace");
@@ -829,8 +848,9 @@ fn warp_tab_config(
          is_focused = true\n",
         toml_string(display_name),
         toml_string(&format!("{display_name} · {workspace_label}")),
-        toml_string(workspace),
+        toml_string(workspace_str),
         toml_string(&provider_cli_command(
+            workspace,
             provider,
             hermes_scope,
             report_helper_directory,
@@ -1167,6 +1187,7 @@ mod tests {
             ),
             (AgentProvider::OpenCode, "exec opencode ."),
             (AgentProvider::Hermes, "exec hermes chat --tui"),
+            (AgentProvider::Copilot, "exec copilot"),
         ] {
             let scope = (provider == AgentProvider::Hermes).then_some(hermes_scope);
             let command = terminal_cli_command(workspace, provider, scope, report_helper_directory)
@@ -1191,6 +1212,7 @@ mod tests {
             let script = arguments[1].to_str().expect("static UTF-8 AppleScript");
             assert!(script.contains("quoted form of workspacePath"));
             assert!(script.contains("quoted form of reportHelperDirectory"));
+            assert!(script.contains("export WTS_WORKSPACE_DIR="));
             assert!(script.contains(":$PATH "));
             assert!(script.contains(expected));
             assert!(!script.contains(workspace.to_str().expect("UTF-8 test path")));
@@ -1246,7 +1268,7 @@ mod tests {
                 .and_then(|commands| commands.first())
                 .and_then(toml::Value::as_str),
             Some(
-                "PATH='/tmp/WTS helper with '\\'' quotes':\"$PATH\" exec codex --sandbox workspace-write --ask-for-approval on-request"
+                "export WTS_WORKSPACE_DIR='/tmp/workspace with \"quotes\" and \\ slash' && PATH='/tmp/WTS helper with '\\'' quotes':\"$PATH\" exec codex --sandbox workspace-write --ask-for-approval on-request"
             )
         );
 
@@ -1369,9 +1391,10 @@ mod tests {
 
         let bin = root.path().join("bin");
         fs::create_dir(&bin).expect("fake executable directory");
-        let command = provider_cli_command(AgentProvider::Hermes, Some(&scope), &bin)
+        let command = provider_cli_command(&workspace, AgentProvider::Hermes, Some(&scope), &bin)
             .expect("Hermes command");
-        assert!(command.starts_with("PATH="));
+        assert!(command.starts_with("export WTS_WORKSPACE_DIR="));
+        assert!(command.contains("PATH="));
         assert!(command.contains(" HERMES_MANAGED_DIR="));
         assert!(command.ends_with(" exec hermes chat --tui"));
         assert!(command.contains("'\\''"));
@@ -1379,7 +1402,7 @@ mod tests {
         let fake_hermes = bin.join("hermes");
         fs::write(
             &fake_hermes,
-            "#!/bin/sh\nprintf '%s\\n' \"$PWD\" \"$HERMES_MANAGED_DIR\" \"$*\"\n",
+            "#!/bin/sh\nprintf '%s\\n' \"$PWD\" \"$HERMES_MANAGED_DIR\" \"$WTS_WORKSPACE_DIR\" \"$*\"\n",
         )
         .expect("fake Hermes executable");
         fs::set_permissions(&fake_hermes, fs::Permissions::from_mode(0o700))
@@ -1410,6 +1433,7 @@ mod tests {
                     .to_string_lossy()
                     .into_owned(),
                 scope.to_string_lossy().into_owned(),
+                workspace.to_string_lossy().into_owned(),
                 "chat --tui".to_owned(),
             ]
         );

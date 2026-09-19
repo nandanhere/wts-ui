@@ -1,4 +1,4 @@
-import { memo } from "react";
+import { memo, type ReactNode } from "react";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import { Button, type ButtonProps } from "react-aria-components";
 import { Glyph } from "./Glyph";
@@ -14,6 +14,7 @@ import styles from "./LocalWorkspace.module.css";
 
 export interface WorkspaceCardProps {
   workspace: Workspace;
+  attention?: ReactNode;
   agent?: WorkspaceAgentSnapshot;
   onOpen: (modified: boolean) => void;
   onOpenWorkspace?: () => void;
@@ -35,6 +36,7 @@ export interface WorkspaceCardProps {
 
 export const WorkspaceCard = memo(function WorkspaceCard({
   workspace,
+  attention,
   agent,
   onOpen,
   onOpenWorkspace,
@@ -215,6 +217,7 @@ export const WorkspaceCard = memo(function WorkspaceCard({
           {cardContents}
         </Button>
       )}
+      {attention}
       {hasActions && (
         <div
           aria-label={`${workspace.key} actions`}

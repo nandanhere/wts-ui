@@ -1,0 +1,16 @@
+
+Running 11 tests using 1 worker
+
+  ✓   1 [chromium] › e2e/critical-path.spec.ts:5:1 › creates, materializes, and verifies a multi-repository workspace (21.6s)
+  ✓   2 [chromium] › e2e/critical-path.spec.ts:390:1 › keeps help and environment diagnostics discoverable without stacking dialogs (1.1s)
+  ✓   3 [chromium] › e2e/local-user-journey.spec.ts:29:1 › keeps the application chrome operable at 320 pixels (613ms)
+  ✓   4 [chromium] › e2e/local-user-journey.spec.ts:47:1 › keeps the app-shell self-test out of workspace verification (10.1s)
+  ✓   5 [chromium] › e2e/responsive-polish.spec.ts:3:1 › keeps workspace controls usable and chrome contained at responsive widths (1.2s)
+  ✓   6 [chromium] › e2e/responsive-polish.spec.ts:61:1 › keeps compact workflow controls and primary actions visually distinct (4.1s)
+  ✓   7 [chromium] › e2e/responsive-polish.spec.ts:131:1 › keeps clone labels readable and shows a disabled task cursor (1.2s)
+  ✓   8 [chromium] › e2e/workspace-board-dnd.spec.ts:154:1 › drags workspaces within a lane and into an empty lane (2.5s)
+  ✓   9 [chromium] › e2e/workspace-board-dnd.spec.ts:226:1 › archives from the action shelf without reusing a prior card neighbor (1.2s)
+  ✓  10 [chromium] › e2e/workspace-board-dnd.spec.ts:279:1 › moves a workspace with the keyboard menu (2.0s)
+  ✓  11 [chromium] › e2e/workspace-board-dnd.spec.ts:313:1 › prevents card dragging while search hides other workspaces (1.1s)
+
+  11 passed (58.3s)

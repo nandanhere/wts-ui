@@ -12,6 +12,14 @@ import {
 const snapshot: SetupSnapshot = {
   checkedAtUnixMs: 1_721_234_567_890,
   repositoryCount: 1,
+  gitSigning: {
+    ready: true,
+    commitSigningEnabled: true,
+    signingKeyConfigured: true,
+    gpgAvailable: true,
+    privateKeyAvailable: true,
+    detail: "Git commit signing and the configured private key are ready.",
+  },
   integrations: [
     {
       id: "git",
@@ -285,6 +293,12 @@ describe("SetupSheet", () => {
       screen.getByRole("heading", { name: "Integrations" }),
     ).toBeVisible();
     expect(screen.getByText("v2.49.0")).toBeVisible();
+    const signingRow = screen.getByText("GPG commit signing").closest("li");
+    expect(signingRow).not.toBeNull();
+    expect(signingRow).toHaveAttribute("data-ui", "environment.git-signing");
+    expect(within(signingRow!).getByText("Ready")).toBeVisible();
+    await user.click(within(signingRow!).getByText("Verification details"));
+    expect(within(signingRow!).getByText("All checks passed")).toBeVisible();
     expect(screen.getAllByText("Version probe passed").length).toBeGreaterThan(
       0,
     );
@@ -572,7 +586,7 @@ describe("SetupSheet", () => {
     expect(connectionNotice).toBeVisible();
     expect(within(jiraRow!).getByText("WTS adapter ready")).toBeVisible();
     await user.click(
-      within(jiraRow!).getByRole("button", { name: "Verify connection" }),
+      within(jiraRow!).getByRole("button", { name: "Connect Jira" }),
     );
     expect(onVerifyJira).toHaveBeenCalledOnce();
     expect(
@@ -580,6 +594,93 @@ describe("SetupSheet", () => {
         "mcp-atlassian 0.21.1 exposed jira_get_issue.",
       ),
     ).toBeVisible();
+    expect(
+      within(jiraRow!).getByRole("button", { name: "Connected" }),
+    ).toBeDisabled();
+  });
+
+  it("allows Jira to connect again after refreshed setup reports an authentication failure", async () => {
+    const user = userEvent.setup();
+    const onVerifyJira = vi.fn().mockResolvedValue({
+      connected: true,
+      serverName: "mcp-atlassian",
+      serverVersion: "0.21.1",
+      issueTool: "jira_get_issue",
+    });
+    const externalJiraSnapshot: SetupSnapshot = {
+      ...snapshot,
+      integrations: snapshot.integrations.map((integration) =>
+        integration.id === "jiraMcp"
+          ? { ...integration, installation: "detected", setup: "unverified", blockingFor: [] }
+          : integration,
+      ),
+    };
+    const props = { loading: false, onOpenChange: vi.fn(), onRefresh: vi.fn(), onVerifyJira, open: true, repositories };
+    const { rerender } = render(<SetupSheet {...props} snapshot={externalJiraSnapshot} />);
+    const jiraRow = () => within(screen.getByText("Jira via MCP").closest("li")!);
+    await user.click(jiraRow().getByRole("button", { name: "Connect Jira" }));
+    expect(await jiraRow().findByRole("button", { name: "Connected" })).toBeDisabled();
+
+    rerender(<SetupSheet {...props} snapshot={{
+      ...externalJiraSnapshot,
+      checkedAtUnixMs: snapshot.checkedAtUnixMs + 1,
+      integrations: externalJiraSnapshot.integrations.map((integration) =>
+        integration.id === "jiraMcp"
+          ? { ...integration, setup: "needsAuth", blockingFor: ["jiraIssueImport"] }
+          : integration,
+      ),
+    }} />);
+    expect(jiraRow().getByRole("button", { name: "Connect Jira" })).toBeEnabled();
+    await user.click(jiraRow().getByRole("button", { name: "Connect Jira" }));
+    expect(onVerifyJira).toHaveBeenCalledTimes(2);
+    expect(await jiraRow().findByRole("button", { name: "Connected" })).toBeDisabled();
+  });
+
+  it("gives Jira startup failures a direct retry action", async () => {
+    const user = userEvent.setup();
+    const onVerifyJira = vi.fn().mockRejectedValue(
+      new Error(
+        "WTS could not start Jira. Start Podman, then try again.",
+      ),
+    );
+    const externalJiraSnapshot: SetupSnapshot = {
+      ...snapshot,
+      integrations: snapshot.integrations.map((integration) =>
+        integration.id === "jiraMcp"
+          ? {
+              ...integration,
+              installation: "detected",
+              setup: "unverified",
+              blockingFor: [],
+            }
+          : integration,
+      ),
+    };
+
+    render(
+      <SetupSheet
+        loading={false}
+        onOpenChange={vi.fn()}
+        onRefresh={vi.fn()}
+        onVerifyJira={onVerifyJira}
+        open
+        repositories={repositories}
+        snapshot={externalJiraSnapshot}
+      />,
+    );
+
+    const jiraRow = screen.getByText("Jira via MCP").closest("li");
+    expect(jiraRow).not.toBeNull();
+    await user.click(
+      within(jiraRow!).getByRole("button", { name: "Connect Jira" }),
+    );
+
+    expect(await within(jiraRow!).findByRole("alert")).toHaveTextContent(
+      "WTS could not start Jira. Start Podman, then try again.",
+    );
+    expect(
+      within(jiraRow!).getByRole("button", { name: "Try again" }),
+    ).toBeEnabled();
   });
 
   it("verifies env-managed OpenProject without collecting credentials", async () => {

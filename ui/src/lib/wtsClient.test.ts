@@ -1855,7 +1855,7 @@ describe("HTTP workspace client", () => {
     ]);
   });
 
-  it("clones a reviewed Git URL through the explicit HTTP contract", async () => {
+  it("clones one shallow branch through the explicit HTTP contract", async () => {
     const fetchMock = vi
       .fn<typeof fetch>()
       .mockResolvedValueOnce(jsonResponse({ sessionToken: "session-123" }))
@@ -1868,6 +1868,8 @@ describe("HTTP workspace client", () => {
     await expect(
       client.cloneRepository({
         remoteUrl: " git@gitlab.example.com:platform/new-api.git ",
+        branch: " master ",
+        shallow: true,
       }),
     ).resolves.toEqual(clonedRepository);
 
@@ -1881,9 +1883,45 @@ describe("HTTP workspace client", () => {
         }),
         body: JSON.stringify({
           remoteUrl: "git@gitlab.example.com:platform/new-api.git",
+          branch: "master",
+          shallow: true,
         }),
       }),
     ]);
+  });
+
+  it.each(["http", "tauri"] as const)("preserves the selected clone base separately from the default branch through %s", async (runtime) => {
+    const result = { ...clonedRepository, selectedBaseRef: "release/2026.07" };
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(jsonResponse({ sessionToken: "session-123" }))
+      .mockResolvedValueOnce(jsonResponse(result));
+    const invokeMock = vi.fn(async (): Promise<unknown> => result);
+    const client = createWorkspaceClient({
+      runtime,
+      fetch: fetchMock,
+      invoke: invokeMock as NonNullable<WorkspaceClientOptions["invoke"]>,
+    });
+
+    await expect(client.cloneRepository({
+      remoteUrl: "https://gitlab.example.com/platform/new-api.git",
+      branch: "release/2026.07",
+    })).resolves.toEqual(result);
+  });
+
+  it.each(["", 42, null])("rejects an invalid selected clone base %j", async (selectedBaseRef) => {
+    const invokeMock = vi.fn(async (): Promise<unknown> => ({
+      ...clonedRepository,
+      selectedBaseRef,
+    }));
+    const client = createWorkspaceClient({
+      runtime: "tauri",
+      invoke: invokeMock as NonNullable<WorkspaceClientOptions["invoke"]>,
+    });
+
+    await expect(client.cloneRepository({
+      remoteUrl: "https://gitlab.example.com/platform/new-api.git",
+    })).rejects.toMatchObject({ code: "invalid_response" });
   });
 
   it("rejects unsafe repository remotes before transport", async () => {
@@ -1896,6 +1934,25 @@ describe("HTTP workspace client", () => {
     await expect(
       client.cloneRepository({
         remoteUrl: "https://user:secret@gitlab.example.com/team/repo.git",
+      }),
+    ).rejects.toMatchObject({
+      code: "invalid_request",
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects an invalid clone branch before transport", async () => {
+    const fetchMock = vi.fn<typeof fetch>();
+    const client = createWorkspaceClient({
+      runtime: "http",
+      fetch: fetchMock,
+    });
+
+    await expect(
+      client.cloneRepository({
+        remoteUrl: "https://gitlab.example.com/team/repo.git",
+        branch: "--upload-pack=unsafe",
+        shallow: true,
       }),
     ).rejects.toMatchObject({
       code: "invalid_request",
@@ -4090,6 +4147,48 @@ describe("Tauri workspace client", () => {
       ],
       ["cancel_workspace_verification", { workspaceId: "ws-platform-42" }],
     ]);
+  });
+
+  it("runs AI code review through the matching Tauri command", async () => {
+    const invokeMock = vi.fn(async (): Promise<unknown> => ({
+      workspaceId: "ws-platform-42",
+      provider: "copilot",
+      scope: "recentChanges",
+      agent: "security-auditor",
+      status: "completed",
+      findings: [],
+      actionableSteps: [],
+      summary: "No issues found",
+      timestamp: 12345678,
+    }));
+    const client = createWorkspaceClient({
+      runtime: "tauri",
+      invoke:
+        invokeMock as unknown as NonNullable<
+          WorkspaceClientOptions["invoke"]
+        >,
+    });
+
+    const result = await client.runWorkspaceCodeReview?.(
+      "ws-platform-42",
+      "copilot",
+      "recentChanges",
+      "claude-3.7-sonnet",
+    );
+
+    expect(result).toMatchObject({
+      workspaceId: "ws-platform-42",
+      provider: "copilot",
+      scope: "recentChanges",
+      status: "completed",
+    });
+    expect(invokeMock).toHaveBeenCalledWith("run_workspace_code_review", {
+      workspaceId: "ws-platform-42",
+      provider: "copilot",
+      scope: "recentChanges",
+      model: "claude-3.7-sonnet",
+      agent: "claude-3.7-sonnet",
+    });
   });
 
   it("imports a VS Code workspace file through the matching Tauri command", async () => {

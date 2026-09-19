@@ -13,7 +13,7 @@ concurrency:
 
 jobs:
   deterministic-and-critical-browser:
-    name: Deterministic contracts and critical browser flow
+    name: Deterministic contracts and browser flows
     runs-on: ubuntu-24.04
     timeout-minutes: 30
 
@@ -28,10 +28,10 @@ jobs:
           cache: npm
           cache-dependency-path: ui/package-lock.json
 
-      - name: Use Rust 1.85
+      - name: Use Rust 1.95
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: 1.85.0
+          toolchain: 1.95.0
           components: clippy,rustfmt
 
       - name: Cache Rust builds
@@ -72,3 +72,35 @@ jobs:
             ui/test-results
           if-no-files-found: warn
           retention-days: 14
+
+  macos-native:
+    name: macOS native contracts and build
+    runs-on: macos-15
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out WTS
+        uses: actions/checkout@v4
+
+      - name: Use Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.13.1
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+
+      - name: Use Rust 1.95
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.95.0
+
+      - name: Cache Rust builds
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install UI dependencies
+        run: npm ci --prefix ui
+
+      - name: Run the macOS gate
+        env:
+          CI: "true"
+        run: bash scripts/test-macos.sh

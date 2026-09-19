@@ -1,3 +1,5 @@
+mod ui_capture;
+mod work_item_preview;
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeSet, env, path::PathBuf, process::Command};
 use tauri::Manager;
@@ -9,12 +11,12 @@ use uuid::Uuid;
 use wts_app::{
     AgentProvider, AgentRunResult, AgentSession, AgentSessionCategory, AgentSessionDetail,
     AgentSessionFailure, AgentSessionList, CloneRepositoryRequest, CloneRepositoryResult,
-    CodeWorkspaceImportRequest, CodeWorkspaceImportResult, ConfirmWorkspaceJiraLinkRequest,
-    ConfirmWorkspaceWorkItemLinkResult, CreateWorkspaceReviewThreadRequest,
-    GitlabReviewCommentRequest, GitlabReviewPatch, GraphIndexResult, JiraCreateProposal,
-    JiraIssueImport, LocalWtsError, LocalWtsService, MaterializeWorkspaceResult,
-    OpenGithubReviewResult, OpenProjectWorkPackageImport, OpenRepositoryBaseResult,
-    OpenWorkspaceChangeRequestDraft, OpenWorkspaceChangeRequestResult,
+    CodeReviewScope, CodeWorkspaceImportRequest, CodeWorkspaceImportResult,
+    ConfirmWorkspaceJiraLinkRequest, ConfirmWorkspaceWorkItemLinkResult,
+    CreateWorkspaceReviewThreadRequest, GitlabReviewCommentRequest, GitlabReviewPatch,
+    GraphIndexResult, JiraCreateProposal, JiraIssueImport, LocalWtsError, LocalWtsService,
+    MaterializeWorkspaceResult, OpenGithubReviewResult, OpenProjectWorkPackageImport,
+    OpenRepositoryBaseResult, OpenWorkspaceChangeRequestDraft, OpenWorkspaceChangeRequestResult,
     OpenWorkspaceGitlabMergeRequestResult, OpenWorkspaceJiraPreviewRequest, OpenWorkspaceResult,
     OpenWorkspaceWorkItemRequest, OpenWorkspaceWorkItemResult, PrepareWorkspaceChangeRequest,
     PreviewWorkspaceJiraLinkRequest, PublishGitlabReviewCommentResult,
@@ -24,9 +26,9 @@ use wts_app::{
     TerminalProvider, TestRunList, TestRunResult, TestRunSummary, UnlinkWorkspaceWorkItemRequest,
     UpdateWorkspacePlanningDocumentRequest, WorkspaceAgentBriefResult,
     WorkspaceBranchPublicationResult, WorkspaceChangeRequestDraft, WorkspaceCliLaunchResult,
-    WorkspaceEvidence, WorkspaceMaterialization, WorkspacePlanningDocument,
-    WorkspacePlanningDocumentId, WorkspacePlanningDocumentList, WorkspacePreflight,
-    WorkspaceRemovalPreflight, WorkspaceRepositoryAdditionPreflight,
+    WorkspaceCodeReviewResult, WorkspaceEvidence, WorkspaceMaterialization, WorkspaceVerificationSummary,
+    WorkspacePlanningDocument, WorkspacePlanningDocumentId, WorkspacePlanningDocumentList,
+    WorkspacePreflight, WorkspaceRemovalPreflight, WorkspaceRepositoryAdditionPreflight,
     WorkspaceRepositoryAdditionResult, WorkspaceRepositoryAlignmentPreflight,
     WorkspaceRepositoryAlignmentResult, WorkspaceRepositoryDiff, WorkspaceRepositoryFileReview,
     WorkspaceRepositoryRemovalResult, WorkspaceRepositoryReviewGraph,
@@ -59,18 +61,21 @@ const MAX_NOTIFICATION_TITLE_CHARS: usize = 160;
 const MAX_NOTIFICATION_BODY_CHARS: usize = 1_024;
 const MAX_NOTIFICATION_TAG_CHARS: usize = 128;
 
+#[cfg(any(target_os = "macos", test))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum DesktopLifecycleEvent {
     MainWindowCloseRequested,
     ApplicationReopened,
 }
 
+#[cfg(any(target_os = "macos", test))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum DesktopLifecycleAction {
     HideMainWindow,
     RestoreMainWindow,
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn desktop_lifecycle_action(event: DesktopLifecycleEvent) -> DesktopLifecycleAction {
     match event {
         DesktopLifecycleEvent::MainWindowCloseRequested => DesktopLifecycleAction::HideMainWindow,
@@ -600,6 +605,38 @@ async fn publish_gitlab_review_comment(
 }
 
 #[tauri::command]
+async fn get_gitlab_discussions(
+    repository_id: String,
+    iid: u64,
+    workspace_id: Option<Uuid>,
+    state: tauri::State<'_, LocalWtsService>,
+) -> Result<wts_app::GitlabDiscussions, WorkspaceCommandError> {
+    let service = state.inner().clone();
+    run_blocking_command(move || {
+        service
+            .gitlab_discussions(&repository_id, iid, workspace_id)
+            .map_err(local_wts_command_error)
+    })
+    .await
+}
+
+#[tauri::command]
+async fn reply_gitlab_discussion(
+    repository_id: String,
+    iid: u64,
+    request: wts_app::ReplyGitlabDiscussionRequest,
+    state: tauri::State<'_, LocalWtsService>,
+) -> Result<wts_app::ReplyGitlabDiscussionResult, WorkspaceCommandError> {
+    let service = state.inner().clone();
+    run_blocking_command(move || {
+        service
+            .reply_gitlab_discussion(&repository_id, iid, request)
+            .map_err(local_wts_command_error)
+    })
+    .await
+}
+
+#[tauri::command]
 async fn get_gitlab_merge_requests(
     workspace_id: Uuid,
     state: tauri::State<'_, LocalWtsService>,
@@ -763,6 +800,39 @@ async fn preflight_workspace(
     .await
 }
 
+fn recover_workspace_setup_command(
+    service: &LocalWtsService,
+    workspace_id: &str,
+    effect_digest: &str,
+) -> Result<WorkspacePreflight, WorkspaceCommandError> {
+    if !effect_digest.strip_prefix("sha256:").is_some_and(|digest| {
+        digest.len() == 64 && digest.bytes().all(|byte| byte.is_ascii_hexdigit())
+    }) {
+        return Err(WorkspaceCommandError {
+            code: "invalid_request",
+            message: "Use the current setup recovery review, then try again.".to_owned(),
+            retryable: false,
+        });
+    }
+    let workspace_id = parse_workspace_id(workspace_id)?;
+    service
+        .recover_workspace_setup(workspace_id, effect_digest)
+        .map_err(local_wts_command_error)
+}
+
+#[tauri::command]
+async fn recover_workspace_setup(
+    workspace_id: String,
+    effect_digest: String,
+    state: tauri::State<'_, LocalWtsService>,
+) -> Result<WorkspacePreflight, WorkspaceCommandError> {
+    let service = state.inner().clone();
+    run_blocking_command(move || {
+        recover_workspace_setup_command(&service, &workspace_id, &effect_digest)
+    })
+    .await
+}
+
 #[tauri::command]
 async fn get_workspace_materialization(
     workspace_id: String,
@@ -812,6 +882,63 @@ async fn get_workspace_repository_file_review(
                 &file_path,
                 &expected_patch_sha256,
             )
+            .map_err(local_wts_command_error)
+    })
+    .await
+}
+
+#[tauri::command]
+async fn get_workspace_gitlab_comparison(
+    workspace_id: String,
+    repository_id: String,
+    iid: u64,
+    refresh: Option<bool>,
+    state: tauri::State<'_, LocalWtsService>,
+) -> Result<wts_app::WorkspaceGitlabComparison, WorkspaceCommandError> {
+    let workspace_id = parse_workspace_id(&workspace_id)?;
+    let service = state.inner().clone();
+    run_blocking_command(move || {
+        service
+            .workspace_gitlab_comparison(
+                workspace_id,
+                &repository_id,
+                iid,
+                refresh.unwrap_or(false),
+            )
+            .map_err(local_wts_command_error)
+    })
+    .await
+}
+
+#[tauri::command]
+async fn get_workspace_repository_source(
+    workspace_id: String,
+    repository_id: String,
+    file_path: String,
+    state: tauri::State<'_, LocalWtsService>,
+) -> Result<wts_app::WorkspaceRepositorySource, WorkspaceCommandError> {
+    let workspace_id = parse_workspace_id(&workspace_id)?;
+    let service = state.inner().clone();
+    run_blocking_command(move || {
+        service
+            .workspace_repository_source(workspace_id, &repository_id, &file_path)
+            .map_err(local_wts_command_error)
+    })
+    .await
+}
+
+#[tauri::command]
+async fn save_workspace_repository_source(
+    workspace_id: String,
+    repository_id: String,
+    request: wts_app::WorkspaceRepositorySourceSaveRequest,
+    state: tauri::State<'_, LocalWtsService>,
+) -> Result<wts_app::WorkspaceRepositorySource, WorkspaceCommandError> {
+    let workspace_id = parse_workspace_id(&workspace_id)?;
+    let service = state.inner().clone();
+    run_blocking_command(move || {
+        service
+            .save_workspace_repository_source(workspace_id, &repository_id, request)
             .map_err(local_wts_command_error)
     })
     .await
@@ -998,6 +1125,312 @@ async fn write_workspace_agent_brief(
     run_blocking_command(move || {
         service
             .write_workspace_agent_brief(workspace_id, &task_markdown)
+            .map_err(local_wts_command_error)
+    })
+    .await
+}
+
+#[tauri::command]
+async fn open_agent_work_item_preview(
+    work_set_id: Uuid,
+    task_id: Uuid,
+    app: tauri::AppHandle,
+    state: tauri::State<'_, LocalWtsService>,
+) -> Result<wts_app::AgentWorkItemPreview, WorkspaceCommandError> {
+    let service = state.inner().clone();
+    let preview_service = service.clone();
+    let preview = run_blocking_command(move || {
+        preview_service
+            .start_agent_work_item_preview(work_set_id, task_id)
+            .map_err(local_wts_command_error)
+    })
+    .await?;
+    work_item_preview::show_preview(&app, service, preview)
+}
+
+#[tauri::command]
+async fn create_agent_work_set(
+    conversation_id: Uuid,
+    turn_request_id: Uuid,
+    request: wts_app::CreateAgentWorkSetRequest,
+    state: tauri::State<'_, LocalWtsService>,
+) -> Result<wts_app::AgentWorkSet, WorkspaceCommandError> {
+    let service = state.inner().clone();
+    run_blocking_command(move || {
+        service
+            .create_agent_work_set(conversation_id, turn_request_id, request)
+            .map_err(local_wts_command_error)
+    })
+    .await
+}
+
+#[tauri::command]
+async fn list_agent_work_sets(
+    conversation_id: Uuid,
+    request_id: Uuid,
+    state: tauri::State<'_, LocalWtsService>,
+) -> Result<wts_app::AgentWorkSetList, WorkspaceCommandError> {
+    let service = state.inner().clone();
+    run_blocking_command(move || {
+        service
+            .list_agent_work_sets(conversation_id, request_id)
+            .map_err(local_wts_command_error)
+    })
+    .await
+}
+
+#[tauri::command]
+async fn get_agent_work_set(
+    work_set_id: Uuid,
+    state: tauri::State<'_, LocalWtsService>,
+) -> Result<wts_app::AgentWorkSet, WorkspaceCommandError> {
+    let service = state.inner().clone();
+    run_blocking_command(move || {
+        service
+            .get_agent_work_set(work_set_id)
+            .map_err(local_wts_command_error)
+    })
+    .await
+}
+
+#[tauri::command]
+async fn cancel_agent_work_item(
+    work_set_id: Uuid,
+    task_id: Uuid,
+    request: wts_app::AgentWorkItemCancelRequest,
+    state: tauri::State<'_, LocalWtsService>,
+) -> Result<wts_app::AgentWorkSet, WorkspaceCommandError> {
+    let service = state.inner().clone();
+    run_blocking_command(move || {
+        service
+            .cancel_agent_work_item(work_set_id, task_id, request)
+            .map_err(local_wts_command_error)
+    })
+    .await
+}
+
+#[tauri::command]
+async fn preflight_agent_work_item_integration(
+    work_set_id: Uuid,
+    task_id: Uuid,
+    state: tauri::State<'_, LocalWtsService>,
+) -> Result<wts_app::AgentWorkItemIntegrationPreflight, WorkspaceCommandError> {
+    let service = state.inner().clone();
+    run_blocking_command(move || {
+        service
+            .preflight_agent_work_item_integration(work_set_id, task_id)
+            .map_err(local_wts_command_error)
+    })
+    .await
+}
+
+#[tauri::command]
+async fn integrate_agent_work_item(
+    work_set_id: Uuid,
+    task_id: Uuid,
+    request: wts_app::IntegrateAgentWorkItemRequest,
+    state: tauri::State<'_, LocalWtsService>,
+) -> Result<wts_app::AgentWorkItemIntegrationResult, WorkspaceCommandError> {
+    let service = state.inner().clone();
+    run_blocking_command(move || {
+        service
+            .integrate_agent_work_item(work_set_id, task_id, request)
+            .map_err(local_wts_command_error)
+    })
+    .await
+}
+
+#[tauri::command]
+async fn create_agent_conversation(
+    request: wts_app::CreateAgentConversationRequest,
+    state: tauri::State<'_, LocalWtsService>,
+) -> Result<wts_app::AgentConversation, WorkspaceCommandError> {
+    let service = state.inner().clone();
+    run_blocking_command(move || {
+        service
+            .create_agent_conversation(request)
+            .map_err(local_wts_command_error)
+    })
+    .await
+}
+
+#[tauri::command]
+async fn list_agent_conversations(
+    state: tauri::State<'_, LocalWtsService>,
+) -> Result<wts_app::AgentConversationList, WorkspaceCommandError> {
+    let service = state.inner().clone();
+    run_blocking_command(move || {
+        service
+            .list_agent_conversations()
+            .map_err(local_wts_command_error)
+    })
+    .await
+}
+
+#[tauri::command]
+async fn get_agent_conversation(
+    conversation_id: Uuid,
+    state: tauri::State<'_, LocalWtsService>,
+) -> Result<wts_app::AgentConversation, WorkspaceCommandError> {
+    let service = state.inner().clone();
+    run_blocking_command(move || {
+        service
+            .get_agent_conversation(conversation_id)
+            .map_err(local_wts_command_error)
+    })
+    .await
+}
+
+#[tauri::command]
+async fn get_agent_turn_changes(
+    conversation_id: Uuid,
+    request_id: Uuid,
+    state: tauri::State<'_, LocalWtsService>,
+) -> Result<wts_app::AgentTurnChanges, WorkspaceCommandError> {
+    let service = state.inner().clone();
+    run_blocking_command(move || {
+        service
+            .get_agent_turn_changes(conversation_id, request_id)
+            .map_err(local_wts_command_error)
+    })
+    .await
+}
+
+#[tauri::command]
+async fn get_agent_turn_decisions(
+    conversation_id: Uuid,
+    request_id: Uuid,
+    state: tauri::State<'_, LocalWtsService>,
+) -> Result<wts_app::AgentTurnDecisions, WorkspaceCommandError> {
+    let service = state.inner().clone();
+    run_blocking_command(move || {
+        service
+            .get_agent_turn_decisions(conversation_id, request_id)
+            .map_err(local_wts_command_error)
+    })
+    .await
+}
+
+#[tauri::command]
+async fn record_agent_turn_decision(
+    conversation_id: Uuid,
+    turn_request_id: Uuid,
+    request: wts_app::RecordAgentTurnDecisionRequest,
+    state: tauri::State<'_, LocalWtsService>,
+) -> Result<wts_app::AgentTurnDecisions, WorkspaceCommandError> {
+    let service = state.inner().clone();
+    run_blocking_command(move || {
+        service
+            .record_agent_turn_decision(conversation_id, turn_request_id, request)
+            .map_err(local_wts_command_error)
+    })
+    .await
+}
+
+#[tauri::command]
+async fn get_agent_turn_checks(
+    conversation_id: Uuid,
+    request_id: Uuid,
+    state: tauri::State<'_, LocalWtsService>,
+) -> Result<wts_app::AgentTurnChecks, WorkspaceCommandError> {
+    let service = state.inner().clone();
+    run_blocking_command(move || {
+        service
+            .get_agent_turn_checks(conversation_id, request_id)
+            .map_err(local_wts_command_error)
+    })
+    .await
+}
+
+#[tauri::command]
+async fn run_agent_turn_check(
+    conversation_id: Uuid,
+    turn_request_id: Uuid,
+    request: wts_app::RunAgentTurnCheckRequest,
+    state: tauri::State<'_, LocalWtsService>,
+) -> Result<wts_app::AgentTurnChecks, WorkspaceCommandError> {
+    let service = state.inner().clone();
+    run_blocking_command(move || {
+        service
+            .run_agent_turn_check(conversation_id, turn_request_id, request)
+            .map_err(local_wts_command_error)
+    })
+    .await
+}
+
+#[tauri::command]
+async fn preflight_agent_turn_restore(
+    conversation_id: Uuid,
+    request_id: Uuid,
+    state: tauri::State<'_, LocalWtsService>,
+) -> Result<wts_app::AgentTurnRestorePreflight, WorkspaceCommandError> {
+    let service = state.inner().clone();
+    run_blocking_command(move || {
+        service
+            .preflight_agent_turn_restore(conversation_id, request_id)
+            .map_err(local_wts_command_error)
+    })
+    .await
+}
+
+#[tauri::command]
+async fn restore_agent_turn(
+    conversation_id: Uuid,
+    turn_request_id: Uuid,
+    request: wts_app::AgentTurnRestoreRequest,
+    state: tauri::State<'_, LocalWtsService>,
+) -> Result<wts_app::AgentTurnRestoreResult, WorkspaceCommandError> {
+    let service = state.inner().clone();
+    run_blocking_command(move || {
+        service
+            .restore_agent_turn(conversation_id, turn_request_id, request)
+            .map_err(local_wts_command_error)
+    })
+    .await
+}
+
+#[tauri::command]
+async fn send_agent_conversation_message(
+    conversation_id: Uuid,
+    request: wts_app::SendAgentConversationMessageRequest,
+    state: tauri::State<'_, LocalWtsService>,
+) -> Result<wts_app::AgentConversation, WorkspaceCommandError> {
+    let service = state.inner().clone();
+    run_blocking_command(move || {
+        service
+            .send_agent_conversation_message(conversation_id, request)
+            .map_err(local_wts_command_error)
+    })
+    .await
+}
+
+#[tauri::command]
+async fn update_agent_conversation_message(
+    conversation_id: Uuid,
+    message_id: Uuid,
+    request: wts_app::UpdateAgentConversationMessageRequest,
+    state: tauri::State<'_, LocalWtsService>,
+) -> Result<wts_app::AgentConversation, WorkspaceCommandError> {
+    let service = state.inner().clone();
+    run_blocking_command(move || {
+        service
+            .update_agent_conversation_message(conversation_id, message_id, request)
+            .map_err(local_wts_command_error)
+    })
+    .await
+}
+
+#[tauri::command]
+async fn cancel_agent_conversation_message(
+    conversation_id: Uuid,
+    message_id: Uuid,
+    request: wts_app::CancelAgentConversationMessageRequest,
+    state: tauri::State<'_, LocalWtsService>,
+) -> Result<wts_app::AgentConversation, WorkspaceCommandError> {
+    let service = state.inner().clone();
+    run_blocking_command(move || {
+        service
+            .cancel_agent_conversation_message(conversation_id, message_id, request)
             .map_err(local_wts_command_error)
     })
     .await
@@ -1286,6 +1719,43 @@ async fn run_workspace_agent(
             .map_err(local_wts_command_error)
     })
     .await
+}
+
+#[tauri::command]
+async fn run_workspace_code_review(
+    workspace_id: String,
+    provider: AgentProvider,
+    scope: CodeReviewScope,
+    model: Option<String>,
+    agent: Option<String>,
+    state: tauri::State<'_, LocalWtsService>,
+) -> Result<WorkspaceCodeReviewResult, WorkspaceCommandError> {
+    let workspace_id = parse_workspace_id(&workspace_id)?;
+    let service = state.inner().clone();
+    let selected_model = model.or(agent);
+    run_blocking_command(move || {
+        service
+            .run_workspace_code_review(workspace_id, provider, scope, selected_model.as_deref())
+            .map_err(local_wts_command_error)
+    })
+    .await
+}
+
+fn get_workspace_verification_summary_command(
+    service: &LocalWtsService,
+    workspace_id: &str,
+) -> Result<Option<WorkspaceVerificationSummary>, WorkspaceCommandError> {
+    let workspace_id = parse_workspace_id(workspace_id)?;
+    service.get_workspace_verification_summary(workspace_id).map_err(local_wts_command_error)
+}
+
+#[tauri::command]
+async fn get_workspace_verification_summary(
+    workspace_id: String,
+    state: tauri::State<'_, LocalWtsService>,
+) -> Result<Option<WorkspaceVerificationSummary>, WorkspaceCommandError> {
+    let service = state.inner().clone();
+    run_blocking_command(move || get_workspace_verification_summary_command(&service, &workspace_id)).await
 }
 
 #[tauri::command]
@@ -2024,12 +2494,23 @@ fn local_wts_service(app: &tauri::AppHandle) -> Result<LocalWtsService, LocalWts
                     .unwrap_or_else(|| workspace_root.clone()),
             ],
         };
-    LocalWtsService::open_with_repository_roots(
+    let service = LocalWtsService::open_with_repository_roots(
         data_dir,
         WORKSPACE_ROOT_ID,
         workspace_root,
         repository_roots,
-    )
+    )?;
+    if let Some(source) = env::var_os("WTS_UI_REPOSITORY_ROOT").map(PathBuf::from) {
+        let _ = service.configure_ui_development_repository(source, None);
+    } else if cfg!(debug_assertions) {
+        let source = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("desktop source repository")
+            .to_owned();
+        let preview = app.config().build.dev_url.as_ref().map(ToString::to_string);
+        let _ = service.configure_ui_development_repository(source, preview);
+    }
+    Ok(service)
 }
 
 fn parse_workspace_id(value: &str) -> Result<Uuid, WorkspaceCommandError> {
@@ -2050,6 +2531,16 @@ fn parse_test_run_id(value: &str) -> Result<Uuid, WorkspaceCommandError> {
 
 fn local_wts_command_error(error: LocalWtsError) -> WorkspaceCommandError {
     match error {
+        LocalWtsError::InvalidAgentConversation => WorkspaceCommandError { code: "invalid_agent_conversation", message: "The agent conversation request is invalid.".to_owned(), retryable: false },
+        LocalWtsError::AgentConversationNotFound => WorkspaceCommandError { code: "agent_conversation_not_found", message: "The agent conversation was not found.".to_owned(), retryable: false },
+        LocalWtsError::AgentConversationConflict => WorkspaceCommandError { code: "agent_conversation_conflict", message: "The request changed or has started. Reload the conversation before you retry.".to_owned(), retryable: false },
+        LocalWtsError::AgentConversationQueueFull => WorkspaceCommandError { code: "agent_conversation_queue_full", message: "This workspace has 64 queued requests. Wait for a request to finish or cancel a queued request.".to_owned(), retryable: true },
+        LocalWtsError::AgentConversationBusy => WorkspaceCommandError { code: "agent_conversation_busy", message: "Another WTS task is active in this workspace. Wait for it to finish, then retry.".to_owned(), retryable: true },
+        LocalWtsError::AgentConversationPlatformUnavailable => WorkspaceCommandError { code: "agent_conversation_platform_unavailable", message: "Agent chat execution needs macOS or Linux. Saved chats remain available.".to_owned(), retryable: false },
+        LocalWtsError::AgentConversationStorageFull => WorkspaceCommandError { code: "agent_conversation_storage_full", message: "Conversation storage is full. Open an existing conversation to continue.".to_owned(), retryable: false },
+        LocalWtsError::AgentConversationLimit => WorkspaceCommandError { code: "agent_conversation_limit", message: "This conversation reached its limit. Start a new conversation to continue.".to_owned(), retryable: false },
+        LocalWtsError::AgentConversationSourceUnavailable => WorkspaceCommandError { code: "agent_conversation_source_unavailable", message: "WTS needs its source repository. Start WTS with WTS_UI_REPOSITORY_ROOT set to the source checkout.".to_owned(), retryable: true },
+        LocalWtsError::AgentConversationUnavailable => WorkspaceCommandError { code: "agent_conversation_unavailable", message: "The conversation or its workspace is unavailable. Check the workspace and try again.".to_owned(), retryable: true },
         LocalWtsError::InvalidRepositoryRoot => WorkspaceCommandError {
             code: "invalid_local_configuration",
             message: "The configured WTS repository root is invalid.".to_owned(),
@@ -2087,6 +2578,9 @@ fn local_wts_command_error(error: LocalWtsError) -> WorkspaceCommandError {
             message: "The selected repository file exceeds the complete-file limit.".to_owned(),
             retryable: false,
         },
+        LocalWtsError::RepositoryFileConflict => WorkspaceCommandError {code:"repository_file_conflict",message:"The source file changed. Reload the file before you save.".to_owned(),retryable:false},
+        LocalWtsError::InvalidRepositoryFileRevision => WorkspaceCommandError {code:"invalid_repository_file_revision",message:"The source file revision is invalid.".to_owned(),retryable:false},
+        LocalWtsError::GitlabComparisonUnavailable => WorkspaceCommandError {code:"gitlab_comparison_unavailable",message:"WTS could not load the merge request comparison. Refresh the merge request and check the local branch.".to_owned(),retryable:true},
         LocalWtsError::InvalidRepositoryRemote => WorkspaceCommandError {
             code: "invalid_repository_remote",
             message: "Enter a supported HTTPS or SSH Git repository URL without embedded credentials."
@@ -2098,6 +2592,11 @@ fn local_wts_command_error(error: LocalWtsError) -> WorkspaceCommandError {
             message:
                 "A different local folder already uses the repository name derived from this URL."
                     .to_owned(),
+            retryable: false,
+        },
+        LocalWtsError::RepositoryCloneBranchUnavailable => WorkspaceCommandError {
+            code: "repository_clone_branch_unavailable",
+            message: "The requested branch is not available locally. Refresh the repository branches, or select an available branch.".to_owned(),
             retryable: false,
         },
         LocalWtsError::RepositoryCloneFailed => WorkspaceCommandError {
@@ -2139,6 +2638,16 @@ fn local_wts_command_error(error: LocalWtsError) -> WorkspaceCommandError {
             code: "gitlab_review_comment_failed",
             message: "GitLab did not accept this comment. Refresh the merge request changes, then retry on a current changed line.".to_owned(),
             retryable: true,
+        },
+        LocalWtsError::GitlabDiscussionsUnavailable => WorkspaceCommandError {
+            code: "gitlab_discussions_unavailable",
+            message: "WTS could not load the GitLab discussions. Check the connection and GitLab account.".to_owned(),
+            retryable: true,
+        },
+        LocalWtsError::GitlabDiscussionReplyFailed => WorkspaceCommandError {
+            code: "gitlab_discussion_reply_failed",
+            message: "WTS could not confirm the reply. Refresh the discussion before you try again.".to_owned(),
+            retryable: false,
         },
         LocalWtsError::BrowserUnavailable => WorkspaceCommandError {
             code: "browser_unavailable",
@@ -2830,16 +3339,16 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| {
+            #[cfg(not(target_os = "macos"))]
+            let _ = (window, event);
             #[cfg(target_os = "macos")]
             if window.label() == "main"
                 && let tauri::WindowEvent::CloseRequested { api, .. } = event
-            {
-                if desktop_lifecycle_action(DesktopLifecycleEvent::MainWindowCloseRequested)
+                && desktop_lifecycle_action(DesktopLifecycleEvent::MainWindowCloseRequested)
                     == DesktopLifecycleAction::HideMainWindow
-                {
-                    api.prevent_close();
-                    let _ = window.hide();
-                }
+            {
+                api.prevent_close();
+                let _ = window.hide();
             }
         })
         .invoke_handler(tauri::generate_handler![
@@ -2868,6 +3377,8 @@ pub fn run() {
             get_gitlab_review_inbox,
             get_gitlab_review_patch,
             publish_gitlab_review_comment,
+            get_gitlab_discussions,
+            reply_gitlab_discussion,
             get_gitlab_merge_requests,
             get_gitlab_integration_status,
             open_gitlab_merge_request,
@@ -2880,9 +3391,13 @@ pub fn run() {
             refresh_repository_branches,
             analyze_workspace_runtime,
             preflight_workspace,
+            recover_workspace_setup,
             get_workspace_materialization,
             get_workspace_repository_diff,
             get_workspace_repository_file_review,
+            get_workspace_gitlab_comparison,
+            get_workspace_repository_source,
+            save_workspace_repository_source,
             get_workspace_repository_review_graph,
             sync_workspace_repository,
             preflight_workspace_repository_addition,
@@ -2894,6 +3409,27 @@ pub fn run() {
             open_workspace_in_vscode,
             open_workspace_cli,
             write_workspace_agent_brief,
+            ui_capture::capture_ui_region,
+            open_agent_work_item_preview,
+            create_agent_work_set,
+            list_agent_work_sets,
+            get_agent_work_set,
+            cancel_agent_work_item,
+            preflight_agent_work_item_integration,
+            integrate_agent_work_item,
+            create_agent_conversation,
+            list_agent_conversations,
+            get_agent_conversation,
+            get_agent_turn_changes,
+            get_agent_turn_decisions,
+            record_agent_turn_decision,
+            get_agent_turn_checks,
+            run_agent_turn_check,
+            preflight_agent_turn_restore,
+            restore_agent_turn,
+            send_agent_conversation_message,
+            update_agent_conversation_message,
+            cancel_agent_conversation_message,
             list_agent_sessions,
             get_agent_session_detail,
             start_agent_session,
@@ -2911,7 +3447,9 @@ pub fn run() {
             preflight_workspace_removal,
             remove_workspace,
             run_workspace_agent,
+            run_workspace_code_review,
             get_workspace_evidence,
+            get_workspace_verification_summary,
             promote_agent_verification_check,
             run_workspace_verification,
             run_workspace_verification_check,
@@ -2940,13 +3478,14 @@ pub fn run() {
         .expect("failed to build the WTS desktop application");
 
     app.run(|app_handle, event| {
+        #[cfg(not(target_os = "macos"))]
+        let _ = (app_handle, event);
         #[cfg(target_os = "macos")]
-        if let tauri::RunEvent::Reopen { .. } = event {
-            if desktop_lifecycle_action(DesktopLifecycleEvent::ApplicationReopened)
+        if let tauri::RunEvent::Reopen { .. } = event
+            && desktop_lifecycle_action(DesktopLifecycleEvent::ApplicationReopened)
                 == DesktopLifecycleAction::RestoreMainWindow
-            {
-                restore_main_window(app_handle);
-            }
+        {
+            restore_main_window(app_handle);
         }
     });
 }
@@ -2964,6 +3503,344 @@ fn restore_main_window(app: &tauri::AppHandle) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unimplemented_agent_publication_has_no_desktop_permission() {
+        let configured: serde_json::Value =
+            serde_json::from_str(include_str!("../capabilities/default.json")).unwrap();
+        let generated: serde_json::Value =
+            serde_json::from_str(include_str!("../gen/schemas/capabilities.json")).unwrap();
+        for permissions in [
+            configured["permissions"].as_array().unwrap(),
+            generated["default"]["permissions"].as_array().unwrap(),
+        ] {
+            for forbidden in [
+                "allow-preflight-agent-conversation-publication",
+                "allow-publish-agent-conversation-branch",
+            ] {
+                assert!(
+                    !permissions.iter().any(|value| value == forbidden),
+                    "The desktop must not grant the unfinished command: {forbidden}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn desktop_source_editor_preserves_revision_and_reports_conflicts() {
+        let wire = serde_json::json!({"filePath":"src/source.rs","content":"line one\nline two","expectedRevision":format!("sha256:{}","a".repeat(64))});
+        let request: wts_app::WorkspaceRepositorySourceSaveRequest =
+            serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(request.content, "line one\nline two");
+        assert_eq!(serde_json::to_value(request).unwrap(), wire);
+        let mut untrusted = wire;
+        untrusted["root"] = serde_json::json!("/outside");
+        assert!(
+            serde_json::from_value::<wts_app::WorkspaceRepositorySourceSaveRequest>(untrusted)
+                .is_err()
+        );
+        let error = serde_json::to_value(local_wts_command_error(
+            LocalWtsError::RepositoryFileConflict,
+        ))
+        .unwrap();
+        assert_eq!(error["code"], "repository_file_conflict");
+        assert_eq!(error["retryable"], false);
+        assert_eq!(
+            local_wts_command_error(LocalWtsError::GitlabComparisonUnavailable).code,
+            "gitlab_comparison_unavailable"
+        );
+        let capability: serde_json::Value =
+            serde_json::from_str(include_str!("../capabilities/default.json")).unwrap();
+        for (command, permission) in [
+            (
+                "get_workspace_gitlab_comparison",
+                "allow-get-workspace-gitlab-comparison",
+            ),
+            (
+                "get_workspace_repository_source",
+                "allow-get-workspace-repository-source",
+            ),
+            (
+                "save_workspace_repository_source",
+                "allow-save-workspace-repository-source",
+            ),
+        ] {
+            assert!(
+                capability["permissions"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|value| value == permission)
+            );
+            let generated = std::fs::read_to_string(format!(
+                "{}/permissions/autogenerated/{command}.toml",
+                env!("CARGO_MANIFEST_DIR")
+            ))
+            .unwrap();
+            assert!(generated.contains(&format!("commands.allow = [\"{command}\"]")));
+        }
+    }
+
+    #[test]
+    fn desktop_inline_comment_preserves_workspace_and_published_position() {
+        let wire = serde_json::json!({"body":"Explain this line.","filePath":"source.rs","side":"additions","line":1,"workspaceId":Uuid::nil(),"expectedPosition":{"baseCommitOid":"a".repeat(40),"startCommitOid":"a".repeat(40),"headCommitOid":"b".repeat(40)}});
+        let request: wts_app::GitlabReviewCommentRequest =
+            serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            request.workspace_id.as_deref(),
+            Some(Uuid::nil().to_string().as_str())
+        );
+        assert_eq!(
+            request.expected_position.as_ref().unwrap().head_commit_oid,
+            "b".repeat(40)
+        );
+        assert_eq!(serde_json::to_value(request).unwrap(), wire);
+    }
+
+    #[test]
+    fn desktop_agent_conversation_contract_rejects_renderer_paths_and_keeps_recovery_codes() {
+        let wire = serde_json::json!({"requestId":Uuid::new_v4(),"provider":"codex","source":{"kind":"ui","route":"/spaces","calloutId":"spaces.toolbar","label":"Spaces toolbar","context":"{\"width\":600}"}});
+        let request: wts_app::CreateAgentConversationRequest =
+            serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(serde_json::to_value(request).unwrap(), wire);
+        let mut untrusted = wire;
+        untrusted["workspacePath"] = serde_json::json!("/tmp/other-workspace");
+        assert!(
+            serde_json::from_value::<wts_app::CreateAgentConversationRequest>(untrusted).is_err()
+        );
+        let message = serde_json::json!({"requestId":Uuid::new_v4(),"body":"Change the spacing. $literal\nSecond line"});
+        let parsed: wts_app::SendAgentConversationMessageRequest =
+            serde_json::from_value(message.clone()).unwrap();
+        assert_eq!(serde_json::to_value(parsed).unwrap(), message);
+        let update = serde_json::json!({"requestId":Uuid::new_v4(),"expectedBody":"Old request", "body":"Updated request"});
+        let parsed: wts_app::UpdateAgentConversationMessageRequest =
+            serde_json::from_value(update.clone()).unwrap();
+        assert_eq!(serde_json::to_value(parsed).unwrap(), update);
+        let cancel = serde_json::json!({"requestId":Uuid::new_v4(),"expectedBody":"Old request"});
+        let parsed: wts_app::CancelAgentConversationMessageRequest =
+            serde_json::from_value(cancel.clone()).unwrap();
+        assert_eq!(serde_json::to_value(parsed).unwrap(), cancel);
+        let mut untrusted = update;
+        untrusted["workspaceId"] = serde_json::json!(Uuid::new_v4());
+        assert!(
+            serde_json::from_value::<wts_app::UpdateAgentConversationMessageRequest>(untrusted)
+                .is_err()
+        );
+        for (failure, code, retryable) in [
+            (
+                LocalWtsError::InvalidAgentConversation,
+                "invalid_agent_conversation",
+                false,
+            ),
+            (
+                LocalWtsError::AgentConversationConflict,
+                "agent_conversation_conflict",
+                false,
+            ),
+            (
+                LocalWtsError::AgentConversationQueueFull,
+                "agent_conversation_queue_full",
+                true,
+            ),
+            (
+                LocalWtsError::AgentConversationPlatformUnavailable,
+                "agent_conversation_platform_unavailable",
+                false,
+            ),
+            (
+                LocalWtsError::AgentConversationLimit,
+                "agent_conversation_limit",
+                false,
+            ),
+            (
+                LocalWtsError::AgentConversationStorageFull,
+                "agent_conversation_storage_full",
+                false,
+            ),
+            (
+                LocalWtsError::AgentConversationSourceUnavailable,
+                "agent_conversation_source_unavailable",
+                true,
+            ),
+        ] {
+            let error = serde_json::to_value(local_wts_command_error(failure)).unwrap();
+            assert_eq!(error["code"], code);
+            assert_eq!(error["retryable"], retryable);
+        }
+        let capability: serde_json::Value =
+            serde_json::from_str(include_str!("../capabilities/default.json")).unwrap();
+        for command in [
+            "open_agent_work_item_preview",
+            "create_agent_work_set",
+            "list_agent_work_sets",
+            "get_agent_work_set",
+            "cancel_agent_work_item",
+            "preflight_agent_work_item_integration",
+            "integrate_agent_work_item",
+            "create_agent_conversation",
+            "list_agent_conversations",
+            "get_agent_conversation",
+            "get_agent_turn_changes",
+            "get_agent_turn_decisions",
+            "record_agent_turn_decision",
+            "get_agent_turn_checks",
+            "run_agent_turn_check",
+            "preflight_agent_turn_restore",
+            "restore_agent_turn",
+            "send_agent_conversation_message",
+            "update_agent_conversation_message",
+            "cancel_agent_conversation_message",
+            "capture_ui_region",
+        ] {
+            let permission = format!("allow-{}", command.replace('_', "-"));
+            assert!(
+                capability["permissions"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|value| value == &permission)
+            );
+            let generated = std::fs::read_to_string(format!(
+                "{}/permissions/autogenerated/{command}.toml",
+                env!("CARGO_MANIFEST_DIR")
+            ))
+            .unwrap();
+            assert!(generated.contains(&format!("commands.allow = [\"{command}\"]")));
+        }
+    }
+
+    #[test]
+    fn desktop_gitlab_discussion_reply_preserves_scope_and_literal_body() {
+        let wire = serde_json::json!({"discussionId":"thread-1","body":"Reply with $literal\ntext","workspaceId":Uuid::nil()});
+        let request: wts_app::ReplyGitlabDiscussionRequest =
+            serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(request.workspace_id, Some(Uuid::nil()));
+        assert_eq!(request.discussion_id, "thread-1");
+        assert_eq!(request.body, "Reply with $literal\ntext");
+        assert_eq!(serde_json::to_value(request).unwrap(), wire);
+        let mut untrusted = wire;
+        untrusted["origin"] = serde_json::json!("https://other.example/project.git");
+        assert!(
+            serde_json::from_value::<wts_app::ReplyGitlabDiscussionRequest>(untrusted).is_err()
+        );
+        let failure = local_wts_command_error(LocalWtsError::GitlabDiscussionReplyFailed);
+        let error = serde_json::to_value(failure).unwrap();
+        assert_eq!(error["code"], "gitlab_discussion_reply_failed");
+        assert_eq!(error["retryable"], false);
+        assert_eq!(
+            error["message"],
+            "WTS could not confirm the reply. Refresh the discussion before you try again."
+        );
+        assert_eq!(
+            local_wts_command_error(LocalWtsError::GitlabDiscussionsUnavailable).code,
+            "gitlab_discussions_unavailable"
+        );
+    }
+
+    #[test]
+    fn desktop_work_set_requests_preserve_dependencies_and_apply_identity() {
+        let first = Uuid::new_v4();
+        let second = Uuid::new_v4();
+        let wire = serde_json::json!({"requestId":Uuid::new_v4(),"expectedAfterCheckpointId":Uuid::new_v4(),"kind":"tasks","tasks":[
+            {"taskId":first,"title":"Fix parsing","prompt":"Keep $literal and `code`.\nParse the description.","dependsOn":[]},
+            {"taskId":second,"title":"Show the result","prompt":"Use the parsed description.","dependsOn":[first]}
+        ]});
+        let parsed: wts_app::CreateAgentWorkSetRequest =
+            serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(serde_json::to_value(parsed).unwrap(), wire);
+        let mut forged = wire.clone();
+        forged["workspacePath"] = serde_json::json!("/tmp/injected");
+        assert!(serde_json::from_value::<wts_app::CreateAgentWorkSetRequest>(forged).is_err());
+        let mut forged = wire;
+        forged["tasks"][0]["command"] = serde_json::json!("injected");
+        assert!(serde_json::from_value::<wts_app::CreateAgentWorkSetRequest>(forged).is_err());
+        let wire = serde_json::json!({"requestId":Uuid::new_v4(),"effectDigest":format!("sha256:{}", "a".repeat(64))});
+        let parsed: wts_app::IntegrateAgentWorkItemRequest =
+            serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(serde_json::to_value(parsed).unwrap(), wire);
+        let mut forged = wire;
+        forged["files"] = serde_json::json!([{"filePath":"/tmp/other"}]);
+        assert!(serde_json::from_value::<wts_app::IntegrateAgentWorkItemRequest>(forged).is_err());
+        let wire = serde_json::json!({"requestId":Uuid::new_v4(),"expectedRevision":7});
+        let parsed: wts_app::AgentWorkItemCancelRequest =
+            serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(serde_json::to_value(parsed).unwrap(), wire);
+        let mut forged = wire;
+        forged["processId"] = serde_json::json!(123);
+        assert!(serde_json::from_value::<wts_app::AgentWorkItemCancelRequest>(forged).is_err());
+    }
+
+    #[test]
+    fn desktop_turn_decision_request_keeps_the_user_choice_and_rejects_source_paths() {
+        let wire = serde_json::json!({"requestId":Uuid::new_v4(),"expectedRevision":3,
+            "expectedReceiptDigest":format!("sha256:{}","a".repeat(64)),"kind":"rejected",
+            "reason":"Keep the literal $value.\nThis result needs another change."});
+        let request: wts_app::RecordAgentTurnDecisionRequest =
+            serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(serde_json::to_value(request).unwrap(), wire);
+        for field in ["workingDirectory", "sourcePath", "command"] {
+            let mut injected = wire.clone();
+            injected[field] = serde_json::json!("/another-workspace");
+            assert!(
+                serde_json::from_value::<wts_app::RecordAgentTurnDecisionRequest>(injected)
+                    .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn desktop_turn_recovery_requests_keep_mutation_identity_and_reject_paths() {
+        let busy = local_wts_command_error(LocalWtsError::AgentConversationBusy);
+        assert_eq!(busy.code, "agent_conversation_busy");
+        assert!(busy.retryable);
+        assert_eq!(
+            busy.message,
+            "Another WTS task is active in this workspace. Wait for it to finish, then retry."
+        );
+        let check = serde_json::json!({"requestId":Uuid::new_v4(),"checkId":"unit.tests",
+            "expectedAfterCheckpointId":Uuid::new_v4(),"expectedPlanRevision":2});
+        let request: wts_app::RunAgentTurnCheckRequest =
+            serde_json::from_value(check.clone()).unwrap();
+        assert_eq!(serde_json::to_value(request).unwrap(), check);
+        let restore = serde_json::json!({"requestId":Uuid::new_v4(),"effectDigest":format!("sha256:{}","a".repeat(64))});
+        let request: wts_app::AgentTurnRestoreRequest =
+            serde_json::from_value(restore.clone()).unwrap();
+        assert_eq!(serde_json::to_value(request).unwrap(), restore);
+        for field in ["executable", "targetPath", "workingDirectory"] {
+            let mut untrusted = check.clone();
+            untrusted[field] = serde_json::json!("/outside");
+            assert!(
+                serde_json::from_value::<wts_app::RunAgentTurnCheckRequest>(untrusted).is_err()
+            );
+            let mut untrusted = restore.clone();
+            untrusted[field] = serde_json::json!("/outside");
+            assert!(serde_json::from_value::<wts_app::AgentTurnRestoreRequest>(untrusted).is_err());
+        }
+    }
+
+    #[test]
+    fn desktop_capability_exposes_gitlab_discussion_commands() {
+        let capability: serde_json::Value =
+            serde_json::from_str(include_str!("../capabilities/default.json")).unwrap();
+        for (command, permission) in [
+            ("get_gitlab_discussions", "allow-get-gitlab-discussions"),
+            ("reply_gitlab_discussion", "allow-reply-gitlab-discussion"),
+        ] {
+            assert!(
+                capability["permissions"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|value| value == permission)
+            );
+            let generated = std::fs::read_to_string(format!(
+                "{}/permissions/autogenerated/{command}.toml",
+                env!("CARGO_MANIFEST_DIR")
+            ))
+            .unwrap();
+            assert!(generated.contains(&format!("commands.allow = [\"{command}\"]")));
+        }
+    }
 
     #[test]
     fn desktop_lifecycle_hides_close_requests_and_restores_reopen_requests() {
@@ -3029,7 +3906,27 @@ mod tests {
 
     #[test]
     fn removal_failures_have_stable_command_error_codes() {
-        let blocked = local_wts_command_error(LocalWtsError::RemovalBlocked { blockers: vec![] });
+        let blocker = wts_app::RemovalBlocker {
+            code: wts_app::RemovalBlockerCode::ActiveOperation,
+            message: "A workspace operation has not finished.".to_owned(),
+            repository_label: None,
+            display_path: Some("/fixture/workspace".to_owned()),
+            expected: Some("No active or queued workspace operations.".to_owned()),
+            observed: Some("An agent task is active.".to_owned()),
+            recovery_steps: vec![
+                "Wait for the task to finish, then select Check again.".to_owned(),
+            ],
+        };
+        let wire = serde_json::to_value(&blocker).unwrap();
+        assert_eq!(wire["code"], "activeOperation");
+        assert_eq!(wire["displayPath"], "/fixture/workspace");
+        assert_eq!(
+            wire["recoverySteps"][0],
+            "Wait for the task to finish, then select Check again."
+        );
+        let blocked = local_wts_command_error(LocalWtsError::RemovalBlocked {
+            blockers: vec![blocker],
+        });
         assert_eq!(blocked.code, "workspace_removal_blocked");
         assert!(!blocked.retryable);
 
@@ -3083,6 +3980,11 @@ mod tests {
         let conflict = local_wts_command_error(LocalWtsError::RepositoryCloneConflict);
         assert_eq!(conflict.code, "repository_clone_conflict");
         assert!(!conflict.retryable);
+
+        let branch = local_wts_command_error(LocalWtsError::RepositoryCloneBranchUnavailable);
+        assert_eq!(branch.code, "repository_clone_branch_unavailable");
+        assert!(!branch.retryable);
+        assert!(branch.message.contains("select an available branch"));
 
         let failed = local_wts_command_error(LocalWtsError::RepositoryCloneFailed);
         assert_eq!(failed.code, "repository_clone_failed");
@@ -3277,6 +4179,91 @@ mod tests {
             bounded_development_log_text(r"C:\repos\checkout-api", 4096),
             r"C:\repos\checkout-api"
         );
+    }
+
+    #[test]
+    fn saved_verification_summary_native_adapter_preserves_scope_and_permission() {
+        let directory = tempfile::tempdir().unwrap();
+        let repositories = directory.path().join("repositories");
+        std::fs::create_dir(&repositories).unwrap();
+        let service = LocalWtsService::open(directory.path().join("data"), "summary-test", directory.path().join("workspaces"), repositories).unwrap();
+        assert_eq!(get_workspace_verification_summary_command(&service, "invalid").unwrap_err().code, "invalid_request");
+        assert_eq!(get_workspace_verification_summary_command(&service, &Uuid::new_v4().to_string()).unwrap_err().code, "workspace_not_found");
+        let capability: serde_json::Value = serde_json::from_str(include_str!("../capabilities/default.json")).unwrap();
+        assert!(capability["permissions"].as_array().unwrap().iter().any(|permission| permission == "allow-get-workspace-verification-summary"));
+        let permission = std::fs::read_to_string(format!("{}/permissions/autogenerated/get_workspace_verification_summary.toml", env!("CARGO_MANIFEST_DIR"))).unwrap();
+        assert!(permission.contains("commands.allow = [\"get_workspace_verification_summary\"]"));
+    }
+
+    #[test]
+    fn setup_recovery_native_adapter_rejects_invalid_scope_before_service_dispatch() {
+        let directory = tempfile::tempdir().unwrap();
+        let repositories = directory.path().join("repositories");
+        std::fs::create_dir(&repositories).unwrap();
+        let service = LocalWtsService::open(
+            directory.path().join("data"),
+            "native-recovery-test",
+            directory.path().join("workspaces"),
+            &repositories,
+        )
+        .unwrap();
+        let workspace_id = Uuid::new_v4().to_string();
+        for digest in ["", " ", "sha256:short", "sha256:../../outside"] {
+            let rejected =
+                recover_workspace_setup_command(&service, &workspace_id, digest).unwrap_err();
+            assert_eq!(rejected.code, "invalid_request", "{digest}");
+        }
+        let digest = format!("sha256:{}", "a".repeat(64));
+        assert_eq!(
+            recover_workspace_setup_command(&service, "not-a-uuid", &digest)
+                .unwrap_err()
+                .code,
+            "invalid_request"
+        );
+        assert_eq!(
+            recover_workspace_setup_command(&service, &workspace_id, &digest)
+                .unwrap_err()
+                .code,
+            "workspace_not_found"
+        );
+        assert_eq!(
+            local_wts_command_error(LocalWtsError::StalePreflight).code,
+            "stale_preflight"
+        );
+    }
+
+    #[test]
+    fn setup_recovery_native_capability_and_preflight_preserve_the_exact_review() {
+        let capability: serde_json::Value =
+            serde_json::from_str(include_str!("../capabilities/default.json")).unwrap();
+        assert!(
+            capability["permissions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|permission| permission == "allow-recover-workspace-setup")
+        );
+        assert!(include_str!("../build.rs").contains("\"recover_workspace_setup\""));
+        let wire = serde_json::json!({
+            "workspaceId": Uuid::new_v4(), "workspaceDisplayPath":"/tmp/wts/workspace",
+            "codeWorkspaceDisplayPath":"/tmp/wts/workspace/workspace.code-workspace",
+            "branchName":"wts/recovery", "ready":false, "effectDigest":format!("sha256:{}", "b".repeat(64)),
+            "repositories":[], "blockers":[], "warnings":[],
+            "graph":{"status":"notStarted","detail":"Setup has not finished."},
+            "setupRecovery":{"effectDigest":format!("sha256:{}", "a".repeat(64)), "ready":false,
+                "paths":["/tmp/wts/workspace/api"], "blockers":["Keep the changed files before recovery."]}
+        });
+        let preflight: WorkspacePreflight = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(serde_json::to_value(preflight).unwrap(), wire);
+        let mut unknown = wire;
+        unknown["setupRecovery"]["deleteUnrelatedPaths"] = serde_json::json!(true);
+        assert!(serde_json::from_value::<WorkspacePreflight>(unknown).is_err());
+        let permission = std::fs::read_to_string(format!(
+            "{}/permissions/autogenerated/recover_workspace_setup.toml",
+            env!("CARGO_MANIFEST_DIR")
+        ))
+        .unwrap();
+        assert!(permission.contains("commands.allow = [\"recover_workspace_setup\"]"));
     }
 
     #[test]

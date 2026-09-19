@@ -1,4 +1,5 @@
 import { act, render, screen } from "@testing-library/react";
+import { StrictMode } from "react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import type { AgentSession } from "../../lib/wtsClient";
@@ -20,6 +21,17 @@ const launchingSession: AgentSession = {
 };
 
 describe("managed agent connection", () => {
+  it("shares a scoped session read across StrictMode and ten immediate workspace returns", async () => {
+    const fake = fakeWorkspaceClient();
+    for (let cycle = 0; cycle < 10; cycle++) {
+      const panel = render(<StrictMode><AgentStatePrototype client={fake.client} workspaceId={launchingSession.workspaceId} materialized /></StrictMode>);
+      await act(async () => {});
+      panel.unmount();
+    }
+    expect(fake.listAgentSessions).toHaveBeenCalledTimes(1);
+    expect(fake.listAgentSessions).toHaveBeenCalledWith(launchingSession.workspaceId);
+  });
+
   it("shows local editor activity as a separate inspectable session", async () => {
     const fake = fakeWorkspaceClient();
     fake.listAgentSessions.mockResolvedValue({

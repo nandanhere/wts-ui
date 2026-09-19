@@ -270,6 +270,19 @@ pub struct RepositoryCatalog {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CloneRepositoryRequest {
     pub remote_url: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+    #[serde(default)]
+    pub shallow: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReplyGitlabDiscussionRequest {
+    pub discussion_id: String,
+    pub body: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_id: Option<Uuid>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -278,6 +291,8 @@ pub struct CloneRepositoryResult {
     pub repository: RepositorySummary,
     pub repository_root_display_path: String,
     pub reused_existing: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selected_base_ref: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -646,6 +661,17 @@ pub struct WorkspacePreflight {
     pub blockers: Vec<PreflightBlocker>,
     pub warnings: Vec<String>,
     pub graph: GraphWorkspaceSummary,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub setup_recovery: Option<WorkspaceSetupRecovery>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkspaceSetupRecovery {
+    pub effect_digest: String,
+    pub ready: bool,
+    pub paths: Vec<String>,
+    pub blockers: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -711,6 +737,50 @@ pub struct WorkspaceRepositoryFileReview {
     pub content_sha256: String,
     pub content: String,
     pub full_patch: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum WorkspaceGitlabComparisonStatus {
+    Ready,
+    MissingCommits,
+    Diverged,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkspaceGitlabComparison {
+    pub schema_version: u32,
+    pub workspace_id: Uuid,
+    pub repository_id: String,
+    pub repository_label: String,
+    pub iid: u64,
+    pub local_head_commit_oid: String,
+    pub status: WorkspaceGitlabComparisonStatus,
+    pub published: wts_integrations::GitlabReviewPatch,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub latest_work: Option<WorkspaceRepositoryDiff>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub since_mr: Option<WorkspaceRepositoryDiff>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkspaceRepositorySource {
+    pub schema_version: u32,
+    pub workspace_id: Uuid,
+    pub repository_id: String,
+    pub file_path: String,
+    pub content: String,
+    pub revision: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkspaceRepositorySourceSaveRequest {
+    pub file_path: String,
+    pub content: String,
+    pub expected_revision: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -806,6 +876,7 @@ pub enum AgentProvider {
     Codex,
     OpenCode,
     Hermes,
+    Copilot,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -917,6 +988,7 @@ pub enum WorkspaceRemovalKind {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum RemovalBlockerCode {
+    ActiveOperation,
     WorkspaceDrift,
     WorktreeChanges,
     IgnoredFiles,
@@ -932,6 +1004,14 @@ pub struct RemovalBlocker {
     pub message: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub repository_label: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observed: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub recovery_steps: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

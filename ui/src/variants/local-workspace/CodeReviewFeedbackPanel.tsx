@@ -1,6 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type {
   CodeChangeReviewTarget,
   GitlabReviewDiscussion,
@@ -8,16 +6,22 @@ import type {
   WorkspaceReviewThread,
 } from "../../lib/wtsClient";
 import styles from "./CodeReviewFeedbackPanel.module.css";
+import { GitlabDiscussionBody } from "./GitlabDiscussionBody";
+import { gitlabDiscussionDrafts } from "./gitlabDiscussionDrafts";
+import { buildGitlabDiscussionFixContext, type GitlabDiscussionFixContext } from "./gitlabDiscussionFixContext";
 
 interface CodeReviewFeedbackPanelProps {
   client: WorkspaceClient;
   repositoryId: string;
   selectedTarget?: CodeChangeReviewTarget;
   workspaceId: string;
+  onAskAgentToFix?: (context: GitlabDiscussionFixContext) => void;
   gitlabReview?: {
     repositoryId: string;
     iid: number;
     discussions: GitlabReviewDiscussion[];
+    expectedPosition?: NonNullable<GitlabReviewDiscussion["position"]>;
+    scopeId?: string;
   };
 }
 
@@ -34,23 +38,6 @@ function threadLabel(thread: WorkspaceReviewThread) {
     : "Changed code";
 }
 
-function safeDiscussionUrl(url: string) {
-  try {
-    const parsed = new URL(url);
-    return parsed.protocol === "https:" || parsed.protocol === "http:" ? url : "";
-  } catch {
-    return "";
-  }
-}
-
-function readableDiscussionBody(body: string) {
-  return body
-    .replace(/<\/?(?:details|summary)(?:\s[^>]*)?>/gi, "\n")
-    .replace(/<[^>]*>/g, "")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
-}
-
 function DiscussionComment({
   comment,
 }: {
@@ -59,27 +46,7 @@ function DiscussionComment({
   return (
     <article>
       <small>@{comment.authorLogin}</small>
-      <div className={styles.discussionBody}>
-        <ReactMarkdown
-          components={{
-            a: ({ children, href }) => {
-              const safeHref = href ? safeDiscussionUrl(href) : "";
-              return safeHref ? (
-                <a href={safeHref} rel="noreferrer" target="_blank">
-                  {children}
-                </a>
-              ) : (
-                <span>{children}</span>
-              );
-            },
-          }}
-          remarkPlugins={[remarkGfm]}
-          skipHtml
-          urlTransform={safeDiscussionUrl}
-        >
-          {readableDiscussionBody(comment.body)}
-        </ReactMarkdown>
-      </div>
+      <GitlabDiscussionBody body={comment.body} />
     </article>
   );
 }
@@ -90,14 +57,38 @@ export function CodeReviewFeedbackPanel({
   selectedTarget,
   workspaceId,
   gitlabReview,
+  onAskAgentToFix,
 }: CodeReviewFeedbackPanelProps) {
   const [threads, setThreads] = useState<WorkspaceReviewThread[]>([]);
-  const [body, setBody] = useState("");
+  const [localBody, setLocalBody] = useState("");
   const [state, setState] = useState<"loading" | "ready" | "error">("loading");
   const [pending, setPending] = useState(false);
   const [error, setError] = useState("");
   const [revision, setRevision] = useState(0);
   const [published, setPublished] = useState(false);
+  const [openError, setOpenError] = useState("");
+  const [opening, setOpening] = useState(false);
+  const openerContext = JSON.stringify([workspaceId, repositoryId, gitlabReview?.repositoryId, gitlabReview?.iid, gitlabReview?.scopeId]);
+  const openerRef = useRef({ client, context: openerContext });
+  if (openerRef.current.client !== client || openerRef.current.context !== openerContext) openerRef.current = { client, context: openerContext };
+  const operationContext = openerRef.current;
+  useEffect(() => {
+    openerRef.current = operationContext;
+    setOpenError("");
+    setOpening(false);
+    setError("");
+    setPending(false);
+    setPublished(false);
+    return () => { if (openerRef.current === operationContext) openerRef.current = { client, context: "" }; };
+  }, [client, operationContext]);
+  useSyncExternalStore(gitlabDiscussionDrafts.subscribe, gitlabDiscussionDrafts.getSnapshot);
+  const draftKey = gitlabReview?.expectedPosition && selectedTarget ? JSON.stringify(["published-line", workspaceId, gitlabReview.repositoryId, gitlabReview.iid, gitlabReview.scopeId, gitlabReview.expectedPosition.baseCommitOid, gitlabReview.expectedPosition.startCommitOid, gitlabReview.expectedPosition.headCommitOid, selectedTarget.filePath, selectedTarget.side, selectedTarget.line]) : undefined;
+  const body = draftKey ? gitlabDiscussionDrafts.read(draftKey) : localBody;
+  const activePending = pending || Boolean(draftKey && gitlabDiscussionDrafts.isPending(draftKey));
+  const setBody = (value: string) => {
+    if (!draftKey) setLocalBody(value);
+    else if (!gitlabDiscussionDrafts.write(draftKey, value)) setError("Clear a reply draft to start another. WTS retained your drafts.");
+  };
   const [gitlabDiscussions, setGitlabDiscussions] = useState(
     gitlabReview?.discussions ?? [],
   );
@@ -186,7 +177,9 @@ export function CodeReviewFeedbackPanel({
   ).length;
 
   const createThread = async () => {
-    if (!selectedTarget || !body.trim() || pending) return;
+    if (!selectedTarget || !body.trim() || activePending) return;
+    if (draftKey && !gitlabDiscussionDrafts.beginReply(draftKey)) return;
+    let sent = false;
     setPending(true);
     setError("");
     try {
@@ -199,10 +192,13 @@ export function CodeReviewFeedbackPanel({
             filePath: selectedTarget.filePath,
             side: selectedTarget.side,
             line: selectedTarget.line,
+            ...(gitlabReview.expectedPosition ? { expectedPosition: gitlabReview.expectedPosition, workspaceId } : {}),
           },
         );
         if (!result.accepted) throw new Error("GitLab did not accept this comment.");
-        setBody("");
+        sent = true;
+        if (openerRef.current !== operationContext) return;
+        if (!draftKey) setBody("");
         setPublished(true);
         try {
           const patch = await client.getGitlabReviewPatch(
@@ -211,8 +207,11 @@ export function CodeReviewFeedbackPanel({
             undefined,
             true,
           );
+          if (openerRef.current !== operationContext) return;
+          if (patch.repositoryId !== gitlabReview.repositoryId || patch.iid !== gitlabReview.iid) throw new Error("WTS received feedback for another merge request.");
           setGitlabDiscussions(patch.discussions);
         } catch {
+          if (openerRef.current !== operationContext) return;
           setError("Comment published. WTS could not refresh GitLab threads.");
         }
         return;
@@ -223,16 +222,19 @@ export function CodeReviewFeedbackPanel({
         body,
         "user",
       );
+      if (openerRef.current !== operationContext) return;
       setThreads((current) => [created, ...current]);
       setBody("");
     } catch (cause) {
+      if (openerRef.current !== operationContext) return;
       setError(
         cause instanceof Error
           ? cause.message
           : "WTS could not save this review comment.",
       );
     } finally {
-      setPending(false);
+      if (draftKey) gitlabDiscussionDrafts.finishReply(draftKey, body, sent);
+      if (openerRef.current === operationContext) setPending(false);
     }
   };
 
@@ -246,20 +248,49 @@ export function CodeReviewFeedbackPanel({
         thread.threadId,
         thread.revision,
       );
+      if (openerRef.current !== operationContext) return;
       setThreads((current) =>
         current.map((candidate) =>
           candidate.threadId === resolved.threadId ? resolved : candidate,
         ),
       );
     } catch (cause) {
+      if (openerRef.current !== operationContext) return;
       setError(
         cause instanceof Error
           ? cause.message
           : "WTS could not resolve this review thread.",
       );
     } finally {
-      setPending(false);
+      if (openerRef.current === operationContext) setPending(false);
     }
+  };
+
+  const openMergeRequest = async () => {
+    if (!gitlabReview || opening) return;
+    setOpening(true);
+    setOpenError("");
+    try {
+      const result = await client.openGitlabMergeRequest(gitlabReview.repositoryId, gitlabReview.iid);
+      if (!result.accepted || result.repositoryId !== gitlabReview.repositoryId || result.iid !== gitlabReview.iid) throw new Error("WTS could not open this merge request.");
+    } catch (cause) {
+      if (openerRef.current === operationContext) setOpenError(cause instanceof Error ? cause.message : "WTS could not open this merge request.");
+    } finally {
+      if (openerRef.current === operationContext) setOpening(false);
+    }
+  };
+
+  const askAgentToFix = (discussion: GitlabReviewDiscussion) => {
+    if (!gitlabReview || !onAskAgentToFix) return;
+    const context = buildGitlabDiscussionFixContext({
+      workspaceId,
+      repositoryId,
+      providerRepositoryId: gitlabReview.repositoryId,
+      iid: gitlabReview.iid,
+      scopeId: gitlabReview.scopeId,
+      discussion,
+    });
+    if (context) onAskAgentToFix(context);
   };
 
   return (
@@ -299,14 +330,15 @@ export function CodeReviewFeedbackPanel({
           <textarea
             aria-label="Review comment"
             autoFocus
+            disabled={activePending}
             maxLength={16_384}
             onChange={(event) => setBody(event.currentTarget.value)}
             placeholder="Ask a question or explain a concern"
             rows={4}
             value={body}
           />
-          <button disabled={!body.trim() || pending} type="submit">
-            {pending ? "Publishes comment" : gitlabReview ? "Publish to GitLab" : "Send to agent"}
+          <button disabled={!body.trim() || activePending} type="submit">
+            {activePending ? "Publishes comment" : gitlabReview ? "Publish to GitLab" : "Send to agent"}
           </button>
         </form>
       )}
@@ -316,9 +348,13 @@ export function CodeReviewFeedbackPanel({
       {error && (
         <div className={styles.error} role="alert">
           <span>{error}</span>
-          {state === "error" && (
+          {gitlabReview ? <>
+            {!published && <p>Check GitLab before you send this comment again. Your draft is saved here.</p>}
+            <button disabled={opening} onClick={() => void openMergeRequest()} type="button">Open MR in GitLab</button>
+            {openError && <p>{openError} Open GitLab in your browser, then check this merge request.</p>}
+          </> : (
             <button onClick={() => setRevision((value) => value + 1)} type="button">
-              Try again
+              {state === "error" ? "Try again" : "Refresh feedback"}
             </button>
           )}
         </div>
@@ -377,6 +413,7 @@ export function CodeReviewFeedbackPanel({
                       {discussion.comments.map((comment) => (
                         <DiscussionComment comment={comment} key={comment.id} />
                       ))}
+                      {onAskAgentToFix && <button onClick={() => askAgentToFix(discussion)} type="button">Ask agent to fix</button>}
                     </details>
                   </li>
                 );
@@ -398,6 +435,7 @@ export function CodeReviewFeedbackPanel({
                   {discussion.comments.map((comment) => (
                     <DiscussionComment comment={comment} key={comment.id} />
                   ))}
+                  {onAskAgentToFix && <button onClick={() => askAgentToFix(discussion)} type="button">Ask agent to fix</button>}
                 </li>
               );
             })}

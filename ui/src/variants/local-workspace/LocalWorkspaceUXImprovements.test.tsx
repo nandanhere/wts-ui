@@ -54,17 +54,8 @@ describe("LocalWorkspace UX Improvements", () => {
 
       render(<LocalWorkspace client={fake.client} />);
 
-      await waitFor(() => {
-        expect(screen.getByText("Opening the local workspace registry…")).toBeInTheDocument();
-      });
-
-      // Opening workspace 1 emits a second notice ("ws_01 plan loaded...")
-      const card1 = screen.getByRole("button", { name: new RegExp(ws1.title, "i") });
+      const card1 = await screen.findByRole("button", { name: new RegExp(ws1.title, "i") });
       await user.click(card1);
-
-      // In Toast queue, initial notice and new notice must coexist simultaneously
-      const statusToasts = screen.getAllByRole("status");
-      expect(statusToasts.length).toBeGreaterThanOrEqual(2);
 
       // Trigger preflight setup error
       fake.preflightWorkspace.mockRejectedValueOnce(new Error("Preflight check failed"));
@@ -77,6 +68,12 @@ describe("LocalWorkspace UX Improvements", () => {
         expect(errorContainer).not.toBeNull();
         expect(errorContainer).toHaveAttribute("aria-live", "assertive");
       });
+
+      await user.click(screen.getByRole("button", { name: "Open Spaces" }));
+      await user.click(await screen.findByRole("button", { name: new RegExp(ws2.title, "i") }));
+      fake.preflightWorkspace.mockRejectedValueOnce(new Error("Second preflight check failed"));
+      await user.click(screen.getByRole("button", { name: "Review setup" }));
+      await waitFor(() => expect(screen.getAllByText(/preflight failed/i)).toHaveLength(2));
 
       // Manual dismiss removes a toast
       const dismissButtons = screen.getAllByRole("button", { name: /Dismiss notice/i });
@@ -185,9 +182,7 @@ describe("LocalWorkspace UX Improvements", () => {
 
       render(<LocalWorkspace client={fake.client} />);
 
-      await waitFor(() => {
-        expect(screen.getByText("Opening the local workspace registry…")).toBeInTheDocument();
-      });
+      await screen.findByRole("button", { name: new RegExp(ws.title, "i") });
 
       fireEvent.keyDown(window, { key: "n", metaKey: true });
 

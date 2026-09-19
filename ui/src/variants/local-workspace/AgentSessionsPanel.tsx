@@ -47,6 +47,7 @@ import {
 } from "./timeReviewSchedule";
 import styles from "./AgentSessionsPanel.module.css";
 import { SelectMenu } from "../../components/SelectMenu";
+import { loadAgentSessions } from "../../lib/agentSessionDiscovery";
 
 const REFRESH_INTERVAL_MS = 5_000;
 const MAX_AUTOMATIC_REFRESHES = 120;
@@ -58,6 +59,7 @@ const providerLabels: Record<AgentProvider, string> = {
   codex: "Codex",
   openCode: "OpenCode",
   hermes: "Hermes",
+  copilot: "Copilot",
 };
 
 const statusLabels: Record<AgentSessionStatus, string> = {
@@ -188,9 +190,11 @@ function todayRange(now = new Date()) {
 export function AgentSessionsPanel({
   client,
   workspaceLabels,
+  onOpenIntegrations,
 }: {
   client: WorkspaceClient;
   workspaceLabels: Record<string, { key: string; title: string }>;
+  onOpenIntegrations?: () => void;
 }) {
   const [cachedReview] = useState(() =>
     loadActivityWatchReviewSnapshot(),
@@ -244,27 +248,39 @@ export function AgentSessionsPanel({
   const [notificationState, setNotificationState] =
     useState<DesktopNotificationState>(desktopNotificationState);
   const generationRef = useRef(0);
+  const sessionRequestRef = useRef<{ generation: number; promise: Promise<void> } | null>(null);
   const refreshSessions = useCallback(
-    async (showLoading = false) => {
+    (showLoading = false, force = false): Promise<void> => {
       const generation = generationRef.current;
       if (showLoading) setSessionState("loading");
-      try {
-        const result = await client.listAgentSessions();
-        if (generation !== generationRef.current) return;
-        setSessions(result.sessions);
-        setObservedSessions(result.observedSessions ?? []);
-        setSessionState("ready");
-        setSessionError("");
-        setNow(Date.now());
-      } catch (error) {
-        if (generation !== generationRef.current) return;
-        setSessionState("error");
-        setSessionError(
-          error instanceof Error
-            ? error.message
-            : "WTS could not read agent sessions.",
-        );
+      if (sessionRequestRef.current?.generation === generation) {
+        return sessionRequestRef.current.promise;
       }
+      const request: Promise<void> = Promise.resolve().then(async () => {
+        try {
+          const result = await loadAgentSessions(client, undefined, { force });
+          if (generation !== generationRef.current) return;
+          setSessions(result.sessions);
+          setObservedSessions(result.observedSessions ?? []);
+          setSessionState("ready");
+          setSessionError("");
+          setNow(Date.now());
+        } catch (error) {
+          if (generation !== generationRef.current) return;
+          setSessionState("error");
+          setSessionError(
+            error instanceof Error
+              ? error.message
+              : "WTS could not read agent sessions.",
+          );
+        } finally {
+          if (sessionRequestRef.current?.promise === request) {
+            sessionRequestRef.current = null;
+          }
+        }
+      });
+      sessionRequestRef.current = { generation, promise: request };
+      return request;
     },
     [client],
   );
@@ -293,7 +309,9 @@ export function AgentSessionsPanel({
     const generation = generationRef.current;
     setReviewState("loading");
     setJiraState("loading");
-    setAssignments({});
+    setReviewError("");
+    setJiraError("");
+    setBriefState("idle");
     const [reviewResult, jiraResult] = await Promise.allSettled([
       client.getActivityWatchDailyReview(
         range.startedAtUnixMs,
@@ -306,8 +324,9 @@ export function AgentSessionsPanel({
       setReview(reviewResult.value);
       setReviewState("ready");
       setReviewError("");
+      setAssignments((current) => Object.fromEntries(Object.entries(current).filter(([id]) => reviewResult.value.sessions.some((session) => session.id === id))));
     } else {
-      setReviewState("error");
+      setReviewState(review ? "ready" : "error");
       setReviewError(
         reviewResult.reason instanceof Error
           ? reviewResult.reason.message
@@ -339,11 +358,27 @@ export function AgentSessionsPanel({
         builtAtUnixMs,
         review: reviewResult.value,
         jiraIssues: jiraResult.value,
-        assignments: {},
+        assignments: Object.fromEntries(Object.entries(assignments).filter(([id]) => reviewResult.value.sessions.some((session) => session.id === id))),
       });
       if (snapshotSaved) {
         announceTimeReviewSnapshot();
       }
+    }
+  }, [assignments, client, review]);
+
+  const retryJiraIssues = useCallback(async () => {
+    const generation = generationRef.current;
+    setJiraState("loading");
+    try {
+      const issues = await client.listActiveJiraIssues();
+      if (generation !== generationRef.current) return;
+      setJiraIssues(issues);
+      setJiraState("ready");
+      setJiraError("");
+    } catch (error) {
+      if (generation !== generationRef.current) return;
+      setJiraState("error");
+      setJiraError(error instanceof Error ? error.message : "WTS could not read assigned Jira tickets.");
     }
   }, [client]);
 
@@ -665,6 +700,10 @@ export function AgentSessionsPanel({
                     : activityWatchLabel(activityStatus)}
               </strong>
               {activityState === "error" && <p>{activityError}</p>}
+              {activityState === "ready" && activityStatus?.state !== "running" && <>
+                <p>{activityStatus?.detail}</p>
+                <p>{activityStatus?.state === "incompatible" ? "Check the ActivityWatch address and API support in integrations." : activityStatus?.installation === "detected" ? "Start ActivityWatch, then select Check connection." : "Install ActivityWatch, then start it and select Check connection."}</p>
+              </>}
             </div>
             <button
               disabled={activityState === "loading"}
@@ -675,6 +714,7 @@ export function AgentSessionsPanel({
                 ? "WTS checks…"
                 : "Check connection"}
             </button>
+            {onOpenIntegrations && activityState !== "loading" && (activityState === "error" || activityStatus?.state !== "running") && <button onClick={onOpenIntegrations} type="button">Open integrations</button>}
           </aside>
 
           <section
@@ -734,7 +774,7 @@ export function AgentSessionsPanel({
                   {notificationState === "unsupported"
                     ? "Notifications unavailable"
                     : notificationState === "denied"
-                      ? "Notifications blocked"
+                      ? "Check notification permission"
                       : reviewSchedule.notificationsEnabled
                         ? "Notifications on"
                         : "Enable notifications"}
@@ -764,6 +804,8 @@ export function AgentSessionsPanel({
                 </button>
               </div>
             </header>
+            {notificationState === "denied" && <p className={styles.reviewState}>Allow notifications in your browser or system settings, then select Check notification permission.</p>}
+            {notificationState === "unsupported" && <p className={styles.reviewState}>This app cannot show notifications. Open My time to read completed summaries.</p>}
             {reviewHistory.length > 0 && (
               <div
                 className={styles.reviewHistory}
@@ -834,6 +876,10 @@ export function AgentSessionsPanel({
                   ? "Agent brief could not be copied."
                   : ""}
             </span>
+            {briefState === "error" && agentReview && jiraIssues && <label className={styles.manualCopy}>
+              Clipboard access failed. Select and copy the brief below.
+              <textarea aria-label="Agent brief to copy" readOnly rows={6} value={buildTimeReviewAgentBrief(agentReview, jiraIssues)} onFocus={(event) => event.currentTarget.select()} />
+            </label>}
             {reviewState === "loading" && (
               <div
                 aria-live="polite"
@@ -848,7 +894,7 @@ export function AgentSessionsPanel({
             <strong>No activity yet.</strong>
           </div>
         )}
-        {reviewState === "error" && (
+        {reviewError && reviewState !== "loading" && (
           <div className={styles.reviewState} data-error role="alert">
             <strong>Daily review could not be built.</strong>
             <span>{reviewError}</span>
@@ -965,6 +1011,10 @@ export function AgentSessionsPanel({
                     : "Jira tickets are unavailable"}
                 </strong>
                 {jiraState === "error" && <span>{jiraError}</span>}
+                {jiraState === "error" && <>
+                  <button onClick={() => void retryJiraIssues()} type="button">Retry Jira tickets</button>
+                  {onOpenIntegrations && <button onClick={onOpenIntegrations} type="button">Open integrations</button>}
+                </>}
               </div>
             )}
             {(visibleReview?.sessions.length ?? 0) === 0 ? (
@@ -1112,6 +1162,7 @@ export function AgentSessionsPanel({
                 ? "refresh paused"
                 : "refreshes every 5 seconds"}
             </span>
+            <button disabled={sessionState === "loading"} onClick={() => { setRefreshCount(0); void refreshSessions(true, true); }} type="button">Refresh sessions</button>
           </div>
 
           <div aria-busy={sessionState === "loading" || undefined}>
@@ -1125,7 +1176,7 @@ export function AgentSessionsPanel({
               <div className={styles.state} data-error role="alert">
                 <strong>Session history could not be loaded.</strong>
                 <span>{sessionError}</span>
-                <button onClick={() => void refreshSessions(true)} type="button">
+                <button onClick={() => void refreshSessions(true, true)} type="button">
                   Try again
                 </button>
               </div>

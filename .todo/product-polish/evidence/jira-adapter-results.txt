@@ -1,0 +1,23 @@
+   Compiling wts-integrations v0.1.0 (/Users/example/wts/source/crates/wts-integrations)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 7.24s
+     Running unittests src/lib.rs (target/debug/deps/wts_integrations-ca11c34e5400ef46)
+
+running 15 tests
+test jira_mcp::tests::issue_description_preserves_prose_unknown_json_and_mismatched_issue_keys ... ok
+test jira_mcp::tests::issue_keys_are_bounded_and_canonical ... ok
+test jira_mcp::tests::cloud_token_repair_does_not_override_explicit_credentials ... ok
+test jira_mcp::tests::issue_tool_follows_serialized_mcp_pagination ... ok
+test jira_mcp::tests::cloud_api_token_mislabeled_as_a_personal_token_uses_the_git_identity ... ok
+test jira_mcp::tests::issue_tool_rejects_repeated_mcp_cursor ... ok
+test jira_mcp::tests::registration_allows_documented_mcp_atlassian_commands ... ok
+test jira_mcp::tests::registration_rejects_shells_and_substitutions ... ok
+test jira_mcp::tests::issue_browser_url_uses_only_the_configured_jira_origin ... ok
+test jira_mcp::tests::tool_text_uses_the_serialized_text_result_instead_of_its_schema_wrapper ... ok
+test jira_mcp::tests::imported_issue_extracts_description_from_the_serialized_mcp_result_and_keeps_raw_evidence ... ok
+test jira_mcp::tests::imported_issue_keeps_the_browser_origin_from_the_registration_that_succeeded ... ok
+test jira_mcp::tests::active_issue_parser_accepts_cloud_and_server_shapes_without_descriptions ... ok
+test jira_mcp::tests::container_registration_gets_an_installing_uvx_fallback_with_the_same_environment ... ok
+test jira_mcp::tests::process_exit_before_the_first_response_is_a_startup_failure ... ok
+
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 74 filtered out; finished in 0.02s
+

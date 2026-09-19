@@ -5358,9 +5358,11 @@ dependencies = [
 name = "wts-app"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "hex",
  "json5",
  "libc",
+ "png 0.17.16",
  "serde",
  "serde_json",
  "sha2",
@@ -5392,6 +5394,12 @@ dependencies = [
 name = "wts-desktop"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
+ "block2",
+ "objc2",
+ "objc2-app-kit",
+ "objc2-foundation",
+ "objc2-web-kit",
  "serde",
  "serde_json",
  "sha2",
@@ -5430,6 +5438,7 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+ "sha2",
  "tempfile",
  "thiserror 2.0.19",
  "url",

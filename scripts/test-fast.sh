@@ -54,12 +54,16 @@ run_step \
   "Browser driver contract" \
   node --test scripts/wts-browser-driver.test.mjs
 run_step \
+  "Desktop setup, installation, and update contracts" \
+  node --test scripts/prepare-desktop-dev.test.mjs \
+    scripts/install-macos-app.test.mjs scripts/stage-macos-update.test.mjs
+run_step \
   "Service fixture contract" \
   node examples/service-stacks/verify-fixtures.mjs
 run_step \
   "Parallel-agent manifest validation" \
   cargo run -p wts-app --example parallel_agent_lab -- --validate-only
-run_step "React behavior suite" npm --prefix ui test
+run_step "React behavior suite" npm --prefix ui test -- --maxWorkers=2 --minWorkers=1
 run_step "Production UI build" npm --prefix ui run build
 run_step \
   "CI and self-host harness contract" \

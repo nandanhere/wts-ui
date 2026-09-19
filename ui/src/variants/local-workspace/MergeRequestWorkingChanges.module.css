@@ -1,0 +1,60 @@
+.comparison { display: flex; flex: 1; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; color: var(--wts-ink); background: var(--wts-surface); font-size: 12px; }
+.toolbar { display: flex; flex: 0 0 auto; align-items: center; gap: 12px; min-height: 44px; padding: 4px 16px; border-bottom: 1px solid var(--wts-line); }
+.toolbar label { display: flex; align-items: center; }
+.toolbar [data-select-trigger] { min-width: 156px; min-height: 30px; border-color: transparent; background: var(--wts-surface-subtle); }
+.version { flex: 1; color: var(--wts-muted); font-size: 12px; }
+.quietButton { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 30px; padding: 4px 8px; color: var(--wts-muted); border: 1px solid transparent; border-radius: var(--wts-radius-sm); background: transparent; font: 500 12px/1.4 var(--wts-font-sans); white-space: nowrap; cursor: pointer; transition: color 150ms, background 150ms; }
+.quietButton:hover, .quietButton[aria-expanded="true"] { color: var(--wts-ink); background: var(--wts-surface-muted); }
+.quietButton:disabled { opacity: .5; cursor: not-allowed; }
+.quietButton:focus-visible, .fileRow:focus-visible, .fileSearch:focus-within { outline: none; box-shadow: var(--wts-focus-ring); }
+.layout { position: relative; display: grid; grid-template-columns: 240px minmax(0, 1fr); flex: 1; min-height: 0; overflow: hidden; }
+.layout[data-panel] { grid-template-columns: 240px minmax(0, 1fr) minmax(340px, 30%); }
+.files { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; padding: 12px 8px; border-right: 1px solid var(--wts-line); background: var(--wts-surface); }
+.filesHeader { display: flex; align-items: center; gap: 8px; padding: 0 8px 10px; color: var(--wts-muted); }
+.filesHeader strong { font-size: 12px; font-weight: 600; }
+.filesHeader > span, .count { min-width: 18px; padding: 1px 5px; border-radius: 4px; background: var(--wts-surface-muted); color: var(--wts-muted); font: 12px/1.5 var(--wts-font-sans); text-align: center; font-variant-numeric: tabular-nums; }
+.fileSearch { display: flex; align-items: center; flex: 0 0 auto; gap: 6px; height: 30px; margin: 0 4px 10px; padding: 0 8px; color: var(--wts-faint); border: 1px solid var(--wts-line); border-radius: var(--wts-radius-sm); }
+.fileSearch input { min-width: 0; width: 100%; padding: 0; border: 0; outline: none; color: var(--wts-ink); background: transparent; font: 12px/1.4 var(--wts-font-sans); }
+.fileSearch input::placeholder { color: var(--wts-faint); }
+.fileList { flex: 1 1 0; min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
+.fileRow { display: flex; align-items: center; gap: 8px; width: 100%; padding: 7px 8px; border: 0; border-radius: var(--wts-radius-sm); color: var(--wts-muted); background: transparent; text-align: left; cursor: pointer; transition: background 150ms, color 150ms; }
+.fileRow > svg { flex: 0 0 auto; color: var(--wts-faint); }
+.fileRow:hover { color: var(--wts-ink); background: var(--wts-surface-subtle); }
+.fileRow[aria-current="true"] { color: var(--wts-ink); background: var(--wts-blue-soft); box-shadow: inset 2px 0 var(--wts-blue); }
+.fileName { display: grid; min-width: 0; flex: 1; gap: 2px; }
+.fileName b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 500 12px/1.4 var(--wts-font-sans); }
+.fileName small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--wts-faint); font: 12px/1.3 var(--wts-font-sans); }
+.fileComments { display: flex; align-items: center; gap: 3px; color: var(--wts-muted); font-size: 12px; }
+.fileStatus { flex: 0 0 auto; padding: 1px 4px; border-radius: var(--wts-radius-sm); color: var(--wts-blue); background: var(--wts-blue-soft); font: 12px/1.4 var(--wts-font-sans); }
+.fileEmpty { padding: 8px; color: var(--wts-muted); }
+.fileContent, .patch { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; overflow: hidden; }
+.fileActions { display: flex; align-items: center; flex: 0 0 auto; gap: 4px; }
+.emptyActions { display: flex; align-items: center; justify-content: space-between; min-height: 40px; padding: 4px 12px; border-bottom: 1px solid var(--wts-line); }
+.emptyActions > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sidePanel { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; border-left: 1px solid var(--wts-line); background: var(--wts-surface); }
+.empty { align-self: center; margin: auto; max-width: 480px; padding: 32px; color: var(--wts-muted); line-height: 1.6; text-align: center; }
+.notice, .error { flex: 0 0 auto; margin: 0; padding: 8px 16px; line-height: 1.5; border-bottom: 1px solid var(--wts-line); }
+.notice { color: var(--wts-muted); background: var(--wts-surface-subtle); }
+.error { color: var(--wts-red); background: var(--wts-red-soft); }
+.originalContext { padding: 10px; margin-bottom: 12px; border: 1px solid var(--wts-line); border-radius: var(--wts-radius-sm); background: var(--wts-surface-subtle); font-size: 12px; overflow-wrap: anywhere; }
+.originalContext p { margin: 8px 0 0; color: var(--wts-muted); line-height: 1.5; }
+.originalContext pre { margin: 8px 0; max-height: 200px; overflow: auto; font: 12px/1.6 var(--wts-font-mono); }
+.srOnly { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
+@media (max-width: 1200px) {
+  .layout, .layout[data-panel] { grid-template-columns: 216px minmax(0, 1fr); }
+  .sidePanel { position: absolute; z-index: 3; top: 0; right: 0; bottom: 0; width: min(480px, calc(100% - 216px)); box-shadow: var(--wts-shadow-md); }
+}
+@media (max-width: 650px) {
+  .toolbar { gap: 8px; min-height: 38px; padding: 3px 8px; }
+  .version { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .layout, .layout[data-panel] { grid-template-columns: minmax(0, 1fr); grid-template-rows: 52px minmax(0, 1fr); }
+  .files { flex-direction: row; align-items: stretch; gap: 6px; padding: 6px 8px; border-right: 0; border-bottom: 1px solid var(--wts-line); }
+  .filesHeader { display: none; }
+  .fileSearch { flex: 0 0 100px; align-self: center; margin: 0; }
+  .fileList { display: flex; gap: 4px; overflow-x: auto; overflow-y: hidden; scrollbar-gutter: auto; scrollbar-width: thin; scroll-snap-type: x proximity; }
+  .fileRow { flex: 0 0 200px; width: auto; min-width: 0; padding-block: 2px; scroll-snap-align: start; }
+  .fileName { display: grid; gap: 0; }
+  .fileName b { flex: 0 1 auto; }
+  .fileName small { flex: 1; }
+  .sidePanel { width: 100%; }
+}

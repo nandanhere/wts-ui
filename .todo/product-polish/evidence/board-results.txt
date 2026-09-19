@@ -1,0 +1,51 @@
+
+ RUN  v3.2.7 /Users/example/wts/source/ui
+
+ ✓ src/variants/local-workspace/LocalWorkspaceBoard.test.tsx (45 tests) 49654ms
+   ✓ personal local workspace registry > runs a due My time review while Spaces is open  615ms
+   ✓ personal local workspace registry > stops the Spaces session poller after My time opens  641ms
+   ✓ personal local workspace registry > opens the configured Jira issue from its workspace card  809ms
+   ✓ personal local workspace registry > shows Jira keys observed in a repository workspace planning home  807ms
+   ✓ personal local workspace registry > uses a task-oriented workbench header without exposing repository-set internals  1950ms
+   ✓ personal local workspace registry > uses one compact actions menu after workspace creation  1753ms
+   ✓ personal local workspace registry > renames a workspace inline on double-click and persists the display name  2402ms
+   ✓ personal local workspace registry > loads a persisted draft on the board and opens its workbench  1452ms
+   ✓ personal local workspace registry > starts a revised workspace with a planning home from the Plans empty state  3058ms
+   ✓ personal local workspace registry > announces a copied workspace path only after the clipboard write succeeds  1543ms
+   ✓ personal local workspace registry > reports rejected and unavailable workspace clipboard writes  1658ms
+   ✓ personal local workspace registry > provides keyboard-accessible tooltips for the header icon controls  977ms
+   ✓ personal local workspace registry > shows one clear primary creation action on an empty board  528ms
+   ✓ personal local workspace registry > explains why the creation action is unavailable  609ms
+   ✓ personal local workspace registry > renders last-known materialization without deeply validating every board card  684ms
+   ✓ personal local workspace registry > shows assigned reviews in Ready and prepares a source-branch review workspace  1006ms
+   ✓ personal local workspace registry > shows one existing review workspace and opens its provider changes  4509ms
+   ✓ personal local workspace registry > redirects a review workspace verification link to a visible review view  499ms
+   ✓ personal local workspace registry > moves a workspace with a fresh open merge request to Parked  899ms
+   ✓ personal local workspace registry > refreshes merge request state on the Kanban board  604ms
+   ✓ personal local workspace registry > moves the exact review workspace to Parked after the user approves  2279ms
+   ✓ personal local workspace registry > shows a merged review state and opens its trusted GitLab link  1409ms
+   ✓ personal local workspace registry > shows the exact 'requested' review result  1158ms
+   ✓ personal local workspace registry > shows the exact 'draft' review result  1193ms
+   ✓ personal local workspace registry > shows the exact 'approved' review result  1158ms
+   ✓ personal local workspace registry > shows the exact 'new changes' review result  1137ms
+   ✓ personal local workspace registry > shows the exact 'closed' review result  1149ms
+   ✓ personal local workspace registry > shows an open VS Code session without letting finished WTS history mask live work  2385ms
+   ✓ personal local workspace registry > orders automatic workspace cards by their latest agent ping  367ms
+   ✓ personal local workspace registry > keeps the workspace toolbar focused on actions  395ms
+   ✓ personal local workspace registry > moves an agent question to Review and sends one safe notification  507ms
+   ✓ personal local workspace registry > keeps the complete workflow visible when some stages are empty  390ms
+   ✓ personal local workspace registry > uses horizontal arrow keys to skip empty stages  1100ms
+   ✓ personal local workspace registry > moves a workspace with the accessible action menu  1363ms
+   ✓ personal local workspace registry > persists completed agent work in Review  481ms
+   ✓ personal local workspace registry > retries an automatic workflow transition after a transient failure  322ms
+   ✓ personal local workspace registry > keeps a Parked workspace parked when an agent is observed  429ms
+   ✓ personal local workspace registry > keeps the durable lane visible until an agent transition succeeds  571ms
+   ✓ personal local workspace registry > unpins a workspace and applies its current agent activity immediately  1156ms
+   ✓ personal local workspace registry > expands the compact space search and keeps an active query visible  1599ms
+   ✓ personal local workspace registry > opens a concise usage guide and starts the creation flow from it  1231ms
+
+ Test Files  1 passed (1)
+      Tests  45 passed (45)
+   Start at  16:43:07
+   Duration  52.82s (transform 1.52s, setup 204ms, collect 2.02s, tests 49.65s, environment 664ms, prepare 64ms)
+

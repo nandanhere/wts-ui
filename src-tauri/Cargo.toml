@@ -32,5 +32,13 @@ wts-core = { path = "../crates/wts-core" }
 wts-integrations = { path = "../crates/wts-integrations" }
 wts-store = { path = "../crates/wts-store" }
 
+[target.'cfg(target_os = "macos")'.dependencies]
+base64 = "0.22.1"
+block2 = "0.6.2"
+objc2 = "0.6.4"
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["NSImage", "NSImageRep", "NSBitmapImageRep", "NSView"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["NSData", "NSDictionary", "NSError", "NSValue", "NSGeometry"] }
+objc2-web-kit = { version = "0.3.2", default-features = false, features = ["WKWebView", "WKSnapshotConfiguration", "objc2-app-kit", "objc2-core-foundation", "block2"] }
+
 [dev-dependencies]
 tempfile = "3"

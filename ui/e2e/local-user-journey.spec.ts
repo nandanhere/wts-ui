@@ -71,12 +71,8 @@ test("keeps the app-shell self-test out of workspace verification", async ({
     name: "Repository to add",
   });
   await expect(repositoryPicker).toBeEnabled();
-  const storefrontRepositoryId = await repositoryPicker
-    .locator("option")
-    .filter({ hasText: "storefront-ui" })
-    .getAttribute("value");
-  expect(storefrontRepositoryId).toBeTruthy();
-  await repositoryPicker.selectOption(storefrontRepositoryId!);
+  await repositoryPicker.click();
+  await page.getByRole("option", { name: /^storefront-ui ·/ }).click();
   await create.getByRole("button", { name: "Add repository" }).click();
   await create.getByRole("button", { name: /Review repositories/i }).click();
   await expect(
@@ -92,7 +88,7 @@ test("keeps the app-shell self-test out of workspace verification", async ({
   const repositorySelectionChanged = create.getByText(
     "Repository selection changed",
   );
-  const noRunnableServices = create.getByText("No runnable services detected");
+  const noRunnableServices = create.getByRole("heading", { name: "No services to configure" });
   const serviceAnalysisError = create.getByText(
     "Service analysis could not finish",
   );
@@ -265,9 +261,8 @@ test("keeps the app-shell self-test out of workspace verification", async ({
 
   await page.getByRole("tab", { name: "Changes" }).click();
   const reviewScreen = page.getByTestId("repository-review-screen");
-  const reviewBrief = reviewScreen.getByRole("region", {
-    name: "Agent review brief",
-  });
+  const reviewToolbar = reviewScreen.getByTestId("repository-review-toolbar");
+  const reportedRisk = reviewToolbar.getByLabel("1 reported risk");
   const changeNavigator = reviewScreen.getByLabel("Navigate changes");
   const reviewScroller = reviewScreen.getByTestId("patch-review-scroll");
   const nextChange = changeNavigator.getByRole("button", {
@@ -276,17 +271,19 @@ test("keeps the app-shell self-test out of workspace verification", async ({
   await expect(changeNavigator.getByText("6 changes")).toBeVisible({
     timeout: 120_000,
   });
-  await expect(reviewBrief).toContainText(
-    "Review the request boundary before the formatting changes.",
+  await expect(reportedRisk).toBeVisible();
+  await expect(reportedRisk).toHaveAttribute(
+    "title", "Review the request boundary before the formatting changes.",
   );
+  await expect(reviewScreen.getByRole("region", { name: "Agent review brief" })).toHaveCount(0);
   await expect(
     reviewScreen.getByText("Review the request boundary first."),
   ).toHaveCount(0);
 
   const readCompactGeometry = () =>
     reviewScreen.evaluate((screenElement) => {
-      const briefElement = screenElement.querySelector<HTMLElement>(
-        '[aria-label="Agent review brief"]',
+      const toolbarElement = screenElement.querySelector<HTMLElement>(
+        '[data-testid="repository-review-toolbar"]',
       );
       const scrollElement = screenElement.querySelector<HTMLElement>(
         '[data-testid="patch-review-scroll"]',
@@ -294,12 +291,12 @@ test("keeps the app-shell self-test out of workspace verification", async ({
       const firstDiffBody = screenElement.querySelector<HTMLElement>(
         '[id^="diff-body-"]',
       );
-      if (!briefElement || !scrollElement || !firstDiffBody) {
+      if (!toolbarElement || !scrollElement || !firstDiffBody) {
         throw new Error("The compact change review surfaces are incomplete.");
       }
       const screenRect = screenElement.getBoundingClientRect();
       return {
-        briefHeight: briefElement.getBoundingClientRect().height,
+        toolbarHeight: toolbarElement.getBoundingClientRect().height,
         firstCodeTop: firstDiffBody.getBoundingClientRect().top,
         screenHeight: screenRect.height,
         scrollHeight: scrollElement.getBoundingClientRect().height,
@@ -307,7 +304,7 @@ test("keeps the app-shell self-test out of workspace verification", async ({
       };
     });
   const compactGeometry = await readCompactGeometry();
-  expect(compactGeometry.briefHeight).toBeLessThanOrEqual(48);
+  expect(compactGeometry.toolbarHeight).toBeLessThanOrEqual(60);
   expect(compactGeometry.firstCodeTop).toBeLessThan(
     compactGeometry.viewportHeight / 2,
   );
@@ -315,23 +312,9 @@ test("keeps the app-shell self-test out of workspace verification", async ({
     compactGeometry.screenHeight * 0.65,
   );
 
-  const briefToggle = reviewBrief.getByRole("button", { name: "Show brief" });
-  await briefToggle.focus();
-  await page.keyboard.press("Enter");
-  const hideBrief = reviewBrief.getByRole("button", { name: "Hide brief" });
-  await expect(hideBrief).toHaveAttribute("aria-expanded", "true");
-  await expect(
-    reviewScreen.getByText("Review the request boundary first."),
-  ).toBeVisible();
-  await hideBrief.focus();
-  await page.keyboard.press("Space");
-  await expect(
-    reviewBrief.getByRole("button", { name: "Show brief" }),
-  ).toHaveAttribute("aria-expanded", "false");
-
   await page.setViewportSize({ width: 1280, height: 720 });
   const shortGeometry = await readCompactGeometry();
-  expect(shortGeometry.briefHeight).toBeLessThanOrEqual(48);
+  expect(shortGeometry.toolbarHeight).toBeLessThanOrEqual(60);
   expect(shortGeometry.firstCodeTop).toBeLessThan(
     shortGeometry.viewportHeight * 0.62,
   );
@@ -379,7 +362,7 @@ test("keeps the app-shell self-test out of workspace verification", async ({
   await expect(changeNavigator.getByText("5/6")).toBeVisible();
 
   await page.unroute(evidenceRoute);
-  await page.getByRole("tab", { name: "Verification" }).click();
+  await page.getByRole("tab", { name: "Verify", exact: true }).click();
   await expect(
     page.getByRole("heading", { name: "Not run" }),
   ).toBeVisible();

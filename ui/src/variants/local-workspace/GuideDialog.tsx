@@ -1,5 +1,6 @@
 import { memo } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
+import { useDialogFocusReturn } from "../../components/useDialogFocusReturn";
 import { Glyph } from "./Glyph";
 import styles from "./LocalWorkspace.module.css";
 
@@ -14,6 +15,7 @@ export const GuideDialog = memo(function GuideDialog({
   onOpenChange,
   onCreateWorkspace,
 }: GuideDialogProps) {
+  const focusReturn = useDialogFocusReturn();
   const startWorkspace = () => {
     onOpenChange(false);
     onCreateWorkspace();
@@ -24,6 +26,7 @@ export const GuideDialog = memo(function GuideDialog({
       <Dialog.Portal>
         <Dialog.Overlay className={styles.dialogOverlay} />
         <Dialog.Content
+          {...focusReturn}
           className={`${styles.portalSurface} ${styles.guideDialog}`}
           aria-describedby="wts-guide-description"
           data-ui="guide.dialog"
@@ -103,8 +106,8 @@ export const GuideDialog = memo(function GuideDialog({
                       Verification for deterministic checks and local user
                       journeys, then prepare a brief when you want an agent to
                       investigate gaps. Graphify is optional context, not a
-                      launch requirement. When the work is done, use More to
-                      refresh, revise, or review safe removal.
+                      launch requirement. Use Actions to refresh, revise, or
+                      review workspace removal.
                     </p>
                   </div>
                 </li>
@@ -179,8 +182,8 @@ export const GuideDialog = memo(function GuideDialog({
 
           <footer className={styles.guideFooter}>
             <span>
-              Runtime services, ports, terminals, and aggregated diffs are
-              planned capabilities.
+              Use Changes to inspect code and conversations. Use Plans to keep
+              notes with your workspace.
             </span>
             <div>
               <Dialog.Close className={styles.secondaryButton}>

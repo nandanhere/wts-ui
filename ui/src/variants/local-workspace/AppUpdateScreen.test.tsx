@@ -2,6 +2,8 @@ import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { App } from "../../App";
+import { AppUpdateScreen, useAppUpdate } from "./AppUpdateScreen";
+import type { WorkspaceClient } from "../../lib/wtsClient";
 import {
   fakeWorkspaceClient,
   workspaceListFixture,
@@ -30,6 +32,60 @@ afterEach(() => {
 });
 
 describe("WTS app updates", () => {
+  it("keeps Relaunch available when a late native progress event arrives after installation", async () => {
+    (globalThis as typeof globalThis & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};
+    const fake = fakeWorkspaceClient({ appUpdateStatus: {
+      schemaVersion: 1, state: "available", currentVersion: "0.1.0", availableVersion: "0.2.0", detail: "An update is available.",
+    } });
+    fake.downloadAndInstallUpdate.mockResolvedValue({ schemaVersion: 1, state: "ready", currentVersion: "0.1.0", availableVersion: "0.2.0", detail: "Relaunch WTS to use the update." });
+    function Updates() { return <AppUpdateScreen controller={useAppUpdate(fake.client)} />; }
+    render(<Updates />);
+    expect(await screen.findByRole("button", { name: "Relaunch WTS" })).toBeEnabled();
+    await waitFor(() => expect(updateEvents.handler).not.toBeNull());
+    act(() => updateEvents.handler?.({ payload: { version: "0.2.0", downloadedBytes: 512, totalBytes: 1024 } }));
+    expect(screen.getByRole("button", { name: "Relaunch WTS" })).toBeEnabled();
+    expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
+  });
+
+  it("keeps install recovery available after automatic and manual download failures", async () => {
+    const user = userEvent.setup();
+    const fake = fakeWorkspaceClient({ appUpdateStatus: {
+      schemaVersion: 1, state: "available", currentVersion: "0.1.0", availableVersion: "0.2.0", detail: "A signed update is available.",
+    } });
+    fake.downloadAndInstallUpdate
+      .mockRejectedValueOnce(new Error("The download was interrupted."))
+      .mockRejectedValueOnce(new Error("The download is still unavailable."))
+      .mockResolvedValue({ schemaVersion: 1, state: "ready", currentVersion: "0.1.0", availableVersion: "0.2.0", detail: "Relaunch WTS to use the update." });
+    function Updates({ client }: { client: WorkspaceClient }) {
+      return <AppUpdateScreen controller={useAppUpdate(client)} />;
+    }
+    render(<Updates client={fake.client} />);
+    expect(await screen.findByText("The download was interrupted.")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Update WTS" }));
+    expect(await screen.findByText("The download is still unavailable.")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Check for updates" })).toBeEnabled();
+    expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Update WTS" }));
+    expect(await screen.findByRole("button", { name: "Relaunch WTS" })).toBeEnabled();
+    expect(fake.downloadAndInstallUpdate).toHaveBeenCalledTimes(3);
+  });
+
+  it("keeps relaunch available after a rejected request", async () => {
+    const user = userEvent.setup();
+    const fake = fakeWorkspaceClient({ appUpdateStatus: {
+      schemaVersion: 1, state: "ready", currentVersion: "0.1.0", availableVersion: "0.2.0", detail: "Relaunch WTS to use the update.",
+    } });
+    fake.relaunchUpdatedApp.mockRejectedValueOnce(new Error("The app could not relaunch.")).mockResolvedValue({ accepted: true });
+    function Updates({ client }: { client: WorkspaceClient }) {
+      return <AppUpdateScreen controller={useAppUpdate(client)} />;
+    }
+    render(<Updates client={fake.client} />);
+    await user.click(await screen.findByRole("button", { name: "Relaunch WTS" }));
+    expect(await screen.findByText("The app could not relaunch.")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Relaunch WTS" }));
+    expect(fake.relaunchUpdatedApp).toHaveBeenCalledTimes(2);
+  });
+
   it("checks and installs an available update automatically at startup", async () => {
     const user = userEvent.setup();
     const fake = fakeWorkspaceClient({

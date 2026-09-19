@@ -268,6 +268,7 @@ export function AssignedReviewCard({
 
 export function DraggableWorkspaceCard({
   agent,
+  attention,
   buttonRef,
   displayLane,
   dropIndicator,
@@ -285,6 +286,7 @@ export function DraggableWorkspaceCard({
   workspace,
 }: {
   agent?: WorkspaceAgentSnapshot;
+  attention?: ReactNode;
   buttonRef?: (element: HTMLButtonElement | null) => void;
   displayLane: Lane;
   dropIndicator?: "before" | "after";
@@ -352,6 +354,7 @@ export function DraggableWorkspaceCard({
     >
       <WorkspaceCard
         agent={agent}
+        attention={attention}
         buttonRef={(element) => {
           setActivatorNodeRef(element);
           buttonRef?.(element);

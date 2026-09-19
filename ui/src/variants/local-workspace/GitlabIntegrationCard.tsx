@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   GitlabIntegrationStatus,
   WorkspaceClient,
@@ -24,8 +24,11 @@ export function GitlabIntegrationCard({
   const [loadState, setLoadState] = useState<LoadState>("idle");
   const [status, setStatus] = useState<GitlabIntegrationStatus | null>(null);
   const [error, setError] = useState("");
+  const requestGeneration = useRef(0);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (resetStatus = false) => {
+    if (resetStatus) setStatus(null);
+    const generation = ++requestGeneration.current;
     if (!workspaceId) {
       setStatus(null);
       setLoadState("idle");
@@ -36,9 +39,11 @@ export function GitlabIntegrationCard({
     setError("");
     try {
       const result = await client.getGitlabIntegrationStatus(workspaceId);
+      if (generation !== requestGeneration.current) return;
       setStatus(result);
       setLoadState("ready");
     } catch (cause) {
+      if (generation !== requestGeneration.current) return;
       setLoadState("error");
       setError(
         cause instanceof Error && cause.message.trim()
@@ -49,7 +54,8 @@ export function GitlabIntegrationCard({
   }, [client, workspaceId]);
 
   useEffect(() => {
-    void load();
+    void load(true);
+    return () => { requestGeneration.current += 1; };
   }, [load]);
 
   const signedInCount = useMemo(
@@ -129,6 +135,14 @@ export function GitlabIntegrationCard({
           <>
             <span><Glyph name="check" size={13} />No GitLab host in this workspace</span>
             <small>WTS checks hosts from trusted workspace repositories.</small>
+            <button
+              className={styles.adapterVerifyButton}
+              disabled={loadState === "loading"}
+              onClick={() => void load()}
+              type="button"
+            >
+              Check again
+            </button>
           </>
         ) : (
           <>

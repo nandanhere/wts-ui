@@ -939,6 +939,70 @@ describe("VerificationPanel", () => {
     expect(fake.runWorkspaceVerification).not.toHaveBeenCalled();
   });
 
+  it.each(["resolve", "reject"])("ignores a graph build that finishes after changing workspace (%s)", async (outcome) => {
+    const user = userEvent.setup();
+    const base = workspaceEvidenceFixture();
+    const previous = workspaceEvidenceFixture({
+      graphManifest: { ...base.graphManifest, status: "notStarted" },
+    });
+    const current = workspaceEvidenceFixture({
+      context: { ...base.context, workspaceId: "workspace-current" },
+    });
+    const fake = fakeWorkspaceClient();
+    fake.getWorkspaceEvidence.mockImplementation(async (id) => id === current.context.workspaceId ? current : previous);
+    const graph = deferred<unknown>();
+    const onNotice = vi.fn();
+    const props = { client: fake.client, materialized: true, onNotice, onIndexGraph: () => graph.promise, onPrepareCliTask: vi.fn() };
+    const view = render(<VerificationPanel {...props} workspaceId={previous.context.workspaceId} workspaceKey="PREVIOUS" />);
+    await expandOptionalSection(user, "Improve coverage");
+    await user.click(screen.getByRole("button", { name: "Build graph" }));
+    view.rerender(<VerificationPanel {...props} workspaceId={current.context.workspaceId} workspaceKey="CURRENT" />);
+    await screen.findByRole("button", { name: "Prepare verification brief" });
+    await act(async () => {
+      if (outcome === "resolve") graph.resolve(undefined);
+      else graph.reject(new Error("Previous workspace graph failed."));
+    });
+    expect(screen.getByRole("button", { name: "Prepare verification brief" })).toBeEnabled();
+    expect(screen.queryByText("Previous workspace graph failed.")).not.toBeInTheDocument();
+    expect(fake.getWorkspaceEvidence).toHaveBeenCalledTimes(2);
+    expect(onNotice).not.toHaveBeenCalledWith("PREVIOUS · workspace graph ready");
+    expect(onNotice).not.toHaveBeenCalledWith("PREVIOUS · workspace graph could not be built");
+  });
+
+  it("keeps an accepted check in its original workspace after navigation", async () => {
+    const user = userEvent.setup();
+    const base = workspaceEvidenceFixture();
+    const previous = workspaceEvidenceFixture({ agentReport: {
+      ...base.agentReport,
+      status: "ready",
+      proposedChecks: [{
+        id: "previous-check", label: "Previous workspace check", kind: "unit",
+        repositoryId: "repo_checkout", workingDirectory: base.context.repositories[0]!.worktreeDisplayPath,
+        executable: "cargo", args: ["test"], timeoutMs: 120_000, environmentNames: [],
+        reason: "Check the previous workspace.", evidence: ["src/lib.rs"],
+      }],
+    } });
+    const current = workspaceEvidenceFixture({
+      context: { ...base.context, workspaceId: "workspace-current" },
+      verificationPlan: { ...base.verificationPlan, checks: [{ ...base.verificationPlan.checks[0]!, label: "Current workspace check" }] },
+    });
+    const fake = fakeWorkspaceClient();
+    fake.getWorkspaceEvidence.mockImplementation(async (id) => id === current.context.workspaceId ? current : previous);
+    const promotion = deferred<typeof previous>();
+    fake.promoteAgentVerificationCheck.mockReturnValue(promotion.promise);
+    const props = { client: fake.client, materialized: true, onNotice: vi.fn() };
+    const view = render(<VerificationPanel {...props} workspaceId={previous.context.workspaceId} workspaceKey="PREVIOUS" />);
+    await expandOptionalSection(user, "Evidence and history");
+    const report = await screen.findByRole("region", { name: "Supporting evidence" });
+    await expandReportSection(user, report, "Suggested checks");
+    await user.click(within(report).getByRole("button", { name: "Add to verification" }));
+    view.rerender(<VerificationPanel {...props} workspaceId={current.context.workspaceId} workspaceKey="CURRENT" />);
+    await screen.findByText("Current workspace check");
+    await act(async () => promotion.resolve(previous));
+    expect(screen.getByText("Current workspace check")).toBeVisible();
+    expect(props.onNotice).not.toHaveBeenCalledWith("PREVIOUS · reviewed check added; ready to run");
+  });
+
   it("builds and reloads graph evidence before offering an agent brief", async () => {
     const user = userEvent.setup();
     const base = workspaceEvidenceFixture();
@@ -1444,6 +1508,193 @@ describe("VerificationPanel", () => {
       await screen.findByRole("heading", { name: "Cancelled" }),
     ).toBeVisible();
     expect(screen.getByText(/completed check evidence is preserved/i)).toBeVisible();
+  });
+
+  it("keeps a reopened host run cancellable until a terminal progress read", async () => {
+    const user = userEvent.setup();
+    const evidence = workspaceEvidenceFixture();
+    const running = workspaceEvidenceFixture({ verificationResult: { ...evidence.verificationResult, status: "running" } });
+    const cancelled = workspaceEvidenceFixture({ verificationResult: { ...evidence.verificationResult, status: "cancelled" } });
+    const fake = fakeWorkspaceClient({ evidence: running });
+    const cancelWorkspaceVerification = vi.fn().mockResolvedValue(running);
+    render(<VerificationPanel client={{ ...fake.client, cancelWorkspaceVerification }} materialized onNotice={vi.fn()} workspaceId={evidence.context.workspaceId} workspaceKey="PLATFORM-42" />);
+
+    await user.click(await screen.findByRole("button", { name: "Cancel run" }));
+    expect(screen.getByRole("button", { name: "Run in progress" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Cancel in progress" })).toBeDisabled();
+    fake.getWorkspaceEvidence.mockResolvedValue(cancelled);
+    fireEvent(document, new Event("visibilitychange"));
+    expect(await screen.findByRole("heading", { name: "Cancelled" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Run all" })).toBeEnabled();
+    expect(fake.runWorkspaceVerification).not.toHaveBeenCalled();
+  });
+
+  it.each(["running acknowledgement", "rejected acknowledgement"] as const)("keeps newer terminal progress after a late %s", async (outcome) => {
+    const user = userEvent.setup();
+    const evidence = workspaceEvidenceFixture();
+    const running = workspaceEvidenceFixture({ verificationResult: { ...evidence.verificationResult, status: "running" } });
+    const cancelled = workspaceEvidenceFixture({ verificationResult: { ...evidence.verificationResult, status: "cancelled" } });
+    const pendingCancellation = deferred<typeof evidence>();
+    const fake = fakeWorkspaceClient({ evidence: running });
+    const cancelWorkspaceVerification = vi.fn().mockReturnValue(pendingCancellation.promise);
+    render(<VerificationPanel client={{ ...fake.client, cancelWorkspaceVerification }} materialized onNotice={vi.fn()} workspaceId={evidence.context.workspaceId} workspaceKey="PLATFORM-42" />);
+
+    await user.click(await screen.findByRole("button", { name: "Cancel run" }));
+    expect(screen.getByRole("button", { name: "Cancel in progress" })).toBeDisabled();
+    fake.getWorkspaceEvidence.mockResolvedValue(cancelled);
+    fireEvent(document, new Event("visibilitychange"));
+    expect(await screen.findByRole("heading", { name: "Cancelled" })).toBeVisible();
+    await act(async () => {
+      if (outcome === "running acknowledgement") pendingCancellation.resolve(running);
+      else pendingCancellation.reject(new Error("The old cancellation request failed."));
+      await pendingCancellation.promise.catch(() => undefined);
+    });
+    expect(screen.getByRole("heading", { name: "Cancelled" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Run all" })).toBeEnabled();
+    expect(screen.queryByRole("button", { name: /Cancel (run|in progress)/ })).not.toBeInTheDocument();
+    expect(screen.queryByText("The old cancellation request failed.")).not.toBeInTheDocument();
+    expect(fake.runWorkspaceVerification).not.toHaveBeenCalled();
+  });
+
+  it("rejects pre-cancel progress after a terminal cancellation acknowledgement", async () => {
+    const user = userEvent.setup();
+    const evidence = workspaceEvidenceFixture();
+    const running = workspaceEvidenceFixture({ verificationResult: { ...evidence.verificationResult, status: "running" } });
+    const cancelled = workspaceEvidenceFixture({ verificationResult: { ...evidence.verificationResult, status: "cancelled" } });
+    const pendingProgress = deferred<typeof evidence>();
+    const fake = fakeWorkspaceClient({ evidence: running });
+    const cancelWorkspaceVerification = vi.fn().mockResolvedValue(cancelled);
+    render(<VerificationPanel client={{ ...fake.client, cancelWorkspaceVerification }} materialized onNotice={vi.fn()} workspaceId={evidence.context.workspaceId} workspaceKey="PLATFORM-42" />);
+
+    await screen.findByRole("button", { name: "Cancel run" });
+    fake.getWorkspaceEvidence.mockReturnValueOnce(pendingProgress.promise);
+    fireEvent(document, new Event("visibilitychange"));
+    await waitFor(() => expect(fake.getWorkspaceEvidence).toHaveBeenCalledTimes(2));
+    await user.click(screen.getByRole("button", { name: "Cancel run" }));
+    expect(await screen.findByRole("heading", { name: "Cancelled" })).toBeVisible();
+    await act(async () => { pendingProgress.resolve(running); await pendingProgress.promise; });
+    expect(screen.getByRole("heading", { name: "Cancelled" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Run all" })).toBeEnabled();
+  });
+
+  it("accepts the original completion when cancellation returns a running snapshot", async () => {
+    const user = userEvent.setup();
+    const evidence = workspaceEvidenceFixture();
+    const pendingRun = deferred<typeof evidence>();
+    const running = workspaceEvidenceFixture({ verificationResult: { ...evidence.verificationResult, status: "running" } });
+    const cancelled = workspaceEvidenceFixture({ verificationResult: { ...evidence.verificationResult, status: "cancelled" } });
+    const fake = fakeWorkspaceClient({ evidence });
+    fake.runWorkspaceVerification.mockReturnValue(pendingRun.promise);
+    const cancelWorkspaceVerification = vi.fn().mockResolvedValue(running);
+    render(<VerificationPanel client={{ ...fake.client, cancelWorkspaceVerification }} materialized onNotice={vi.fn()} workspaceId={evidence.context.workspaceId} workspaceKey="PLATFORM-42" />);
+
+    await user.click(await screen.findByRole("button", { name: "Run all" }));
+    await user.click(screen.getByRole("button", { name: "Cancel run" }));
+    expect(screen.getByRole("button", { name: "Cancel in progress" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Run in progress" })).toBeDisabled();
+    await act(async () => { pendingRun.resolve(cancelled); await pendingRun.promise; });
+    expect(await screen.findByRole("heading", { name: "Cancelled" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Run all" })).toBeEnabled();
+  });
+
+  it("keeps tracking an active run when a failed progress read is retried", async () => {
+    const user = userEvent.setup();
+    const evidence = workspaceEvidenceFixture();
+    const pendingRun = deferred<typeof evidence>();
+    const passed = workspaceEvidenceFixture({
+      verificationResult: {
+        ...evidence.verificationResult,
+        status: "passed",
+        checks: evidence.verificationResult.checks.map((check) => ({ ...check, status: "passed", exitCode: 0, detail: "Passed." })),
+      },
+    });
+    const fake = fakeWorkspaceClient({ evidence });
+    fake.runWorkspaceVerification.mockReturnValue(pendingRun.promise);
+    fake.getWorkspaceEvidence
+      .mockResolvedValueOnce(evidence)
+      .mockRejectedValueOnce(new Error("Progress could not be read."))
+      .mockResolvedValueOnce(evidence);
+    render(<VerificationPanel client={fake.client} materialized onNotice={vi.fn()} workspaceId={evidence.context.workspaceId} workspaceKey="PLATFORM-42" />);
+
+    await user.click(await screen.findByRole("button", { name: "Run all" }));
+    fireEvent(document, new Event("visibilitychange"));
+    await screen.findByText("Progress could not be read.");
+    await user.click(screen.getByRole("button", { name: "Try again" }));
+    await waitFor(() => expect(fake.getWorkspaceEvidence).toHaveBeenCalledTimes(3));
+    expect(screen.getByRole("button", { name: "All checks are active" })).toBeDisabled();
+    await act(async () => { pendingRun.resolve(passed); await pendingRun.promise; });
+    expect(await screen.findByRole("heading", { name: "Passed" })).toBeVisible();
+    expect(fake.runWorkspaceVerification).toHaveBeenCalledOnce();
+  });
+
+  it("keeps an active run cancellable after a rejected cancellation", async () => {
+    const user = userEvent.setup();
+    const evidence = workspaceEvidenceFixture();
+    const pendingRun = deferred<typeof evidence>();
+    const cancelled = workspaceEvidenceFixture({
+      verificationResult: { ...evidence.verificationResult, status: "cancelled" },
+    });
+    const fake = fakeWorkspaceClient({ evidence });
+    fake.runWorkspaceVerification.mockReturnValue(pendingRun.promise);
+    const cancelWorkspaceVerification = vi.fn()
+      .mockRejectedValueOnce(new Error("The cancellation request failed."))
+      .mockResolvedValueOnce(cancelled);
+    render(<VerificationPanel client={{ ...fake.client, cancelWorkspaceVerification }} materialized onNotice={vi.fn()} workspaceId={evidence.context.workspaceId} workspaceKey="PLATFORM-42" />);
+
+    await user.click(await screen.findByRole("button", { name: "Run all" }));
+    await user.click(screen.getByRole("button", { name: "Cancel run" }));
+    expect(await screen.findByText("The cancellation request failed.")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Cancel run" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "All checks are active" })).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: "Try again" }));
+    expect(cancelWorkspaceVerification).toHaveBeenCalledTimes(2);
+    expect(await screen.findByRole("heading", { name: "Cancelled" })).toBeVisible();
+    expect(screen.queryByText("The cancellation request failed.")).not.toBeInTheDocument();
+  });
+
+  it("does not restore an active run after run failure overtakes a pending cancellation", async () => {
+    const user = userEvent.setup();
+    const evidence = workspaceEvidenceFixture();
+    const pendingRun = deferred<typeof evidence>();
+    const pendingCancellation = deferred<typeof evidence>();
+    const fake = fakeWorkspaceClient({ evidence });
+    fake.runWorkspaceVerification.mockReturnValue(pendingRun.promise);
+    const cancelWorkspaceVerification = vi.fn().mockReturnValue(pendingCancellation.promise);
+    render(<VerificationPanel client={{ ...fake.client, cancelWorkspaceVerification }} materialized onNotice={vi.fn()} workspaceId={evidence.context.workspaceId} workspaceKey="PLATFORM-42" />);
+
+    await user.click(await screen.findByRole("button", { name: "Run all" }));
+    await user.click(screen.getByRole("button", { name: "Cancel run" }));
+    await act(async () => { pendingRun.reject(new Error("The run request failed.")); });
+    expect(await screen.findByText("The run request failed.")).toBeVisible();
+    await act(async () => { pendingCancellation.reject(new Error("The cancellation request failed.")); });
+    expect(screen.getByRole("button", { name: "Run all" })).toBeEnabled();
+    expect(screen.getByText("The run request failed.")).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Cancel run" })).not.toBeInTheDocument();
+  });
+
+  it("accepts the original run completion after a rejected cancellation", async () => {
+    const user = userEvent.setup();
+    const evidence = workspaceEvidenceFixture();
+    const pendingRun = deferred<typeof evidence>();
+    const passed = workspaceEvidenceFixture({
+      verificationResult: {
+        ...evidence.verificationResult,
+        status: "passed",
+        checks: evidence.verificationResult.checks.map((check) => ({ ...check, status: "passed", exitCode: 0, detail: "Passed." })),
+      },
+    });
+    const fake = fakeWorkspaceClient({ evidence });
+    fake.runWorkspaceVerification.mockReturnValue(pendingRun.promise);
+    const cancelWorkspaceVerification = vi.fn().mockRejectedValue(new Error("The cancellation request failed."));
+    render(<VerificationPanel client={{ ...fake.client, cancelWorkspaceVerification }} materialized onNotice={vi.fn()} workspaceId={evidence.context.workspaceId} workspaceKey="PLATFORM-42" />);
+
+    await user.click(await screen.findByRole("button", { name: "Run all" }));
+    await user.click(screen.getByRole("button", { name: "Cancel run" }));
+    await screen.findByText("The cancellation request failed.");
+    await act(async () => { pendingRun.resolve(passed); await pendingRun.promise; });
+    expect(await screen.findByRole("heading", { name: "Passed" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Run all" })).toBeEnabled();
+    expect(screen.queryByText("The cancellation request failed.")).not.toBeInTheDocument();
   });
 
   it("keeps command output and bounded log details disclosed on demand", async () => {

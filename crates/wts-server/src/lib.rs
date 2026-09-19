@@ -40,28 +40,28 @@ use uuid::Uuid;
 use wts_app::{
     AgentProvider, AgentRunResult, AgentSession, AgentSessionCategory, AgentSessionDetail,
     AgentSessionFailure, AgentSessionList, CloneRepositoryRequest, CloneRepositoryResult,
-    CodeWorkspaceImportRequest, CodeWorkspaceImportResult, ConfirmWorkspaceJiraLinkRequest,
-    ConfirmWorkspaceWorkItemLinkResult, CreateWorkspaceReviewThreadRequest, GraphIndexResult,
-    JiraCreateProposal, JiraIssueImport, LocalWtsError, LocalWtsService,
-    MAX_PLANNING_DOCUMENT_BYTES, MaterializeWorkspaceResult, OpenGithubReviewResult,
-    OpenProjectWorkPackageImport, OpenRepositoryBaseResult, OpenWorkspaceChangeRequestDraft,
-    OpenWorkspaceChangeRequestResult, OpenWorkspaceGitlabMergeRequestResult,
-    OpenWorkspaceJiraPreviewRequest, OpenWorkspaceResult, OpenWorkspaceWorkItemRequest,
-    OpenWorkspaceWorkItemResult, PrepareWorkspaceChangeRequest, PreviewWorkspaceJiraLinkRequest,
-    PublishWorkspaceChangeRequestBranch, RefreshRepositoryBranchesRequest,
-    RefreshRepositoryBranchesResult, RemoveWorkspaceResult, RepositoryCatalog,
-    ResolveWorkspaceReviewThreadRequest, RuntimeAnalysisRequest, RuntimeAnalysisResult,
-    TerminalProvider, TestRunList, TestRunResult, TestRunSummary, UnlinkWorkspaceWorkItemRequest,
-    UpdateWorkspacePlanningDocumentRequest, WorkspaceBranchPublicationResult,
-    WorkspaceChangeRequestDraft, WorkspaceCliLaunchResult, WorkspaceEvidence,
-    WorkspaceMaterialization, WorkspacePlanningDocument, WorkspacePlanningDocumentId,
-    WorkspacePlanningDocumentList, WorkspacePreflight, WorkspaceRemovalPreflight,
-    WorkspaceRepositoryAdditionPreflight, WorkspaceRepositoryAdditionResult,
-    WorkspaceRepositoryAlignmentPreflight, WorkspaceRepositoryAlignmentResult,
-    WorkspaceRepositoryDiff, WorkspaceRepositoryFileReview, WorkspaceRepositoryRemovalResult,
-    WorkspaceRepositoryReviewGraph, WorkspaceRepositorySyncResult, WorkspaceReviewThread,
-    WorkspaceReviewThreadList, WorkspaceWorkItemLinkList, WorkspaceWorkItemLinkPreview,
-    WorkspaceWorkItemUnlinkResult,
+    CodeReviewScope, CodeWorkspaceImportRequest, CodeWorkspaceImportResult,
+    ConfirmWorkspaceJiraLinkRequest, ConfirmWorkspaceWorkItemLinkResult,
+    CreateWorkspaceReviewThreadRequest, GraphIndexResult, JiraCreateProposal, JiraIssueImport,
+    LocalWtsError, LocalWtsService, MAX_PLANNING_DOCUMENT_BYTES, MaterializeWorkspaceResult,
+    OpenGithubReviewResult, OpenProjectWorkPackageImport, OpenRepositoryBaseResult,
+    OpenWorkspaceChangeRequestDraft, OpenWorkspaceChangeRequestResult,
+    OpenWorkspaceGitlabMergeRequestResult, OpenWorkspaceJiraPreviewRequest, OpenWorkspaceResult,
+    OpenWorkspaceWorkItemRequest, OpenWorkspaceWorkItemResult, PrepareWorkspaceChangeRequest,
+    PreviewWorkspaceJiraLinkRequest, PublishWorkspaceChangeRequestBranch,
+    RefreshRepositoryBranchesRequest, RefreshRepositoryBranchesResult, RemoveWorkspaceResult,
+    RepositoryCatalog, ResolveWorkspaceReviewThreadRequest, RunWorkspaceCodeReviewRequest,
+    RuntimeAnalysisRequest, RuntimeAnalysisResult, TerminalProvider, TestRunList, TestRunResult,
+    TestRunSummary, UnlinkWorkspaceWorkItemRequest, UpdateWorkspacePlanningDocumentRequest,
+    WorkspaceBranchPublicationResult, WorkspaceChangeRequestDraft, WorkspaceCliLaunchResult,
+    WorkspaceCodeReviewResult, WorkspaceEvidence, WorkspaceMaterialization, WorkspaceVerificationSummary,
+    WorkspacePlanningDocument, WorkspacePlanningDocumentId, WorkspacePlanningDocumentList,
+    WorkspacePreflight, WorkspaceRemovalPreflight, WorkspaceRepositoryAdditionPreflight,
+    WorkspaceRepositoryAdditionResult, WorkspaceRepositoryAlignmentPreflight,
+    WorkspaceRepositoryAlignmentResult, WorkspaceRepositoryDiff, WorkspaceRepositoryFileReview,
+    WorkspaceRepositoryRemovalResult, WorkspaceRepositoryReviewGraph,
+    WorkspaceRepositorySyncResult, WorkspaceReviewThread, WorkspaceReviewThreadList,
+    WorkspaceWorkItemLinkList, WorkspaceWorkItemLinkPreview, WorkspaceWorkItemUnlinkResult,
 };
 use wts_core::{
     BoundaryCompiler, BoundaryDraft, RepositoryPin, ServiceSpec, WorkspaceBoundary,
@@ -240,6 +240,7 @@ pub enum MvpFailure {
     RepositoryCatalogUnavailable,
     InvalidRepositoryRemote,
     RepositoryCloneConflict,
+    RepositoryCloneBranchUnavailable,
     RepositoryCloneFailed,
     RepositoryFetchFailed,
     RepositoryNotFound,
@@ -247,6 +248,9 @@ pub enum MvpFailure {
     RepositoryFileUnavailable,
     RepositoryFileNotText,
     RepositoryFileTooLarge,
+    RepositoryFileConflict,
+    InvalidRepositoryFileRevision,
+    GitlabComparisonUnavailable,
     RepositoryChanged,
     RepositorySyncBlocked,
     RepositorySyncDiverged,
@@ -264,6 +268,8 @@ pub enum MvpFailure {
     RepositoryBaseNotFound,
     RepositoryForgeUnsupported,
     GitlabReviewCommentFailed,
+    GitlabDiscussionsUnavailable,
+    GitlabDiscussionReplyFailed,
     ChangeRequestBranchNotPublished,
     ChangeRequestBranchPublishFailed,
     InvalidChangeRequestBranchName,
@@ -336,6 +342,16 @@ pub enum MvpFailure {
     WorkspaceRemovalBlocked,
     WorkspaceRemovalFailed,
     IdempotencyConflict,
+    InvalidAgentConversation,
+    AgentConversationNotFound,
+    AgentConversationConflict,
+    AgentConversationBusy,
+    AgentConversationQueueFull,
+    AgentConversationUnavailable,
+    AgentConversationSourceUnavailable,
+    AgentConversationStorageFull,
+    AgentConversationLimit,
+    AgentConversationPlatformUnavailable,
     InvalidAgentPrompt,
     AgentSessionUnavailable,
     InvalidAgentSessionStore,
@@ -389,6 +405,9 @@ pub trait MvpBackend: RegistryBackend {
     type GithubReviewInbox: Serialize + Send + 'static;
     type GithubReviewOpen: Serialize + Send + 'static;
     type GitlabReviewInbox: Serialize + Send + 'static;
+    type GitlabDiscussions: Serialize + Send + 'static;
+    type GitlabDiscussionReply: Serialize + Send + 'static;
+    type GitlabReviewCommentPublication: Serialize + Send + 'static;
     type GitlabMergeRequestInbox: Serialize + Send + 'static;
     type GitlabMergeRequestOpen: Serialize + Send + 'static;
     type GitlabIntegrationStatus: Serialize + Send + 'static;
@@ -405,6 +424,8 @@ pub trait MvpBackend: RegistryBackend {
     type ExistingMaterialization: Serialize + Send + 'static;
     type RepositoryDiff: Serialize + Send + 'static;
     type RepositoryFileReview: Serialize + Send + 'static;
+    type GitlabComparison: Serialize + Send + 'static;
+    type RepositorySource: Serialize + Send + 'static;
     type RepositoryReviewGraph: Serialize + Send + 'static;
     type RepositorySync: Serialize + Send + 'static;
     type RepositoryAdditionPreflight: Serialize + Send + 'static;
@@ -420,6 +441,7 @@ pub trait MvpBackend: RegistryBackend {
     type RemovalPreflight: Serialize + Send + 'static;
     type Removal: Serialize + Send + 'static;
     type AgentRun: Serialize + Send + 'static;
+    type CodeReview: Serialize + Send + 'static;
     type Evidence: Serialize + Send + 'static;
     type TestRunList: Serialize + Send + 'static;
     type TestRunDetail: Serialize + Send + 'static;
@@ -450,6 +472,24 @@ pub trait MvpBackend: RegistryBackend {
         number: u64,
     ) -> Result<Self::GithubReviewOpen, MvpFailure>;
     fn gitlab_review_inbox(&self) -> Result<Self::GitlabReviewInbox, MvpFailure>;
+    fn gitlab_discussions(
+        &self,
+        repository_id: &str,
+        iid: u64,
+        workspace_id: Option<Uuid>,
+    ) -> Result<Self::GitlabDiscussions, MvpFailure>;
+    fn reply_gitlab_discussion(
+        &self,
+        repository_id: &str,
+        iid: u64,
+        request: wts_app::ReplyGitlabDiscussionRequest,
+    ) -> Result<Self::GitlabDiscussionReply, MvpFailure>;
+    fn publish_gitlab_review_comment(
+        &self,
+        repository_id: &str,
+        iid: u64,
+        request: wts_app::GitlabReviewCommentRequest,
+    ) -> Result<Self::GitlabReviewCommentPublication, MvpFailure>;
     fn gitlab_merge_requests(
         &self,
         workspace_id: Uuid,
@@ -506,6 +546,14 @@ pub trait MvpBackend: RegistryBackend {
         request: RuntimeAnalysisRequest,
     ) -> Result<Self::RuntimeAnalysis, MvpFailure>;
     fn preflight(&self, workspace_id: Uuid) -> Result<Self::Preflight, MvpFailure>;
+    fn recover_setup(
+        &self,
+        workspace_id: Uuid,
+        expected_effect_digest: &str,
+    ) -> Result<Self::Preflight, MvpFailure> {
+        let _ = (workspace_id, expected_effect_digest);
+        Err(MvpFailure::Unavailable)
+    }
     fn transition_workflow(
         &self,
         workspace_id: Uuid,
@@ -600,6 +648,25 @@ pub trait MvpBackend: RegistryBackend {
         file_path: &str,
         expected_patch_sha256: &str,
     ) -> Result<Self::RepositoryFileReview, MvpFailure>;
+    fn gitlab_comparison(
+        &self,
+        workspace_id: Uuid,
+        repository_id: &str,
+        iid: u64,
+        refresh: bool,
+    ) -> Result<Self::GitlabComparison, MvpFailure>;
+    fn repository_source(
+        &self,
+        workspace_id: Uuid,
+        repository_id: &str,
+        file_path: &str,
+    ) -> Result<Self::RepositorySource, MvpFailure>;
+    fn save_repository_source(
+        &self,
+        workspace_id: Uuid,
+        repository_id: &str,
+        request: wts_app::WorkspaceRepositorySourceSaveRequest,
+    ) -> Result<Self::RepositorySource, MvpFailure>;
     fn repository_review_graph(
         &self,
         workspace_id: Uuid,
@@ -674,6 +741,152 @@ pub trait MvpBackend: RegistryBackend {
         &self,
         workspace_id: Option<Uuid>,
     ) -> Result<AgentSessionList, MvpFailure>;
+    fn create_agent_work_set(
+        &self,
+        conversation_id: Uuid,
+        turn_request_id: Uuid,
+        request: wts_app::CreateAgentWorkSetRequest,
+    ) -> Result<wts_app::AgentWorkSet, MvpFailure> {
+        let _ = (conversation_id, turn_request_id, request);
+        Err(MvpFailure::Unavailable)
+    }
+    fn list_agent_work_sets(
+        &self,
+        conversation_id: Uuid,
+        request_id: Uuid,
+    ) -> Result<wts_app::AgentWorkSetList, MvpFailure> {
+        let _ = (conversation_id, request_id);
+        Err(MvpFailure::Unavailable)
+    }
+    fn get_agent_work_set(&self, work_set_id: Uuid) -> Result<wts_app::AgentWorkSet, MvpFailure> {
+        let _ = (work_set_id,);
+        Err(MvpFailure::Unavailable)
+    }
+    fn cancel_agent_work_item(
+        &self,
+        work_set_id: Uuid,
+        task_id: Uuid,
+        request: wts_app::AgentWorkItemCancelRequest,
+    ) -> Result<wts_app::AgentWorkSet, MvpFailure> {
+        let _ = (work_set_id, task_id, request);
+        Err(MvpFailure::Unavailable)
+    }
+    fn preflight_agent_work_item_integration(
+        &self,
+        work_set_id: Uuid,
+        task_id: Uuid,
+    ) -> Result<wts_app::AgentWorkItemIntegrationPreflight, MvpFailure> {
+        let _ = (work_set_id, task_id);
+        Err(MvpFailure::Unavailable)
+    }
+    fn integrate_agent_work_item(
+        &self,
+        work_set_id: Uuid,
+        task_id: Uuid,
+        request: wts_app::IntegrateAgentWorkItemRequest,
+    ) -> Result<wts_app::AgentWorkItemIntegrationResult, MvpFailure> {
+        let _ = (work_set_id, task_id, request);
+        Err(MvpFailure::Unavailable)
+    }
+    fn create_agent_conversation(
+        &self,
+        request: wts_app::CreateAgentConversationRequest,
+    ) -> Result<wts_app::AgentConversation, MvpFailure> {
+        let _ = request;
+        Err(MvpFailure::Unavailable)
+    }
+    fn list_agent_conversations(&self) -> Result<wts_app::AgentConversationList, MvpFailure> {
+        Err(MvpFailure::Unavailable)
+    }
+    fn get_agent_conversation(&self, id: Uuid) -> Result<wts_app::AgentConversation, MvpFailure> {
+        let _ = id;
+        Err(MvpFailure::Unavailable)
+    }
+    fn get_agent_turn_changes(
+        &self,
+        conversation_id: Uuid,
+        request_id: Uuid,
+    ) -> Result<wts_app::AgentTurnChanges, MvpFailure> {
+        let _ = (conversation_id, request_id);
+        Err(MvpFailure::Unavailable)
+    }
+    fn get_agent_turn_decisions(
+        &self,
+        conversation_id: Uuid,
+        request_id: Uuid,
+    ) -> Result<wts_app::AgentTurnDecisions, MvpFailure> {
+        let _ = (conversation_id, request_id);
+        Err(MvpFailure::Unavailable)
+    }
+    fn record_agent_turn_decision(
+        &self,
+        conversation_id: Uuid,
+        turn_request_id: Uuid,
+        request: wts_app::RecordAgentTurnDecisionRequest,
+    ) -> Result<wts_app::AgentTurnDecisions, MvpFailure> {
+        let _ = (conversation_id, turn_request_id, request);
+        Err(MvpFailure::Unavailable)
+    }
+    fn get_agent_turn_checks(
+        &self,
+        conversation_id: Uuid,
+        request_id: Uuid,
+    ) -> Result<wts_app::AgentTurnChecks, MvpFailure> {
+        let _ = (conversation_id, request_id);
+        Err(MvpFailure::Unavailable)
+    }
+    fn run_agent_turn_check(
+        &self,
+        conversation_id: Uuid,
+        turn_request_id: Uuid,
+        request: wts_app::RunAgentTurnCheckRequest,
+    ) -> Result<wts_app::AgentTurnChecks, MvpFailure> {
+        let _ = (conversation_id, turn_request_id, request);
+        Err(MvpFailure::Unavailable)
+    }
+    fn preflight_agent_turn_restore(
+        &self,
+        conversation_id: Uuid,
+        request_id: Uuid,
+    ) -> Result<wts_app::AgentTurnRestorePreflight, MvpFailure> {
+        let _ = (conversation_id, request_id);
+        Err(MvpFailure::Unavailable)
+    }
+    fn restore_agent_turn(
+        &self,
+        conversation_id: Uuid,
+        turn_request_id: Uuid,
+        request: wts_app::AgentTurnRestoreRequest,
+    ) -> Result<wts_app::AgentTurnRestoreResult, MvpFailure> {
+        let _ = (conversation_id, turn_request_id, request);
+        Err(MvpFailure::Unavailable)
+    }
+    fn send_agent_conversation_message(
+        &self,
+        id: Uuid,
+        request: wts_app::SendAgentConversationMessageRequest,
+    ) -> Result<wts_app::AgentConversation, MvpFailure> {
+        let _ = (id, request);
+        Err(MvpFailure::Unavailable)
+    }
+    fn update_agent_conversation_message(
+        &self,
+        id: Uuid,
+        message_id: Uuid,
+        request: wts_app::UpdateAgentConversationMessageRequest,
+    ) -> Result<wts_app::AgentConversation, MvpFailure> {
+        let _ = (id, message_id, request);
+        Err(MvpFailure::Unavailable)
+    }
+    fn cancel_agent_conversation_message(
+        &self,
+        id: Uuid,
+        message_id: Uuid,
+        request: wts_app::CancelAgentConversationMessageRequest,
+    ) -> Result<wts_app::AgentConversation, MvpFailure> {
+        let _ = (id, message_id, request);
+        Err(MvpFailure::Unavailable)
+    }
     fn get_agent_session_detail(&self, session_id: Uuid) -> Result<AgentSessionDetail, MvpFailure> {
         let _ = session_id;
         Err(MvpFailure::Unavailable)
@@ -703,11 +916,25 @@ pub trait MvpBackend: RegistryBackend {
         Err(MvpFailure::Unavailable)
     }
     fn get_evidence(&self, workspace_id: Uuid) -> Result<Option<Self::Evidence>, MvpFailure>;
+    fn get_verification_summary(&self, workspace_id: Uuid) -> Result<Option<WorkspaceVerificationSummary>, MvpFailure> {
+        let _ = workspace_id;
+        Err(MvpFailure::Unavailable)
+    }
     fn promote_agent_check(
         &self,
         workspace_id: Uuid,
         proposal_id: &str,
     ) -> Result<Self::Evidence, MvpFailure>;
+    fn run_code_review(
+        &self,
+        workspace_id: Uuid,
+        provider: AgentProvider,
+        scope: CodeReviewScope,
+        agent: Option<&str>,
+    ) -> Result<Self::CodeReview, MvpFailure> {
+        let _ = (workspace_id, provider, scope, agent);
+        Err(MvpFailure::Unavailable)
+    }
     fn run_verification(&self, workspace_id: Uuid) -> Result<Self::Evidence, MvpFailure>;
     fn run_verification_check(
         &self,
@@ -829,6 +1056,9 @@ impl MvpBackend for LocalWtsService {
     type GithubReviewInbox = GithubReviewInbox;
     type GithubReviewOpen = OpenGithubReviewResult;
     type GitlabReviewInbox = wts_app::GitlabReviewInbox;
+    type GitlabDiscussions = wts_app::GitlabDiscussions;
+    type GitlabDiscussionReply = wts_app::ReplyGitlabDiscussionResult;
+    type GitlabReviewCommentPublication = wts_app::PublishGitlabReviewCommentResult;
     type GitlabMergeRequestInbox = wts_app::GitlabMergeRequestInbox;
     type GitlabMergeRequestOpen = OpenWorkspaceGitlabMergeRequestResult;
     type GitlabIntegrationStatus = GitlabIntegrationStatus;
@@ -845,6 +1075,8 @@ impl MvpBackend for LocalWtsService {
     type ExistingMaterialization = WorkspaceMaterialization;
     type RepositoryDiff = WorkspaceRepositoryDiff;
     type RepositoryFileReview = WorkspaceRepositoryFileReview;
+    type GitlabComparison = wts_app::WorkspaceGitlabComparison;
+    type RepositorySource = wts_app::WorkspaceRepositorySource;
     type RepositoryReviewGraph = WorkspaceRepositoryReviewGraph;
     type RepositorySync = WorkspaceRepositorySyncResult;
     type RepositoryAdditionPreflight = WorkspaceRepositoryAdditionPreflight;
@@ -860,6 +1092,7 @@ impl MvpBackend for LocalWtsService {
     type RemovalPreflight = WorkspaceRemovalPreflight;
     type Removal = RemoveWorkspaceResult;
     type AgentRun = AgentRunResult;
+    type CodeReview = WorkspaceCodeReviewResult;
     type Evidence = WorkspaceEvidence;
     type TestRunList = TestRunList;
     type TestRunDetail = TestRunResult;
@@ -903,11 +1136,41 @@ impl MvpBackend for LocalWtsService {
         LocalWtsService::gitlab_review_inbox(self).map_err(map_local_mvp_error)
     }
 
+    fn gitlab_discussions(
+        &self,
+        repository_id: &str,
+        iid: u64,
+        workspace_id: Option<Uuid>,
+    ) -> Result<Self::GitlabDiscussions, MvpFailure> {
+        LocalWtsService::gitlab_discussions(self, repository_id, iid, workspace_id)
+            .map_err(map_local_mvp_error)
+    }
+
+    fn reply_gitlab_discussion(
+        &self,
+        repository_id: &str,
+        iid: u64,
+        request: wts_app::ReplyGitlabDiscussionRequest,
+    ) -> Result<Self::GitlabDiscussionReply, MvpFailure> {
+        LocalWtsService::reply_gitlab_discussion(self, repository_id, iid, request)
+            .map_err(map_local_mvp_error)
+    }
+
     fn gitlab_merge_requests(
         &self,
         workspace_id: Uuid,
     ) -> Result<Self::GitlabMergeRequestInbox, MvpFailure> {
         LocalWtsService::gitlab_merge_requests(self, workspace_id).map_err(map_local_mvp_error)
+    }
+
+    fn publish_gitlab_review_comment(
+        &self,
+        repository_id: &str,
+        iid: u64,
+        request: wts_app::GitlabReviewCommentRequest,
+    ) -> Result<Self::GitlabReviewCommentPublication, MvpFailure> {
+        LocalWtsService::publish_gitlab_review_comment(self, repository_id, iid, request)
+            .map_err(map_local_mvp_error)
     }
 
     fn gitlab_integration_status(
@@ -1013,6 +1276,15 @@ impl MvpBackend for LocalWtsService {
 
     fn preflight(&self, workspace_id: Uuid) -> Result<Self::Preflight, MvpFailure> {
         self.preflight_workspace(workspace_id)
+            .map_err(map_local_mvp_error)
+    }
+
+    fn recover_setup(
+        &self,
+        workspace_id: Uuid,
+        expected_effect_digest: &str,
+    ) -> Result<Self::Preflight, MvpFailure> {
+        self.recover_workspace_setup(workspace_id, expected_effect_digest)
             .map_err(map_local_mvp_error)
     }
 
@@ -1225,6 +1497,35 @@ impl MvpBackend for LocalWtsService {
         .map_err(map_local_mvp_error)
     }
 
+    fn gitlab_comparison(
+        &self,
+        workspace_id: Uuid,
+        repository_id: &str,
+        iid: u64,
+        refresh: bool,
+    ) -> Result<Self::GitlabComparison, MvpFailure> {
+        self.workspace_gitlab_comparison(workspace_id, repository_id, iid, refresh)
+            .map_err(map_local_mvp_error)
+    }
+    fn repository_source(
+        &self,
+        workspace_id: Uuid,
+        repository_id: &str,
+        file_path: &str,
+    ) -> Result<Self::RepositorySource, MvpFailure> {
+        self.workspace_repository_source(workspace_id, repository_id, file_path)
+            .map_err(map_local_mvp_error)
+    }
+    fn save_repository_source(
+        &self,
+        workspace_id: Uuid,
+        repository_id: &str,
+        request: wts_app::WorkspaceRepositorySourceSaveRequest,
+    ) -> Result<Self::RepositorySource, MvpFailure> {
+        self.save_workspace_repository_source(workspace_id, repository_id, request)
+            .map_err(map_local_mvp_error)
+    }
+
     fn repository_review_graph(
         &self,
         workspace_id: Uuid,
@@ -1343,6 +1644,149 @@ impl MvpBackend for LocalWtsService {
         LocalWtsService::list_agent_sessions(self, workspace_id).map_err(map_local_mvp_error)
     }
 
+    fn create_agent_work_set(
+        &self,
+        conversation_id: Uuid,
+        turn_request_id: Uuid,
+        request: wts_app::CreateAgentWorkSetRequest,
+    ) -> Result<wts_app::AgentWorkSet, MvpFailure> {
+        LocalWtsService::create_agent_work_set(self, conversation_id, turn_request_id, request)
+            .map_err(map_local_mvp_error)
+    }
+    fn list_agent_work_sets(
+        &self,
+        conversation_id: Uuid,
+        request_id: Uuid,
+    ) -> Result<wts_app::AgentWorkSetList, MvpFailure> {
+        LocalWtsService::list_agent_work_sets(self, conversation_id, request_id)
+            .map_err(map_local_mvp_error)
+    }
+    fn get_agent_work_set(&self, work_set_id: Uuid) -> Result<wts_app::AgentWorkSet, MvpFailure> {
+        LocalWtsService::get_agent_work_set(self, work_set_id).map_err(map_local_mvp_error)
+    }
+    fn cancel_agent_work_item(
+        &self,
+        work_set_id: Uuid,
+        task_id: Uuid,
+        request: wts_app::AgentWorkItemCancelRequest,
+    ) -> Result<wts_app::AgentWorkSet, MvpFailure> {
+        LocalWtsService::cancel_agent_work_item(self, work_set_id, task_id, request)
+            .map_err(map_local_mvp_error)
+    }
+    fn preflight_agent_work_item_integration(
+        &self,
+        work_set_id: Uuid,
+        task_id: Uuid,
+    ) -> Result<wts_app::AgentWorkItemIntegrationPreflight, MvpFailure> {
+        LocalWtsService::preflight_agent_work_item_integration(self, work_set_id, task_id)
+            .map_err(map_local_mvp_error)
+    }
+    fn integrate_agent_work_item(
+        &self,
+        work_set_id: Uuid,
+        task_id: Uuid,
+        request: wts_app::IntegrateAgentWorkItemRequest,
+    ) -> Result<wts_app::AgentWorkItemIntegrationResult, MvpFailure> {
+        LocalWtsService::integrate_agent_work_item(self, work_set_id, task_id, request)
+            .map_err(map_local_mvp_error)
+    }
+    fn create_agent_conversation(
+        &self,
+        request: wts_app::CreateAgentConversationRequest,
+    ) -> Result<wts_app::AgentConversation, MvpFailure> {
+        LocalWtsService::create_agent_conversation(self, request).map_err(map_local_mvp_error)
+    }
+    fn list_agent_conversations(&self) -> Result<wts_app::AgentConversationList, MvpFailure> {
+        LocalWtsService::list_agent_conversations(self).map_err(map_local_mvp_error)
+    }
+    fn get_agent_conversation(&self, id: Uuid) -> Result<wts_app::AgentConversation, MvpFailure> {
+        LocalWtsService::get_agent_conversation(self, id).map_err(map_local_mvp_error)
+    }
+    fn get_agent_turn_changes(
+        &self,
+        conversation_id: Uuid,
+        request_id: Uuid,
+    ) -> Result<wts_app::AgentTurnChanges, MvpFailure> {
+        LocalWtsService::get_agent_turn_changes(self, conversation_id, request_id)
+            .map_err(map_local_mvp_error)
+    }
+    fn get_agent_turn_decisions(
+        &self,
+        conversation_id: Uuid,
+        request_id: Uuid,
+    ) -> Result<wts_app::AgentTurnDecisions, MvpFailure> {
+        LocalWtsService::get_agent_turn_decisions(self, conversation_id, request_id)
+            .map_err(map_local_mvp_error)
+    }
+    fn record_agent_turn_decision(
+        &self,
+        conversation_id: Uuid,
+        turn_request_id: Uuid,
+        request: wts_app::RecordAgentTurnDecisionRequest,
+    ) -> Result<wts_app::AgentTurnDecisions, MvpFailure> {
+        LocalWtsService::record_agent_turn_decision(self, conversation_id, turn_request_id, request)
+            .map_err(map_local_mvp_error)
+    }
+    fn get_agent_turn_checks(
+        &self,
+        conversation_id: Uuid,
+        request_id: Uuid,
+    ) -> Result<wts_app::AgentTurnChecks, MvpFailure> {
+        LocalWtsService::get_agent_turn_checks(self, conversation_id, request_id)
+            .map_err(map_local_mvp_error)
+    }
+    fn run_agent_turn_check(
+        &self,
+        conversation_id: Uuid,
+        turn_request_id: Uuid,
+        request: wts_app::RunAgentTurnCheckRequest,
+    ) -> Result<wts_app::AgentTurnChecks, MvpFailure> {
+        LocalWtsService::run_agent_turn_check(self, conversation_id, turn_request_id, request)
+            .map_err(map_local_mvp_error)
+    }
+    fn preflight_agent_turn_restore(
+        &self,
+        conversation_id: Uuid,
+        request_id: Uuid,
+    ) -> Result<wts_app::AgentTurnRestorePreflight, MvpFailure> {
+        LocalWtsService::preflight_agent_turn_restore(self, conversation_id, request_id)
+            .map_err(map_local_mvp_error)
+    }
+    fn restore_agent_turn(
+        &self,
+        conversation_id: Uuid,
+        turn_request_id: Uuid,
+        request: wts_app::AgentTurnRestoreRequest,
+    ) -> Result<wts_app::AgentTurnRestoreResult, MvpFailure> {
+        LocalWtsService::restore_agent_turn(self, conversation_id, turn_request_id, request)
+            .map_err(map_local_mvp_error)
+    }
+    fn send_agent_conversation_message(
+        &self,
+        id: Uuid,
+        request: wts_app::SendAgentConversationMessageRequest,
+    ) -> Result<wts_app::AgentConversation, MvpFailure> {
+        LocalWtsService::send_agent_conversation_message(self, id, request)
+            .map_err(map_local_mvp_error)
+    }
+    fn update_agent_conversation_message(
+        &self,
+        id: Uuid,
+        message_id: Uuid,
+        request: wts_app::UpdateAgentConversationMessageRequest,
+    ) -> Result<wts_app::AgentConversation, MvpFailure> {
+        LocalWtsService::update_agent_conversation_message(self, id, message_id, request)
+            .map_err(map_local_mvp_error)
+    }
+    fn cancel_agent_conversation_message(
+        &self,
+        id: Uuid,
+        message_id: Uuid,
+        request: wts_app::CancelAgentConversationMessageRequest,
+    ) -> Result<wts_app::AgentConversation, MvpFailure> {
+        LocalWtsService::cancel_agent_conversation_message(self, id, message_id, request)
+            .map_err(map_local_mvp_error)
+    }
     fn get_agent_session_detail(&self, session_id: Uuid) -> Result<AgentSessionDetail, MvpFailure> {
         LocalWtsService::get_agent_session_detail(self, session_id).map_err(map_local_mvp_error)
     }
@@ -1386,6 +1830,10 @@ impl MvpBackend for LocalWtsService {
         LocalWtsService::stop_agent_session(self, session_id).map_err(map_local_mvp_error)
     }
 
+    fn get_verification_summary(&self, workspace_id: Uuid) -> Result<Option<WorkspaceVerificationSummary>, MvpFailure> {
+        self.get_workspace_verification_summary(workspace_id).map_err(map_local_mvp_error)
+    }
+
     fn get_evidence(&self, workspace_id: Uuid) -> Result<Option<Self::Evidence>, MvpFailure> {
         self.get_workspace_evidence(workspace_id)
             .map_err(map_local_mvp_error)
@@ -1397,6 +1845,17 @@ impl MvpBackend for LocalWtsService {
         proposal_id: &str,
     ) -> Result<Self::Evidence, MvpFailure> {
         self.promote_agent_verification_check(workspace_id, proposal_id)
+            .map_err(map_local_mvp_error)
+    }
+
+    fn run_code_review(
+        &self,
+        workspace_id: Uuid,
+        provider: AgentProvider,
+        scope: CodeReviewScope,
+        agent: Option<&str>,
+    ) -> Result<Self::CodeReview, MvpFailure> {
+        self.run_workspace_code_review(workspace_id, provider, scope, agent)
             .map_err(map_local_mvp_error)
     }
 
@@ -1531,6 +1990,9 @@ fn map_local_mvp_error(error: LocalWtsError) -> MvpFailure {
         LocalWtsError::RepositoryCatalogUnavailable => MvpFailure::RepositoryCatalogUnavailable,
         LocalWtsError::InvalidRepositoryRemote => MvpFailure::InvalidRepositoryRemote,
         LocalWtsError::RepositoryCloneConflict => MvpFailure::RepositoryCloneConflict,
+        LocalWtsError::RepositoryCloneBranchUnavailable => {
+            MvpFailure::RepositoryCloneBranchUnavailable
+        }
         LocalWtsError::RepositoryCloneFailed => MvpFailure::RepositoryCloneFailed,
         LocalWtsError::RepositoryFetchFailed => MvpFailure::RepositoryFetchFailed,
         LocalWtsError::RepositoryNotFound => MvpFailure::RepositoryNotFound,
@@ -1538,11 +2000,16 @@ fn map_local_mvp_error(error: LocalWtsError) -> MvpFailure {
         LocalWtsError::RepositoryFileUnavailable => MvpFailure::RepositoryFileUnavailable,
         LocalWtsError::RepositoryFileNotText => MvpFailure::RepositoryFileNotText,
         LocalWtsError::RepositoryFileTooLarge => MvpFailure::RepositoryFileTooLarge,
+        LocalWtsError::RepositoryFileConflict => MvpFailure::RepositoryFileConflict,
+        LocalWtsError::InvalidRepositoryFileRevision => MvpFailure::InvalidRepositoryFileRevision,
+        LocalWtsError::GitlabComparisonUnavailable => MvpFailure::GitlabComparisonUnavailable,
         LocalWtsError::RepositoryChanged => MvpFailure::RepositoryChanged,
         LocalWtsError::InvalidRepositoryBase => MvpFailure::InvalidRepositoryBase,
         LocalWtsError::RepositoryBaseNotFound => MvpFailure::RepositoryBaseNotFound,
         LocalWtsError::RepositoryForgeUnsupported => MvpFailure::RepositoryForgeUnsupported,
         LocalWtsError::GitlabReviewCommentFailed => MvpFailure::GitlabReviewCommentFailed,
+        LocalWtsError::GitlabDiscussionsUnavailable => MvpFailure::GitlabDiscussionsUnavailable,
+        LocalWtsError::GitlabDiscussionReplyFailed => MvpFailure::GitlabDiscussionReplyFailed,
         LocalWtsError::ChangeRequestBranchNotPublished => {
             MvpFailure::ChangeRequestBranchNotPublished
         }
@@ -1644,6 +2111,20 @@ fn map_local_mvp_error(error: LocalWtsError) -> MvpFailure {
         LocalWtsError::GraphRequired => MvpFailure::GraphRequired,
         LocalWtsError::RemovalBlocked { .. } => MvpFailure::WorkspaceRemovalBlocked,
         LocalWtsError::RemovalFailed => MvpFailure::WorkspaceRemovalFailed,
+        LocalWtsError::InvalidAgentConversation => MvpFailure::InvalidAgentConversation,
+        LocalWtsError::AgentConversationNotFound => MvpFailure::AgentConversationNotFound,
+        LocalWtsError::AgentConversationConflict => MvpFailure::AgentConversationConflict,
+        LocalWtsError::AgentConversationBusy => MvpFailure::AgentConversationBusy,
+        LocalWtsError::AgentConversationQueueFull => MvpFailure::AgentConversationQueueFull,
+        LocalWtsError::AgentConversationPlatformUnavailable => {
+            MvpFailure::AgentConversationPlatformUnavailable
+        }
+        LocalWtsError::AgentConversationStorageFull => MvpFailure::AgentConversationStorageFull,
+        LocalWtsError::AgentConversationLimit => MvpFailure::AgentConversationLimit,
+        LocalWtsError::AgentConversationSourceUnavailable => {
+            MvpFailure::AgentConversationSourceUnavailable
+        }
+        LocalWtsError::AgentConversationUnavailable => MvpFailure::AgentConversationUnavailable,
         LocalWtsError::InvalidAgentPrompt => MvpFailure::InvalidAgentPrompt,
         LocalWtsError::AgentSessionUnavailable => MvpFailure::AgentSessionUnavailable,
         LocalWtsError::InvalidAgentSessionStore => MvpFailure::InvalidAgentSessionStore,
@@ -1849,6 +2330,19 @@ fn build_router_with_admission_limits<R: MvpBackend>(
         .route("/reviews/github", get(get_github_review_inbox::<R>))
         .route("/reviews/gitlab", get(get_gitlab_review_inbox::<R>))
         .route(
+            "/reviews/gitlab/{repository_id}/{iid}/discussions",
+            get(get_gitlab_discussions::<R>),
+        )
+        .route(
+            "/reviews/gitlab/{repository_id}/{iid}/discussions/reply",
+            axum::routing::post(reply_gitlab_discussion::<R>),
+        )
+        .route(
+            "/reviews/gitlab/{repository_id}/{iid}/comments",
+            axum::routing::post(publish_gitlab_review_comment::<R>)
+                .layer(DefaultBodyLimit::max(16_384 * 6 + 8192)),
+        )
+        .route(
             "/reviews/github/{repository_id}/{number}/open",
             axum::routing::post(open_github_review::<R>),
         )
@@ -1968,6 +2462,10 @@ fn build_router_with_admission_limits<R: MvpBackend>(
             get(preflight_workspace::<R>),
         )
         .route(
+            "/workspaces/{workspace_id}/setup-recovery",
+            axum::routing::post(recover_workspace_setup::<R>),
+        )
+        .route(
             "/workspaces/{workspace_id}/materialization",
             get(get_workspace_materialization::<R>),
         )
@@ -1990,6 +2488,16 @@ fn build_router_with_admission_limits<R: MvpBackend>(
         .route(
             "/workspaces/{workspace_id}/repositories/{repository_id}/file",
             get(get_workspace_repository_file_review::<R>),
+        )
+        .route(
+            "/workspaces/{workspace_id}/repositories/{repository_id}/gitlab/{iid}/comparison",
+            get(get_workspace_gitlab_comparison::<R>),
+        )
+        .route(
+            "/workspaces/{workspace_id}/repositories/{repository_id}/source",
+            get(get_workspace_repository_source::<R>)
+                .put(save_workspace_repository_source::<R>)
+                .layer(DefaultBodyLimit::max(2 * 1024 * 1024 * 6 + 32 * 1024)),
         )
         .route(
             "/workspaces/{workspace_id}/repositories/{repository_id}/review-graph",
@@ -2022,6 +2530,77 @@ fn build_router_with_admission_limits<R: MvpBackend>(
         .route(
             "/workspaces/{workspace_id}/agent-brief",
             axum::routing::put(write_workspace_agent_brief::<R>),
+        )
+        .route(
+            "/agent-conversations",
+            get(list_agent_conversations::<R>)
+                .post(create_agent_conversation::<R>)
+                .layer(DefaultBodyLimit::max(4 * 1024 * 1024)),
+        )
+        .route(
+            "/agent-conversations/{conversation_id}",
+            get(get_agent_conversation::<R>),
+        )
+        .route(
+            "/agent-conversations/{conversation_id}/messages",
+            axum::routing::post(send_agent_conversation_message::<R>)
+                .layer(DefaultBodyLimit::max(16_384 * 6 + 8192)),
+        )
+        .route(
+            "/agent-conversations/{conversation_id}/messages/{message_id}",
+            axum::routing::patch(update_agent_conversation_message::<R>)
+                .layer(DefaultBodyLimit::max(2 * 16_384 * 6 + 8192)),
+        )
+        .route(
+            "/agent-conversations/{conversation_id}/messages/{message_id}/changes",
+            get(get_agent_turn_changes::<R>),
+        )
+        .route(
+            "/agent-conversations/{conversation_id}/messages/{message_id}/work-sets",
+            get(list_agent_work_sets::<R>)
+                .post(create_agent_work_set::<R>)
+                .layer(DefaultBodyLimit::max(1024 * 1024)),
+        )
+        .route(
+            "/agent-work-sets/{work_set_id}",
+            get(get_agent_work_set::<R>),
+        )
+        .route(
+            "/agent-work-sets/{work_set_id}/items/{task_id}/cancel",
+            axum::routing::post(cancel_agent_work_item::<R>).layer(DefaultBodyLimit::max(8192)),
+        )
+        .route(
+            "/agent-work-sets/{work_set_id}/items/{task_id}/integration-preflight",
+            get(preflight_agent_work_item_integration::<R>),
+        )
+        .route(
+            "/agent-work-sets/{work_set_id}/items/{task_id}/integration",
+            axum::routing::post(integrate_agent_work_item::<R>).layer(DefaultBodyLimit::max(8192)),
+        )
+        .route(
+            "/agent-conversations/{conversation_id}/messages/{message_id}/decisions",
+            get(get_agent_turn_decisions::<R>)
+                .post(record_agent_turn_decision::<R>)
+                .layer(DefaultBodyLimit::max(32768)),
+        )
+        .route(
+            "/agent-conversations/{conversation_id}/messages/{message_id}/checks",
+            get(get_agent_turn_checks::<R>)
+                .post(run_agent_turn_check::<R>)
+                .layer(DefaultBodyLimit::max(8192)),
+        )
+        .route(
+            "/agent-conversations/{conversation_id}/messages/{message_id}/restore-preflight",
+            get(preflight_agent_turn_restore::<R>),
+        )
+        .route(
+            "/agent-conversations/{conversation_id}/messages/{message_id}/restore",
+            axum::routing::post(restore_agent_turn::<R>).layer(DefaultBodyLimit::max(8192)),
+        )
+        .route(
+            "/agent-conversations/{conversation_id}/messages/{message_id}/cancel",
+            axum::routing::post(cancel_agent_conversation_message::<R>)
+                .layer(DefaultBodyLimit::max(16_384 * 6 + 8192)),
         )
         .route("/agent-sessions", get(list_agent_sessions::<R>))
         .route(
@@ -2077,8 +2656,16 @@ fn build_router_with_admission_limits<R: MvpBackend>(
             get(get_workspace_evidence::<R>),
         )
         .route(
+            "/workspaces/{workspace_id}/verification/summary",
+            get(get_workspace_verification_summary::<R>),
+        )
+        .route(
             "/workspaces/{workspace_id}/verification/run",
             axum::routing::post(run_workspace_verification::<R>),
+        )
+        .route(
+            "/workspaces/{workspace_id}/code-review/run",
+            axum::routing::post(run_workspace_code_review::<R>),
         )
         .route(
             "/workspaces/{workspace_id}/verification/checks/{check_id}/run",
@@ -2224,6 +2811,51 @@ async fn get_gitlab_review_inbox<R: MvpBackend>(
     let backend = Arc::clone(&state.registry);
     run_mvp_operation(&state.admission, OperationClass::Heavy, move || {
         backend.gitlab_review_inbox()
+    })
+    .await
+    .map(Json)
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct GitlabDiscussionsQuery {
+    workspace_id: Option<Uuid>,
+}
+
+async fn publish_gitlab_review_comment<R: MvpBackend>(
+    State(state): State<AppState<R>>,
+    AxumPath((repository_id, iid)): AxumPath<(String, u64)>,
+    ApiJson(request): ApiJson<wts_app::GitlabReviewCommentRequest>,
+) -> Result<Json<R::GitlabReviewCommentPublication>, ApiError> {
+    let backend = Arc::clone(&state.registry);
+    run_mvp_operation(&state.admission, OperationClass::Heavy, move || {
+        backend.publish_gitlab_review_comment(&repository_id, iid, request)
+    })
+    .await
+    .map(Json)
+}
+
+async fn get_gitlab_discussions<R: MvpBackend>(
+    State(state): State<AppState<R>>,
+    AxumPath((repository_id, iid)): AxumPath<(String, u64)>,
+    Query(query): Query<GitlabDiscussionsQuery>,
+) -> Result<Json<R::GitlabDiscussions>, ApiError> {
+    let backend = Arc::clone(&state.registry);
+    run_mvp_operation(&state.admission, OperationClass::Heavy, move || {
+        backend.gitlab_discussions(&repository_id, iid, query.workspace_id)
+    })
+    .await
+    .map(Json)
+}
+
+async fn reply_gitlab_discussion<R: MvpBackend>(
+    State(state): State<AppState<R>>,
+    AxumPath((repository_id, iid)): AxumPath<(String, u64)>,
+    ApiJson(request): ApiJson<wts_app::ReplyGitlabDiscussionRequest>,
+) -> Result<Json<R::GitlabDiscussionReply>, ApiError> {
+    let backend = Arc::clone(&state.registry);
+    run_mvp_operation(&state.admission, OperationClass::Heavy, move || {
+        backend.reply_gitlab_discussion(&repository_id, iid, request)
     })
     .await
     .map(Json)
@@ -2694,6 +3326,33 @@ async fn preflight_workspace<R: MvpBackend>(
     .map(Json)
 }
 
+async fn recover_workspace_setup<R: MvpBackend>(
+    State(state): State<AppState<R>>,
+    AxumPath(workspace_id): AxumPath<String>,
+    ApiJson(request): ApiJson<MaterializeRequest>,
+) -> Result<Json<R::Preflight>, ApiError> {
+    let workspace_id = parse_workspace_id(&workspace_id)?;
+    if !request
+        .effect_digest
+        .strip_prefix("sha256:")
+        .is_some_and(|digest| {
+            digest.len() == 64 && digest.bytes().all(|byte| byte.is_ascii_hexdigit())
+        })
+    {
+        return Err(ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid_request",
+            "Use the current setup recovery review, then try again.",
+        ));
+    }
+    let backend = Arc::clone(&state.registry);
+    run_mvp_operation(&state.admission, OperationClass::Heavy, move || {
+        backend.recover_setup(workspace_id, &request.effect_digest)
+    })
+    .await
+    .map(Json)
+}
+
 async fn get_workspace_materialization<R: MvpBackend>(
     State(state): State<AppState<R>>,
     AxumPath(workspace_id): AxumPath<String>,
@@ -2788,6 +3447,61 @@ async fn get_workspace_repository_diff<R: MvpBackend>(
 struct RepositoryFileReviewQuery {
     path: String,
     expected_patch_sha256: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct GitlabComparisonQuery {
+    #[serde(default)]
+    refresh: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RepositorySourceQuery {
+    file_path: String,
+}
+
+async fn get_workspace_gitlab_comparison<R: MvpBackend>(
+    State(state): State<AppState<R>>,
+    AxumPath((workspace_id, repository_id, iid)): AxumPath<(String, String, u64)>,
+    Query(query): Query<GitlabComparisonQuery>,
+) -> Result<Json<R::GitlabComparison>, ApiError> {
+    let workspace_id = parse_workspace_id(&workspace_id)?;
+    let backend = Arc::clone(&state.registry);
+    run_mvp_operation(&state.admission, OperationClass::Heavy, move || {
+        backend.gitlab_comparison(workspace_id, &repository_id, iid, query.refresh)
+    })
+    .await
+    .map(Json)
+}
+
+async fn get_workspace_repository_source<R: MvpBackend>(
+    State(state): State<AppState<R>>,
+    AxumPath((workspace_id, repository_id)): AxumPath<(String, String)>,
+    Query(query): Query<RepositorySourceQuery>,
+) -> Result<Json<R::RepositorySource>, ApiError> {
+    let workspace_id = parse_workspace_id(&workspace_id)?;
+    let backend = Arc::clone(&state.registry);
+    run_mvp_operation(&state.admission, OperationClass::Scan, move || {
+        backend.repository_source(workspace_id, &repository_id, &query.file_path)
+    })
+    .await
+    .map(Json)
+}
+
+async fn save_workspace_repository_source<R: MvpBackend>(
+    State(state): State<AppState<R>>,
+    AxumPath((workspace_id, repository_id)): AxumPath<(String, String)>,
+    ApiJson(request): ApiJson<wts_app::WorkspaceRepositorySourceSaveRequest>,
+) -> Result<Json<R::RepositorySource>, ApiError> {
+    let workspace_id = parse_workspace_id(&workspace_id)?;
+    let backend = Arc::clone(&state.registry);
+    run_mvp_operation(&state.admission, OperationClass::Heavy, move || {
+        backend.save_repository_source(workspace_id, &repository_id, request)
+    })
+    .await
+    .map(Json)
 }
 
 async fn get_workspace_repository_file_review<R: MvpBackend>(
@@ -2969,6 +3683,273 @@ struct StartAgentSessionRequest {
     provider: AgentProvider,
     terminal: TerminalProvider,
     category: AgentSessionCategory,
+}
+
+async fn list_agent_conversations<R: MvpBackend>(
+    State(state): State<AppState<R>>,
+) -> Result<Json<wts_app::AgentConversationList>, ApiError> {
+    let backend = Arc::clone(&state.registry);
+    run_mvp_operation(&state.admission, OperationClass::Read, move || {
+        backend.list_agent_conversations()
+    })
+    .await
+    .map(Json)
+}
+
+async fn get_agent_conversation<R: MvpBackend>(
+    State(state): State<AppState<R>>,
+    AxumPath(id): AxumPath<String>,
+) -> Result<Json<wts_app::AgentConversation>, ApiError> {
+    let id = parse_workspace_id(&id)?;
+    let backend = Arc::clone(&state.registry);
+    run_mvp_operation(&state.admission, OperationClass::Read, move || {
+        backend.get_agent_conversation(id)
+    })
+    .await
+    .map(Json)
+}
+
+async fn create_agent_work_set<R: MvpBackend>(
+    State(state): State<AppState<R>>,
+    AxumPath((conversation_id, turn_request_id)): AxumPath<(String, String)>,
+    ApiJson(request): ApiJson<wts_app::CreateAgentWorkSetRequest>,
+) -> Result<Json<wts_app::AgentWorkSet>, ApiError> {
+    let conversation_id = parse_workspace_id(&conversation_id)?;
+    let turn_request_id = parse_workspace_id(&turn_request_id)?;
+    let backend = Arc::clone(&state.registry);
+    run_mvp_operation(&state.admission, OperationClass::Heavy, move || {
+        backend.create_agent_work_set(conversation_id, turn_request_id, request)
+    })
+    .await
+    .map(Json)
+}
+
+async fn list_agent_work_sets<R: MvpBackend>(
+    State(state): State<AppState<R>>,
+    AxumPath((conversation_id, request_id)): AxumPath<(String, String)>,
+) -> Result<Json<wts_app::AgentWorkSetList>, ApiError> {
+    let conversation_id = parse_workspace_id(&conversation_id)?;
+    let request_id = parse_workspace_id(&request_id)?;
+    let backend = Arc::clone(&state.registry);
+    run_mvp_operation(&state.admission, OperationClass::Heavy, move || {
+        backend.list_agent_work_sets(conversation_id, request_id)
+    })
+    .await
+    .map(Json)
+}
+
+async fn get_agent_work_set<R: MvpBackend>(
+    State(state): State<AppState<R>>,
+    AxumPath(work_set_id): AxumPath<String>,
+) -> Result<Json<wts_app::AgentWorkSet>, ApiError> {
+    let work_set_id = parse_workspace_id(&work_set_id)?;
+    let backend = Arc::clone(&state.registry);
+    run_mvp_operation(&state.admission, OperationClass::Heavy, move || {
+        backend.get_agent_work_set(work_set_id)
+    })
+    .await
+    .map(Json)
+}
+
+async fn cancel_agent_work_item<R: MvpBackend>(
+    State(state): State<AppState<R>>,
+    AxumPath((work_set_id, task_id)): AxumPath<(String, String)>,
+    ApiJson(request): ApiJson<wts_app::AgentWorkItemCancelRequest>,
+) -> Result<Json<wts_app::AgentWorkSet>, ApiError> {
+    let work_set_id = parse_workspace_id(&work_set_id)?;
+    let task_id = parse_workspace_id(&task_id)?;
+    let backend = Arc::clone(&state.registry);
+    run_mvp_operation(&state.admission, OperationClass::Heavy, move || {
+        backend.cancel_agent_work_item(work_set_id, task_id, request)
+    })
+    .await
+    .map(Json)
+}
+
+async fn preflight_agent_work_item_integration<R: MvpBackend>(
+    State(state): State<AppState<R>>,
+    AxumPath((work_set_id, task_id)): AxumPath<(String, String)>,
+) -> Result<Json<wts_app::AgentWorkItemIntegrationPreflight>, ApiError> {
+    let work_set_id = parse_workspace_id(&work_set_id)?;
+    let task_id = parse_workspace_id(&task_id)?;
+    let backend = Arc::clone(&state.registry);
+    run_mvp_operation(&state.admission, OperationClass::Heavy, move || {
+        backend.preflight_agent_work_item_integration(work_set_id, task_id)
+    })
+    .await
+    .map(Json)
+}
+
+async fn integrate_agent_work_item<R: MvpBackend>(
+    State(state): State<AppState<R>>,
+    AxumPath((work_set_id, task_id)): AxumPath<(String, String)>,
+    ApiJson(request): ApiJson<wts_app::IntegrateAgentWorkItemRequest>,
+) -> Result<Json<wts_app::AgentWorkItemIntegrationResult>, ApiError> {
+    let work_set_id = parse_workspace_id(&work_set_id)?;
+    let task_id = parse_workspace_id(&task_id)?;
+    let backend = Arc::clone(&state.registry);
+    run_mvp_operation(&state.admission, OperationClass::Heavy, move || {
+        backend.integrate_agent_work_item(work_set_id, task_id, request)
+    })
+    .await
+    .map(Json)
+}
+
+async fn create_agent_conversation<R: MvpBackend>(
+    State(state): State<AppState<R>>,
+    ApiJson(request): ApiJson<wts_app::CreateAgentConversationRequest>,
+) -> Result<Json<wts_app::AgentConversation>, ApiError> {
+    let backend = Arc::clone(&state.registry);
+    run_mvp_operation(&state.admission, OperationClass::Heavy, move || {
+        backend.create_agent_conversation(request)
+    })
+    .await
+    .map(Json)
+}
+
+async fn get_agent_turn_changes<R: MvpBackend>(
+    State(state): State<AppState<R>>,
+    AxumPath((conversation_id, request_id)): AxumPath<(String, String)>,
+) -> Result<Json<wts_app::AgentTurnChanges>, ApiError> {
+    let conversation_id = parse_workspace_id(&conversation_id)?;
+    let request_id = parse_workspace_id(&request_id)?;
+    let backend = Arc::clone(&state.registry);
+    run_mvp_operation(&state.admission, OperationClass::Heavy, move || {
+        backend.get_agent_turn_changes(conversation_id, request_id)
+    })
+    .await
+    .map(Json)
+}
+
+async fn get_agent_turn_decisions<R: MvpBackend>(
+    State(state): State<AppState<R>>,
+    AxumPath((conversation_id, request_id)): AxumPath<(String, String)>,
+) -> Result<Json<wts_app::AgentTurnDecisions>, ApiError> {
+    let conversation_id = parse_workspace_id(&conversation_id)?;
+    let request_id = parse_workspace_id(&request_id)?;
+    let backend = Arc::clone(&state.registry);
+    run_mvp_operation(&state.admission, OperationClass::Heavy, move || {
+        backend.get_agent_turn_decisions(conversation_id, request_id)
+    })
+    .await
+    .map(Json)
+}
+
+async fn record_agent_turn_decision<R: MvpBackend>(
+    State(state): State<AppState<R>>,
+    AxumPath((conversation_id, turn_request_id)): AxumPath<(String, String)>,
+    ApiJson(request): ApiJson<wts_app::RecordAgentTurnDecisionRequest>,
+) -> Result<Json<wts_app::AgentTurnDecisions>, ApiError> {
+    let conversation_id = parse_workspace_id(&conversation_id)?;
+    let turn_request_id = parse_workspace_id(&turn_request_id)?;
+    let backend = Arc::clone(&state.registry);
+    run_mvp_operation(&state.admission, OperationClass::Heavy, move || {
+        backend.record_agent_turn_decision(conversation_id, turn_request_id, request)
+    })
+    .await
+    .map(Json)
+}
+
+async fn get_agent_turn_checks<R: MvpBackend>(
+    State(state): State<AppState<R>>,
+    AxumPath((conversation_id, request_id)): AxumPath<(String, String)>,
+) -> Result<Json<wts_app::AgentTurnChecks>, ApiError> {
+    let conversation_id = parse_workspace_id(&conversation_id)?;
+    let request_id = parse_workspace_id(&request_id)?;
+    let backend = Arc::clone(&state.registry);
+    run_mvp_operation(&state.admission, OperationClass::Heavy, move || {
+        backend.get_agent_turn_checks(conversation_id, request_id)
+    })
+    .await
+    .map(Json)
+}
+
+async fn run_agent_turn_check<R: MvpBackend>(
+    State(state): State<AppState<R>>,
+    AxumPath((conversation_id, turn_request_id)): AxumPath<(String, String)>,
+    ApiJson(request): ApiJson<wts_app::RunAgentTurnCheckRequest>,
+) -> Result<Json<wts_app::AgentTurnChecks>, ApiError> {
+    let conversation_id = parse_workspace_id(&conversation_id)?;
+    let turn_request_id = parse_workspace_id(&turn_request_id)?;
+    let backend = Arc::clone(&state.registry);
+    run_mvp_operation(&state.admission, OperationClass::Heavy, move || {
+        backend.run_agent_turn_check(conversation_id, turn_request_id, request)
+    })
+    .await
+    .map(Json)
+}
+
+async fn preflight_agent_turn_restore<R: MvpBackend>(
+    State(state): State<AppState<R>>,
+    AxumPath((conversation_id, request_id)): AxumPath<(String, String)>,
+) -> Result<Json<wts_app::AgentTurnRestorePreflight>, ApiError> {
+    let conversation_id = parse_workspace_id(&conversation_id)?;
+    let request_id = parse_workspace_id(&request_id)?;
+    let backend = Arc::clone(&state.registry);
+    run_mvp_operation(&state.admission, OperationClass::Heavy, move || {
+        backend.preflight_agent_turn_restore(conversation_id, request_id)
+    })
+    .await
+    .map(Json)
+}
+
+async fn restore_agent_turn<R: MvpBackend>(
+    State(state): State<AppState<R>>,
+    AxumPath((conversation_id, turn_request_id)): AxumPath<(String, String)>,
+    ApiJson(request): ApiJson<wts_app::AgentTurnRestoreRequest>,
+) -> Result<Json<wts_app::AgentTurnRestoreResult>, ApiError> {
+    let conversation_id = parse_workspace_id(&conversation_id)?;
+    let turn_request_id = parse_workspace_id(&turn_request_id)?;
+    let backend = Arc::clone(&state.registry);
+    run_mvp_operation(&state.admission, OperationClass::Heavy, move || {
+        backend.restore_agent_turn(conversation_id, turn_request_id, request)
+    })
+    .await
+    .map(Json)
+}
+
+async fn send_agent_conversation_message<R: MvpBackend>(
+    State(state): State<AppState<R>>,
+    AxumPath(id): AxumPath<String>,
+    ApiJson(request): ApiJson<wts_app::SendAgentConversationMessageRequest>,
+) -> Result<Json<wts_app::AgentConversation>, ApiError> {
+    let id = parse_workspace_id(&id)?;
+    let backend = Arc::clone(&state.registry);
+    run_mvp_operation(&state.admission, OperationClass::Heavy, move || {
+        backend.send_agent_conversation_message(id, request)
+    })
+    .await
+    .map(Json)
+}
+
+async fn update_agent_conversation_message<R: MvpBackend>(
+    State(state): State<AppState<R>>,
+    AxumPath((id, message_id)): AxumPath<(String, String)>,
+    ApiJson(request): ApiJson<wts_app::UpdateAgentConversationMessageRequest>,
+) -> Result<Json<wts_app::AgentConversation>, ApiError> {
+    let id = parse_workspace_id(&id)?;
+    let message_id = parse_workspace_id(&message_id)?;
+    let backend = Arc::clone(&state.registry);
+    run_mvp_operation(&state.admission, OperationClass::Heavy, move || {
+        backend.update_agent_conversation_message(id, message_id, request)
+    })
+    .await
+    .map(Json)
+}
+
+async fn cancel_agent_conversation_message<R: MvpBackend>(
+    State(state): State<AppState<R>>,
+    AxumPath((id, message_id)): AxumPath<(String, String)>,
+    ApiJson(request): ApiJson<wts_app::CancelAgentConversationMessageRequest>,
+) -> Result<Json<wts_app::AgentConversation>, ApiError> {
+    let id = parse_workspace_id(&id)?;
+    let message_id = parse_workspace_id(&message_id)?;
+    let backend = Arc::clone(&state.registry);
+    run_mvp_operation(&state.admission, OperationClass::Heavy, move || {
+        backend.cancel_agent_conversation_message(id, message_id, request)
+    })
+    .await
+    .map(Json)
 }
 
 async fn list_agent_sessions<R: MvpBackend>(
@@ -3191,6 +4172,17 @@ async fn run_workspace_agent<R: MvpBackend>(
     .map(Json)
 }
 
+async fn get_workspace_verification_summary<R: MvpBackend>(
+    State(state): State<AppState<R>>,
+    AxumPath(workspace_id): AxumPath<String>,
+) -> Result<Json<Option<WorkspaceVerificationSummary>>, ApiError> {
+    let workspace_id = parse_workspace_id(&workspace_id)?;
+    let backend = Arc::clone(&state.registry);
+    run_mvp_operation(&state.admission, OperationClass::Read, move || {
+        backend.get_verification_summary(workspace_id)
+    }).await.map(Json)
+}
+
 async fn get_workspace_evidence<R: MvpBackend>(
     State(state): State<AppState<R>>,
     AxumPath(workspace_id): AxumPath<String>,
@@ -3214,6 +4206,26 @@ async fn run_workspace_verification<R: MvpBackend>(
     let backend = Arc::clone(&state.registry);
     run_mvp_operation(&state.admission, OperationClass::Heavy, move || {
         backend.run_verification(workspace_id)
+    })
+    .await
+    .map(Json)
+}
+
+async fn run_workspace_code_review<R: MvpBackend>(
+    State(state): State<AppState<R>>,
+    AxumPath(workspace_id): AxumPath<String>,
+    ApiJson(request): ApiJson<RunWorkspaceCodeReviewRequest>,
+) -> Result<Json<R::CodeReview>, ApiError> {
+    let workspace_id = parse_workspace_id(&workspace_id)?;
+    let backend = Arc::clone(&state.registry);
+    let model = request.model.or(request.agent);
+    run_mvp_operation(&state.admission, OperationClass::Heavy, move || {
+        backend.run_code_review(
+            workspace_id,
+            request.provider,
+            request.scope,
+            model.as_deref(),
+        )
     })
     .await
     .map(Json)
@@ -4187,6 +5199,11 @@ impl ApiError {
                 "repository_clone_conflict",
                 "A different local folder already uses the repository name derived from this URL.",
             ),
+            MvpFailure::RepositoryCloneBranchUnavailable => Self::new(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "repository_clone_branch_unavailable",
+                "The requested branch is not available locally. Refresh the repository branches, or select an available branch.",
+            ),
             MvpFailure::RepositoryCloneFailed => Self::new(
                 StatusCode::BAD_GATEWAY,
                 "repository_clone_failed",
@@ -4221,6 +5238,21 @@ impl ApiError {
                 StatusCode::PAYLOAD_TOO_LARGE,
                 "repository_file_too_large",
                 "The selected repository file exceeds the complete-file limit.",
+            ),
+            MvpFailure::RepositoryFileConflict => Self::new(
+                StatusCode::CONFLICT,
+                "repository_file_conflict",
+                "The source file changed. Reload the file before you save.",
+            ),
+            MvpFailure::InvalidRepositoryFileRevision => Self::new(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "invalid_repository_file_revision",
+                "The source file revision is invalid.",
+            ),
+            MvpFailure::GitlabComparisonUnavailable => Self::new(
+                StatusCode::BAD_GATEWAY,
+                "gitlab_comparison_unavailable",
+                "WTS could not load the merge request comparison. Refresh the merge request and check the local branch.",
             ),
             MvpFailure::RepositoryChanged => Self::new(
                 StatusCode::CONFLICT,
@@ -4306,6 +5338,16 @@ impl ApiError {
                 StatusCode::BAD_GATEWAY,
                 "gitlab_review_comment_failed",
                 "GitLab did not accept this comment. Refresh the merge request changes, then retry on a current changed line.",
+            ),
+            MvpFailure::GitlabDiscussionsUnavailable => Self::new(
+                StatusCode::BAD_GATEWAY,
+                "gitlab_discussions_unavailable",
+                "WTS could not load the GitLab discussions. Check the connection and GitLab account.",
+            ),
+            MvpFailure::GitlabDiscussionReplyFailed => Self::new(
+                StatusCode::BAD_GATEWAY,
+                "gitlab_discussion_reply_failed",
+                "WTS could not confirm the reply. Refresh the discussion before you try again.",
             ),
             MvpFailure::ChangeRequestBranchNotPublished => Self::new(
                 StatusCode::CONFLICT,
@@ -4653,6 +5695,56 @@ impl ApiError {
                 "idempotency_conflict",
                 "The idempotency key was already used for another request.",
             ),
+            MvpFailure::InvalidAgentConversation => Self::new(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "invalid_agent_conversation",
+                "The agent conversation request is invalid.",
+            ),
+            MvpFailure::AgentConversationNotFound => Self::new(
+                StatusCode::NOT_FOUND,
+                "agent_conversation_not_found",
+                "The agent conversation was not found.",
+            ),
+            MvpFailure::AgentConversationConflict => Self::new(
+                StatusCode::CONFLICT,
+                "agent_conversation_conflict",
+                "The request changed or has started. Reload the conversation before you retry.",
+            ),
+            MvpFailure::AgentConversationQueueFull => Self::new(
+                StatusCode::CONFLICT,
+                "agent_conversation_queue_full",
+                "This workspace has 64 queued requests. Wait for a request to finish or cancel a queued request.",
+            ),
+            MvpFailure::AgentConversationBusy => Self::new(
+                StatusCode::CONFLICT,
+                "agent_conversation_busy",
+                "Another WTS task is active in this workspace. Wait for it to finish, then retry.",
+            ),
+            MvpFailure::AgentConversationPlatformUnavailable => Self::new(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "agent_conversation_platform_unavailable",
+                "Agent chat execution needs macOS or Linux. Saved chats remain available.",
+            ),
+            MvpFailure::AgentConversationStorageFull => Self::new(
+                StatusCode::CONFLICT,
+                "agent_conversation_storage_full",
+                "Conversation storage is full. Open an existing conversation to continue.",
+            ),
+            MvpFailure::AgentConversationLimit => Self::new(
+                StatusCode::CONFLICT,
+                "agent_conversation_limit",
+                "This conversation reached its limit. Start a new conversation to continue.",
+            ),
+            MvpFailure::AgentConversationSourceUnavailable => Self::new(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "agent_conversation_source_unavailable",
+                "WTS needs its source repository. Start WTS with WTS_UI_REPOSITORY_ROOT set to the source checkout.",
+            ),
+            MvpFailure::AgentConversationUnavailable => Self::new(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "agent_conversation_unavailable",
+                "The conversation or its workspace is unavailable. Check the workspace and try again.",
+            ),
             MvpFailure::InvalidAgentPrompt => Self::new(
                 StatusCode::UNPROCESSABLE_ENTITY,
                 "invalid_agent_prompt",
@@ -4717,7 +5809,7 @@ impl ApiError {
             MvpFailure::JiraMcpSpawnFailed => Self::new(
                 StatusCode::SERVICE_UNAVAILABLE,
                 "jira_mcp_spawn_failed",
-                "WTS could not start its own Jira MCP process.",
+                "WTS could not start Jira. Start Podman, then try again.",
             ),
             MvpFailure::JiraMcpTimedOut => Self::new(
                 StatusCode::GATEWAY_TIMEOUT,
@@ -4992,6 +6084,9 @@ pub async fn run() -> ServerResult<()> {
         &paths.workspace_root,
         paths.repository_roots,
     )?);
+    if let Some(source) = env::var_os("WTS_UI_REPOSITORY_ROOT").map(PathBuf::from) {
+        let _ = registry.configure_ui_development_repository(source, None);
+    }
     let ui_dist = available_ui_dist();
     let app = build_router(registry, security.clone(), ui_dist.as_deref());
 
@@ -5158,8 +6253,22 @@ mod tests {
         materializations: Mutex<BTreeMap<Uuid, Value>>,
         idempotency: Mutex<BTreeMap<String, (String, Uuid)>>,
         removal_idempotency: Mutex<BTreeMap<String, (Uuid, String, Value)>>,
+        removal_preflight: Mutex<Option<wts_app::WorkspaceRemovalPreflight>>,
+        setup_recovery_preflight: Mutex<Option<wts_app::WorkspacePreflight>>,
+        setup_recovery_calls: Mutex<Vec<(Uuid, String)>>,
         create_failure: Mutex<Option<RegistryFailure>>,
         sequence: AtomicUsize,
+        discussion_calls: AtomicUsize,
+        source_calls: AtomicUsize,
+        turn_changes: Mutex<Option<wts_app::AgentTurnChanges>>,
+        turn_decisions: Mutex<Option<wts_app::AgentTurnDecisions>>,
+        work_set: Mutex<Option<wts_app::AgentWorkSet>>,
+        work_item_integration_preflight: Mutex<Option<wts_app::AgentWorkItemIntegrationPreflight>>,
+        work_item_integration_result: Mutex<Option<wts_app::AgentWorkItemIntegrationResult>>,
+        turn_checks: Mutex<Option<wts_app::AgentTurnChecks>>,
+        turn_restore_preflight: Mutex<Option<wts_app::AgentTurnRestorePreflight>>,
+        turn_restore_result: Mutex<Option<wts_app::AgentTurnRestoreResult>>,
+        turn_recovery_calls: Mutex<Vec<Value>>,
         verification_probe: Option<Arc<BlockingProbe>>,
     }
 
@@ -5318,6 +6427,9 @@ mod tests {
         type GithubReviewInbox = Value;
         type GithubReviewOpen = Value;
         type GitlabReviewInbox = Value;
+        type GitlabDiscussions = Value;
+        type GitlabDiscussionReply = Value;
+        type GitlabReviewCommentPublication = Value;
         type GitlabMergeRequestInbox = Value;
         type GitlabMergeRequestOpen = Value;
         type GitlabIntegrationStatus = Value;
@@ -5334,6 +6446,8 @@ mod tests {
         type ExistingMaterialization = Value;
         type RepositoryDiff = Value;
         type RepositoryFileReview = Value;
+        type GitlabComparison = Value;
+        type RepositorySource = Value;
         type RepositoryReviewGraph = Value;
         type RepositorySync = Value;
         type RepositoryAdditionPreflight = Value;
@@ -5349,6 +6463,7 @@ mod tests {
         type RemovalPreflight = Value;
         type Removal = Value;
         type AgentRun = Value;
+        type CodeReview = Value;
         type Evidence = Value;
         type TestRunList = Value;
         type TestRunDetail = Value;
@@ -5370,6 +6485,207 @@ mod tests {
         type WorkItemUnlink = Value;
         type WorkItemOpen = Value;
         type JiraCreateProposal = Value;
+
+        fn get_agent_turn_changes(
+            &self,
+            conversation_id: Uuid,
+            request_id: Uuid,
+        ) -> Result<wts_app::AgentTurnChanges, MvpFailure> {
+            let receipt = self
+                .turn_changes
+                .lock()
+                .unwrap()
+                .clone()
+                .ok_or(MvpFailure::Unavailable)?;
+            if receipt.conversation_id != conversation_id || receipt.request_id != request_id {
+                return Err(MvpFailure::AgentConversationNotFound);
+            }
+            Ok(receipt)
+        }
+
+        fn get_agent_work_set(
+            &self,
+            work_set_id: Uuid,
+        ) -> Result<wts_app::AgentWorkSet, MvpFailure> {
+            let set = self
+                .work_set
+                .lock()
+                .unwrap()
+                .clone()
+                .ok_or(MvpFailure::Unavailable)?;
+            if set.work_set_id != work_set_id {
+                return Err(MvpFailure::AgentConversationNotFound);
+            }
+            Ok(set)
+        }
+        fn list_agent_work_sets(
+            &self,
+            conversation_id: Uuid,
+            request_id: Uuid,
+        ) -> Result<wts_app::AgentWorkSetList, MvpFailure> {
+            let set = self
+                .work_set
+                .lock()
+                .unwrap()
+                .clone()
+                .ok_or(MvpFailure::Unavailable)?;
+            if set.conversation_id != conversation_id || set.request_id != request_id {
+                return Err(MvpFailure::AgentConversationNotFound);
+            }
+            Ok(wts_app::AgentWorkSetList {
+                schema_version: 1,
+                conversation_id,
+                request_id,
+                work_sets: vec![set],
+            })
+        }
+        fn create_agent_work_set(
+            &self,
+            conversation_id: Uuid,
+            turn_request_id: Uuid,
+            request: wts_app::CreateAgentWorkSetRequest,
+        ) -> Result<wts_app::AgentWorkSet, MvpFailure> {
+            let set = self.get_agent_work_set(request.request_id)?;
+            if set.conversation_id != conversation_id || set.request_id != turn_request_id {
+                return Err(MvpFailure::AgentConversationNotFound);
+            }
+            self.turn_recovery_calls.lock().unwrap().push(json!({"operation":"createWorkSet","conversationId":conversation_id,"turnRequestId":turn_request_id,"request":request}));
+            Ok(set)
+        }
+        fn cancel_agent_work_item(
+            &self,
+            work_set_id: Uuid,
+            task_id: Uuid,
+            request: wts_app::AgentWorkItemCancelRequest,
+        ) -> Result<wts_app::AgentWorkSet, MvpFailure> {
+            let set = self.get_agent_work_set(work_set_id)?;
+            if !set.tasks.iter().any(|task| task.task_id == task_id) {
+                return Err(MvpFailure::AgentConversationNotFound);
+            }
+            self.turn_recovery_calls.lock().unwrap().push(json!({"operation":"cancelWorkItem","workSetId":work_set_id,"taskId":task_id,"request":request}));
+            Ok(set)
+        }
+        fn preflight_agent_work_item_integration(
+            &self,
+            work_set_id: Uuid,
+            task_id: Uuid,
+        ) -> Result<wts_app::AgentWorkItemIntegrationPreflight, MvpFailure> {
+            let preflight = self
+                .work_item_integration_preflight
+                .lock()
+                .unwrap()
+                .clone()
+                .ok_or(MvpFailure::Unavailable)?;
+            if preflight.work_set_id != work_set_id || preflight.task_id != task_id {
+                return Err(MvpFailure::AgentConversationNotFound);
+            }
+            Ok(preflight)
+        }
+        fn integrate_agent_work_item(
+            &self,
+            work_set_id: Uuid,
+            task_id: Uuid,
+            request: wts_app::IntegrateAgentWorkItemRequest,
+        ) -> Result<wts_app::AgentWorkItemIntegrationResult, MvpFailure> {
+            let result = self
+                .work_item_integration_result
+                .lock()
+                .unwrap()
+                .clone()
+                .ok_or(MvpFailure::Unavailable)?;
+            if result.work_set_id != work_set_id || result.task_id != task_id {
+                return Err(MvpFailure::AgentConversationNotFound);
+            }
+            self.turn_recovery_calls.lock().unwrap().push(json!({"operation":"integrateWorkItem","workSetId":work_set_id,"taskId":task_id,"request":request}));
+            Ok(result)
+        }
+
+        fn get_agent_turn_decisions(
+            &self,
+            conversation_id: Uuid,
+            request_id: Uuid,
+        ) -> Result<wts_app::AgentTurnDecisions, MvpFailure> {
+            let receipt = self
+                .turn_decisions
+                .lock()
+                .unwrap()
+                .clone()
+                .ok_or(MvpFailure::Unavailable)?;
+            if receipt.conversation_id != conversation_id || receipt.request_id != request_id {
+                return Err(MvpFailure::AgentConversationNotFound);
+            }
+            Ok(receipt)
+        }
+        fn record_agent_turn_decision(
+            &self,
+            conversation_id: Uuid,
+            turn_request_id: Uuid,
+            request: wts_app::RecordAgentTurnDecisionRequest,
+        ) -> Result<wts_app::AgentTurnDecisions, MvpFailure> {
+            let receipt = self.get_agent_turn_decisions(conversation_id, turn_request_id)?;
+            self.turn_recovery_calls.lock().unwrap().push(json!({"operation":"decision","conversationId":conversation_id,"turnRequestId":turn_request_id,"request":request}));
+            Ok(receipt)
+        }
+        fn get_agent_turn_checks(
+            &self,
+            conversation_id: Uuid,
+            request_id: Uuid,
+        ) -> Result<wts_app::AgentTurnChecks, MvpFailure> {
+            let receipt = self
+                .turn_checks
+                .lock()
+                .unwrap()
+                .clone()
+                .ok_or(MvpFailure::Unavailable)?;
+            if receipt.conversation_id != conversation_id || receipt.request_id != request_id {
+                return Err(MvpFailure::AgentConversationNotFound);
+            }
+            Ok(receipt)
+        }
+        fn run_agent_turn_check(
+            &self,
+            conversation_id: Uuid,
+            turn_request_id: Uuid,
+            request: wts_app::RunAgentTurnCheckRequest,
+        ) -> Result<wts_app::AgentTurnChecks, MvpFailure> {
+            let receipt = self.get_agent_turn_checks(conversation_id, turn_request_id)?;
+            self.turn_recovery_calls.lock().unwrap().push(json!({"operation":"check","conversationId":conversation_id,"turnRequestId":turn_request_id,"request":request}));
+            Ok(receipt)
+        }
+        fn preflight_agent_turn_restore(
+            &self,
+            conversation_id: Uuid,
+            request_id: Uuid,
+        ) -> Result<wts_app::AgentTurnRestorePreflight, MvpFailure> {
+            let receipt = self
+                .turn_restore_preflight
+                .lock()
+                .unwrap()
+                .clone()
+                .ok_or(MvpFailure::Unavailable)?;
+            if receipt.conversation_id != conversation_id || receipt.request_id != request_id {
+                return Err(MvpFailure::AgentConversationNotFound);
+            }
+            Ok(receipt)
+        }
+        fn restore_agent_turn(
+            &self,
+            conversation_id: Uuid,
+            turn_request_id: Uuid,
+            request: wts_app::AgentTurnRestoreRequest,
+        ) -> Result<wts_app::AgentTurnRestoreResult, MvpFailure> {
+            let receipt = self
+                .turn_restore_result
+                .lock()
+                .unwrap()
+                .clone()
+                .ok_or(MvpFailure::Unavailable)?;
+            if receipt.conversation_id != conversation_id || receipt.request_id != turn_request_id {
+                return Err(MvpFailure::AgentConversationNotFound);
+            }
+            self.turn_recovery_calls.lock().unwrap().push(json!({"operation":"restore","conversationId":conversation_id,"turnRequestId":turn_request_id,"request":request}));
+            Ok(receipt)
+        }
 
         fn setup(&self) -> Result<Self::Setup, MvpFailure> {
             Ok(json!({
@@ -5435,6 +6751,41 @@ mod tests {
             }))
         }
 
+        fn gitlab_discussions(
+            &self,
+            repository_id: &str,
+            iid: u64,
+            workspace_id: Option<Uuid>,
+        ) -> Result<Self::GitlabDiscussions, MvpFailure> {
+            self.discussion_calls.fetch_add(1, Ordering::SeqCst);
+            if repository_id != "repo-1" || iid != 17 || workspace_id.is_some_and(|id| !id.is_nil())
+            {
+                return Err(MvpFailure::RepositoryNotFound);
+            }
+            Ok(
+                json!({"schemaVersion":1,"repositoryId":repository_id,"iid":iid,"scopeId":"a".repeat(64),"viewerLogin":"alice","discussions":[],"fetchedAtUnixMs":1,"fromCache":false,"truncated":false}),
+            )
+        }
+
+        fn reply_gitlab_discussion(
+            &self,
+            repository_id: &str,
+            iid: u64,
+            request: wts_app::ReplyGitlabDiscussionRequest,
+        ) -> Result<Self::GitlabDiscussionReply, MvpFailure> {
+            self.discussion_calls.fetch_add(1, Ordering::SeqCst);
+            if repository_id != "repo-1"
+                || iid != 17
+                || request.workspace_id != Some(Uuid::nil())
+                || request.discussion_id != "thread-1"
+            {
+                return Err(MvpFailure::RepositoryNotFound);
+            }
+            Ok(
+                json!({"schemaVersion":1,"repositoryId":repository_id,"iid":iid,"discussionId":request.discussion_id,"comment":{"id":92,"body":request.body,"authorLogin":"alice","createdAt":"2026-09-17T00:00:00Z"}}),
+            )
+        }
+
         fn gitlab_merge_requests(
             &self,
             _workspace_id: Uuid,
@@ -5459,6 +6810,27 @@ mod tests {
                 "fetchedAtUnixMs": 1,
                 "detail": "GitLab returned the current authored merge requests."
             }))
+        }
+
+        fn publish_gitlab_review_comment(
+            &self,
+            repository_id: &str,
+            iid: u64,
+            request: wts_app::GitlabReviewCommentRequest,
+        ) -> Result<Self::GitlabReviewCommentPublication, MvpFailure> {
+            self.discussion_calls.fetch_add(1, Ordering::SeqCst);
+            if repository_id != "repo-1"
+                || iid != 17
+                || request.workspace_id.as_deref() != Some(Uuid::nil().to_string().as_str())
+                || request
+                    .expected_position
+                    .as_ref()
+                    .map(|position| position.head_commit_oid.as_str())
+                    != Some("b".repeat(40).as_str())
+            {
+                return Err(MvpFailure::GitlabReviewCommentFailed);
+            }
+            Ok(json!({"schemaVersion":1,"repositoryId":repository_id,"iid":iid,"accepted":true}))
         }
 
         fn gitlab_integration_status(
@@ -6034,6 +7406,32 @@ mod tests {
             {
                 return Err(MvpFailure::WorkspaceNotFound);
             }
+            if let Some(preflight) = self.setup_recovery_preflight.lock().unwrap().as_ref() {
+                return Ok(serde_json::to_value(preflight).unwrap());
+            }
+            Ok(fake_preflight(workspace_id))
+        }
+
+        fn recover_setup(
+            &self,
+            workspace_id: Uuid,
+            expected_effect_digest: &str,
+        ) -> Result<Self::Preflight, MvpFailure> {
+            self.setup_recovery_calls
+                .lock()
+                .unwrap()
+                .push((workspace_id, expected_effect_digest.to_owned()));
+            if !self.workspaces.lock().unwrap().contains_key(&workspace_id) {
+                return Err(MvpFailure::WorkspaceNotFound);
+            }
+            let saved = self.setup_recovery_preflight.lock().unwrap();
+            if saved
+                .as_ref()
+                .and_then(|preflight| preflight.setup_recovery.as_ref())
+                .is_none_or(|recovery| recovery.effect_digest != expected_effect_digest)
+            {
+                return Err(MvpFailure::StalePreflight);
+            }
             Ok(fake_preflight(workspace_id))
         }
 
@@ -6113,6 +7511,53 @@ mod tests {
                 .expect("materialization test lock")
                 .get(&workspace_id)
                 .cloned())
+        }
+
+        fn gitlab_comparison(
+            &self,
+            workspace_id: Uuid,
+            repository_id: &str,
+            iid: u64,
+            refresh: bool,
+        ) -> Result<Self::GitlabComparison, MvpFailure> {
+            self.source_calls.fetch_add(1, Ordering::SeqCst);
+            if repository_id != "repo-1" || iid != 17 || !refresh {
+                return Err(MvpFailure::RepositoryNotFound);
+            }
+            Ok(
+                json!({"schemaVersion":1,"workspaceId":workspace_id,"repositoryId":repository_id,"repositoryLabel":"api","iid":iid,"localHeadCommitOid":"c".repeat(40),"status":"missingCommits","published":{"schemaVersion":1,"repositoryId":repository_id,"iid":iid,"baseCommitOid":"a".repeat(40),"startCommitOid":"a".repeat(40),"headCommitOid":"b".repeat(40),"commits":[],"discussions":[],"patch":"","patchTruncated":false,"fromCache":false,"fetchedAtUnixMs":1}}),
+            )
+        }
+        fn repository_source(
+            &self,
+            workspace_id: Uuid,
+            repository_id: &str,
+            file_path: &str,
+        ) -> Result<Self::RepositorySource, MvpFailure> {
+            self.source_calls.fetch_add(1, Ordering::SeqCst);
+            if repository_id != "repo-1" {
+                return Err(MvpFailure::RepositoryNotFound);
+            }
+            Ok(
+                json!({"schemaVersion":1,"workspaceId":workspace_id,"repositoryId":repository_id,"filePath":file_path,"content":"local content","revision":format!("sha256:{}","a".repeat(64))}),
+            )
+        }
+        fn save_repository_source(
+            &self,
+            workspace_id: Uuid,
+            repository_id: &str,
+            request: wts_app::WorkspaceRepositorySourceSaveRequest,
+        ) -> Result<Self::RepositorySource, MvpFailure> {
+            self.source_calls.fetch_add(1, Ordering::SeqCst);
+            if repository_id != "repo-1" {
+                return Err(MvpFailure::RepositoryNotFound);
+            }
+            if request.expected_revision != format!("sha256:{}", "a".repeat(64)) {
+                return Err(MvpFailure::RepositoryFileConflict);
+            }
+            Ok(
+                json!({"schemaVersion":1,"workspaceId":workspace_id,"repositoryId":repository_id,"filePath":request.file_path,"content":request.content,"revision":format!("sha256:{}","b".repeat(64))}),
+            )
         }
 
         fn repository_diff(
@@ -6420,6 +7865,13 @@ mod tests {
             &self,
             workspace_id: Uuid,
         ) -> Result<Self::RemovalPreflight, MvpFailure> {
+            if let Some(preflight) = self.removal_preflight.lock().unwrap().as_ref() {
+                if preflight.workspace_id != workspace_id {
+                    return Err(MvpFailure::WorkspaceNotFound);
+                }
+                return serde_json::to_value(preflight)
+                    .map_err(|_| MvpFailure::WorkspaceRemovalFailed);
+            }
             if !self
                 .workspaces
                 .lock()
@@ -6443,6 +7895,15 @@ mod tests {
             idempotency_key: &str,
             _delete_protected_paths: bool,
         ) -> Result<Self::Removal, MvpFailure> {
+            if self
+                .removal_preflight
+                .lock()
+                .unwrap()
+                .as_ref()
+                .is_some_and(|preflight| preflight.workspace_id == workspace_id && !preflight.ready)
+            {
+                return Err(MvpFailure::WorkspaceRemovalBlocked);
+            }
             let mut idempotency = self
                 .removal_idempotency
                 .lock()
@@ -6528,6 +7989,13 @@ mod tests {
                 "output": format!("Completed: {prompt}"),
                 "durationMs": 24
             }))
+        }
+
+        fn list_agent_conversations(&self) -> Result<wts_app::AgentConversationList, MvpFailure> {
+            Ok(wts_app::AgentConversationList {
+                schema_version: 1,
+                conversations: Vec::new(),
+            })
         }
 
         fn list_agent_sessions(
@@ -6671,6 +8139,17 @@ mod tests {
             let mut session = fake_running_agent_session(session_id);
             session.status = wts_app::AgentSessionStatus::Stopping;
             Ok(session)
+        }
+
+        fn get_verification_summary(&self, workspace_id: Uuid) -> Result<Option<WorkspaceVerificationSummary>, MvpFailure> {
+            if !self.materializations.lock().unwrap().contains_key(&workspace_id) { return Ok(None); }
+            let evidence = fake_evidence(workspace_id, "failed");
+            Ok(Some(serde_json::from_value(json!({
+                "schemaVersion":1, "workspaceId":workspace_id,
+                "verificationPlan":evidence["verificationPlan"],
+                "verificationResult":evidence["verificationResult"],
+                "verificationHistory":[],
+            })).unwrap()))
         }
 
         fn get_evidence(&self, workspace_id: Uuid) -> Result<Option<Self::Evidence>, MvpFailure> {
@@ -7145,6 +8624,742 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn conversation_routes_protect_requests_and_reject_unknown_scope_fields() {
+        let read = app()
+            .oneshot(
+                protected_request(Method::GET, "/api/v1/agent-conversations")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(read.status(), StatusCode::OK);
+        assert_eq!(
+            response_json(read).await,
+            json!({"schemaVersion":1,"conversations":[]})
+        );
+        let request = json!({"requestId":Uuid::new_v4(),"provider":"codex","source":{"kind":"ui","route":"/","calloutId":"spaces.toolbar","label":"Spaces toolbar"},"workspacePath":"/untrusted"});
+        let unknown = app()
+            .oneshot(
+                protected_request(Method::POST, "/api/v1/agent-conversations")
+                    .header(ORIGIN, policy().origin())
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(request.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(unknown.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        let no_origin = app()
+            .oneshot(
+                protected_request(Method::POST, "/api/v1/agent-conversations")
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(request.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(no_origin.status(), StatusCode::FORBIDDEN);
+        let no_auth = app()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/agent-conversations")
+                    .header(HOST, policy().authority())
+                    .header(REQUEST_HEADER, REQUEST_MARKER)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(no_auth.status(), StatusCode::UNAUTHORIZED);
+        let wrong_message = app().oneshot(protected_request(Method::POST, &format!("/api/v1/agent-conversations/{}/messages",Uuid::new_v4())).header(ORIGIN,policy().origin()).header(CONTENT_TYPE,"application/json").body(Body::from(json!({"requestId":Uuid::new_v4(),"body":"Fix the spacing.","workspaceId":Uuid::new_v4()}).to_string())).unwrap()).await.unwrap();
+        assert_eq!(wrong_message.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    }
+
+    #[tokio::test]
+    async fn turn_change_route_requires_a_session_and_valid_request_identity() {
+        let path = format!(
+            "/api/v1/agent-conversations/{}/messages/{}/changes",
+            Uuid::new_v4(),
+            Uuid::new_v4()
+        );
+        let response = app()
+            .oneshot(
+                Request::builder()
+                    .uri(&path)
+                    .header(HOST, policy().authority())
+                    .header(REQUEST_HEADER, REQUEST_MARKER)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        let response = app()
+            .oneshot(
+                protected_request(Method::GET, &path)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let invalid = format!(
+            "/api/v1/agent-conversations/{}/messages/not-a-request/changes",
+            Uuid::new_v4()
+        );
+        let response = app()
+            .oneshot(
+                protected_request(Method::GET, &invalid)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn turn_recovery_routes_require_a_session_and_reject_renderer_commands() {
+        let base = format!(
+            "/api/v1/agent-conversations/{}/messages/{}",
+            Uuid::new_v4(),
+            Uuid::new_v4()
+        );
+        for suffix in ["checks", "restore-preflight", "decisions"] {
+            let response = app()
+                .oneshot(
+                    Request::builder()
+                        .uri(format!("{base}/{suffix}"))
+                        .header(HOST, policy().authority())
+                        .header(REQUEST_HEADER, REQUEST_MARKER)
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        }
+        for (suffix, body) in [
+            (
+                "decisions",
+                json!({"requestId":Uuid::new_v4(),"expectedRevision":0,"expectedReceiptDigest":format!("sha256:{}","a".repeat(64)),"kind":"kept","reason":"Compare this result."}),
+            ),
+            (
+                "checks",
+                json!({"requestId":Uuid::new_v4(),"checkId":"unit", "expectedAfterCheckpointId":Uuid::new_v4(), "expectedPlanRevision":1}),
+            ),
+            (
+                "restore",
+                json!({"requestId":Uuid::new_v4(),"effectDigest":format!("sha256:{}","a".repeat(64))}),
+            ),
+        ] {
+            let path = format!("{base}/{suffix}");
+            let response = app()
+                .oneshot(
+                    protected_request(Method::POST, &path)
+                        .header(CONTENT_TYPE, "application/json")
+                        .body(Body::from(body.to_string()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::FORBIDDEN);
+            for field in ["executable", "workingDirectory", "targetPath"] {
+                let mut injected = body.clone();
+                injected[field] = json!("/outside-workspace");
+                let response = app()
+                    .oneshot(
+                        protected_request(Method::POST, &path)
+                            .header(ORIGIN, policy().origin())
+                            .header(CONTENT_TYPE, "application/json")
+                            .body(Body::from(injected.to_string()))
+                            .unwrap(),
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn turn_change_route_serializes_the_requested_receipt_without_current_workspace_state() {
+        let conversation_id = Uuid::new_v4();
+        let request_id = Uuid::new_v4();
+        let wire = json!({
+            "schemaVersion": 1, "conversationId": conversation_id, "requestId": request_id,
+            "sessionId": Uuid::new_v4(), "workspaceId": Uuid::new_v4(), "repositoryId": "repo-wts",
+            "sourceContextSha256": format!("sha256:{}", "a".repeat(64)),
+            "state": "incomplete", "observation": "recovered", "startedAtUnixMs": 10,
+            "completedAtUnixMs": 20, "files": [{"filePath": "draft.txt", "status": "modified",
+                "preExistingChange": true, "undoSupported": false}],
+            "omittedFileCount": 1, "patch": "-saved before\n+saved result\n",
+            "patchTruncated": false, "detail": "One file was omitted from this capture."
+        });
+        let registry = FakeRegistry::default();
+        *registry.turn_changes.lock().unwrap() =
+            Some(serde_json::from_value(wire.clone()).unwrap());
+        let router = build_router(Arc::new(registry), policy(), None);
+        let path =
+            format!("/api/v1/agent-conversations/{conversation_id}/messages/{request_id}/changes");
+        let response = router
+            .clone()
+            .oneshot(
+                protected_request(Method::GET, &path)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), 32 * 1024)
+            .await
+            .unwrap();
+        assert_eq!(serde_json::from_slice::<Value>(&body).unwrap(), wire);
+        let wrong_path = format!(
+            "/api/v1/agent-conversations/{conversation_id}/messages/{}/changes",
+            Uuid::new_v4()
+        );
+        let response = router
+            .oneshot(
+                protected_request(Method::GET, &wrong_path)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn turn_recovery_routes_preserve_turn_and_mutation_identity_across_transport() {
+        let conversation_id = Uuid::new_v4();
+        let turn_id = Uuid::new_v4();
+        let after_id = Uuid::new_v4();
+        let run_id = Uuid::new_v4();
+        let restore_id = Uuid::new_v4();
+        let scope = json!({"schemaVersion":1,"conversationId":conversation_id,"requestId":turn_id,
+            "sessionId":Uuid::new_v4(),"workspaceId":Uuid::new_v4(),"repositoryId":"repo-wts","afterCheckpointId":after_id});
+        let mut checks = scope.clone();
+        checks.as_object_mut().unwrap().extend(json!({"state":"ready","detail":"The selected check passed.",
+            "checks":[{"checkId":"unit","label":"Unit tests","kind":"unit","planRevision":2}],
+            "runs":[{"runId":run_id,"checkId":"unit","status":"passed","startedAtUnixMs":10,"completedAtUnixMs":20,
+                "durationMs":10,"exitCode":0,"output":"literal $result\npassed\n","outputTruncated":false,"detail":"The check passed."}]
+        }).as_object().unwrap().clone());
+        let digest = format!("sha256:{}", "b".repeat(64));
+        let files = json!([{"filePath":"new.txt","action":"remove"},{"filePath":"dirty.txt","action":"restore"}]);
+        let mut preflight = scope;
+        preflight.as_object_mut().unwrap().extend(
+            json!({"state":"ready","effectDigest":digest,"files":files,
+            "blockers":[],"detail":"Review these two file effects before restoration."})
+            .as_object()
+            .unwrap()
+            .clone(),
+        );
+        let restored = json!({"schemaVersion":1,"conversationId":conversation_id,"requestId":turn_id,"restoreRequestId":restore_id,
+            "state":"restored","restoredAtUnixMs":30,"files":files,"blockers":[],"detail":"The two files were restored."});
+        let registry = Arc::new(FakeRegistry::default());
+        *registry.turn_checks.lock().unwrap() =
+            Some(serde_json::from_value(checks.clone()).unwrap());
+        *registry.turn_restore_preflight.lock().unwrap() =
+            Some(serde_json::from_value(preflight.clone()).unwrap());
+        *registry.turn_restore_result.lock().unwrap() =
+            Some(serde_json::from_value(restored.clone()).unwrap());
+        let router = build_router(registry.clone(), policy(), None);
+        let base = format!("/api/v1/agent-conversations/{conversation_id}/messages/{turn_id}");
+        for (suffix, expected) in [("checks", &checks), ("restore-preflight", &preflight)] {
+            let response = router
+                .clone()
+                .oneshot(
+                    protected_request(Method::GET, &format!("{base}/{suffix}"))
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let body = axum::body::to_bytes(response.into_body(), 32 * 1024)
+                .await
+                .unwrap();
+            assert_eq!(&serde_json::from_slice::<Value>(&body).unwrap(), expected);
+        }
+        assert!(registry.turn_recovery_calls.lock().unwrap().is_empty());
+        let check_request = json!({"requestId":run_id,"checkId":"unit","expectedAfterCheckpointId":after_id,"expectedPlanRevision":2});
+        let restore_request = json!({"requestId":restore_id,"effectDigest":digest});
+        for (suffix, request, expected) in [
+            ("checks", &check_request, &checks),
+            ("restore", &restore_request, &restored),
+        ] {
+            let response = router
+                .clone()
+                .oneshot(
+                    protected_request(Method::POST, &format!("{base}/{suffix}"))
+                        .header(ORIGIN, policy().origin())
+                        .header(CONTENT_TYPE, "application/json")
+                        .body(Body::from(request.to_string()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let body = axum::body::to_bytes(response.into_body(), 32 * 1024)
+                .await
+                .unwrap();
+            assert_eq!(&serde_json::from_slice::<Value>(&body).unwrap(), expected);
+        }
+        assert_eq!(
+            *registry.turn_recovery_calls.lock().unwrap(),
+            vec![
+                json!({"operation":"check","conversationId":conversation_id,"turnRequestId":turn_id,"request":check_request}),
+                json!({"operation":"restore","conversationId":conversation_id,"turnRequestId":turn_id,"request":restore_request}),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn turn_decision_route_preserves_the_result_and_user_mutation_identity() {
+        let conversation_id = Uuid::new_v4();
+        let turn_id = Uuid::new_v4();
+        let decision_id = Uuid::new_v4();
+        let after_id = Uuid::new_v4();
+        let digest = format!("sha256:{}", "a".repeat(64));
+        let context_digest = format!("sha256:{}", "b".repeat(64));
+        let wire = json!({"schemaVersion":1,"conversationId":conversation_id,"requestId":turn_id,
+            "sessionId":Uuid::new_v4(),"workspaceId":Uuid::new_v4(),"repositoryId":"repo-wts",
+            "afterCheckpointId":after_id,"receiptDigest":digest,"sourceContextSha256":context_digest,
+            "revision":1,"state":"ready","checksState":"stale","detail":"This choice describes the saved result.",
+            "decisions":[{"decisionId":decision_id,"revision":1,"kind":"kept","reason":"Keep the literal $value.\nCompare later.",
+                "createdAtUnixMs":123,"afterCheckpointId":after_id,"receiptDigest":digest,
+                "sourceContextSha256":context_digest,"checksState":"noChecks","checks":[]}]});
+        let registry = Arc::new(FakeRegistry::default());
+        *registry.turn_decisions.lock().unwrap() =
+            Some(serde_json::from_value(wire.clone()).unwrap());
+        let router = build_router(registry.clone(), policy(), None);
+        let path =
+            format!("/api/v1/agent-conversations/{conversation_id}/messages/{turn_id}/decisions");
+        let response = router
+            .clone()
+            .oneshot(
+                protected_request(Method::GET, &path)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(response.into_body(), 32768)
+            .await
+            .unwrap();
+        assert_eq!(serde_json::from_slice::<Value>(&bytes).unwrap(), wire);
+        assert!(registry.turn_recovery_calls.lock().unwrap().is_empty());
+        let request = json!({"requestId":decision_id,"expectedRevision":0,"expectedReceiptDigest":digest,
+            "kind":"kept","reason":"Keep the literal $value.\nCompare later."});
+        let response = router
+            .clone()
+            .oneshot(
+                protected_request(Method::POST, &path)
+                    .header(ORIGIN, policy().origin())
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(request.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(response.into_body(), 32768)
+            .await
+            .unwrap();
+        assert_eq!(serde_json::from_slice::<Value>(&bytes).unwrap(), wire);
+        assert_eq!(
+            *registry.turn_recovery_calls.lock().unwrap(),
+            vec![json!({"operation":"decision",
+            "conversationId":conversation_id,"turnRequestId":turn_id,"request":request})]
+        );
+        let wrong_path = format!(
+            "/api/v1/agent-conversations/{conversation_id}/messages/{}/decisions",
+            Uuid::new_v4()
+        );
+        let response = router
+            .oneshot(
+                protected_request(Method::GET, &wrong_path)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    fn work_set_route_fixture() -> (Arc<FakeRegistry>, Value, Value, Value) {
+        let set_id = Uuid::new_v4();
+        let task_id = Uuid::new_v4();
+        let conversation_id = Uuid::new_v4();
+        let turn_id = Uuid::new_v4();
+        let workspace_id = Uuid::new_v4();
+        let checkpoint_id = Uuid::new_v4();
+        let child_workspace = Uuid::new_v4();
+        let child_conversation = Uuid::new_v4();
+        let child_request = Uuid::new_v4();
+        let child_checkpoint = Uuid::new_v4();
+        let digest = format!("sha256:{}", "a".repeat(64));
+        let set = json!({"schemaVersion":1,"workSetId":set_id,"conversationId":conversation_id,"requestId":turn_id,"workspaceId":workspace_id,"repositoryId":"repo-wts","sourceCheckpointId":checkpoint_id,"sourceContextSha256":digest,"kind":"alternatives","revision":3,"createdAtUnixMs":100,"updatedAtUnixMs":200,"tasks":[{"taskId":task_id,"title":"Option A","prompt":"Preserve literal $value and `text`.\nUse the current files.","dependsOn":[],"state":"completed","conversationId":child_conversation,"requestId":child_request,"workspaceId":child_workspace,"repositoryId":"repo-wts","workspaceDisplayPath":"/workspaces/isolated","afterCheckpointId":child_checkpoint,"detail":"The task finished."}],"detail":"Review the isolated result."});
+        let preflight = json!({"schemaVersion":1,"workSetId":set_id,"taskId":task_id,"workspaceId":workspace_id,"repositoryId":"repo-wts","sourceConversationId":conversation_id,"sourceRequestId":turn_id,"sourceAfterCheckpointId":checkpoint_id,"candidateWorkspaceId":child_workspace,"candidateConversationId":child_conversation,"candidateRequestId":child_request,"candidateAfterCheckpointId":child_checkpoint,"state":"ready","effectDigest":digest,"files":[{"filePath":"src/view.tsx","status":"modified"}],"checkRunIds":[Uuid::new_v4()],"blockers":[],"detail":"Review these file effects."});
+        let result = json!({"schemaVersion":1,"workSetId":set_id,"taskId":task_id,"workspaceId":workspace_id,"repositoryId":"repo-wts","integrationRequestId":Uuid::new_v4(),"state":"integrated","files":[{"filePath":"src/view.tsx","status":"modified"}],"blockers":[],"detail":"The file effects were applied.","integratedAtUnixMs":300});
+        let registry = Arc::new(FakeRegistry::default());
+        *registry.work_set.lock().unwrap() = Some(serde_json::from_value(set.clone()).unwrap());
+        *registry.work_item_integration_preflight.lock().unwrap() =
+            Some(serde_json::from_value(preflight.clone()).unwrap());
+        *registry.work_item_integration_result.lock().unwrap() =
+            Some(serde_json::from_value(result.clone()).unwrap());
+        (registry, set, preflight, result)
+    }
+
+    #[tokio::test]
+    async fn work_set_routes_preserve_exact_scope_payloads_and_read_without_mutation() {
+        let (registry, set, preflight, result) = work_set_route_fixture();
+        let router = build_router(registry.clone(), policy(), None);
+        let conversation = set["conversationId"].as_str().unwrap();
+        let turn = set["requestId"].as_str().unwrap();
+        let id = set["workSetId"].as_str().unwrap();
+        let task = set["tasks"][0]["taskId"].as_str().unwrap();
+        let base = format!("/api/v1/agent-conversations/{conversation}/messages/{turn}/work-sets");
+        let item = format!("/api/v1/agent-work-sets/{id}/items/{task}");
+        for (path, expected) in [
+            (
+                base.clone(),
+                json!({"schemaVersion":1,"conversationId":conversation,"requestId":turn,"workSets":[set.clone()]}),
+            ),
+            (format!("/api/v1/agent-work-sets/{id}"), set.clone()),
+            (format!("{item}/integration-preflight"), preflight.clone()),
+        ] {
+            let response = router
+                .clone()
+                .oneshot(
+                    protected_request(Method::GET, &path)
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK, "{path}");
+            let bytes = axum::body::to_bytes(response.into_body(), 32768)
+                .await
+                .unwrap();
+            assert_eq!(serde_json::from_slice::<Value>(&bytes).unwrap(), expected);
+        }
+        assert!(registry.turn_recovery_calls.lock().unwrap().is_empty());
+        let create = json!({"requestId":id,"expectedAfterCheckpointId":set["sourceCheckpointId"],"kind":"alternatives","tasks":[{"taskId":task,"title":"Option A","prompt":set["tasks"][0]["prompt"],"dependsOn":[]}]});
+        let cancel = json!({"requestId":Uuid::new_v4(),"expectedRevision":3});
+        let integrate = json!({"requestId":result["integrationRequestId"],"effectDigest":preflight["effectDigest"]});
+        for (path, request, expected) in [
+            (base.clone(), create.clone(), set.clone()),
+            (format!("{item}/cancel"), cancel.clone(), set.clone()),
+            (
+                format!("{item}/integration"),
+                integrate.clone(),
+                result.clone(),
+            ),
+        ] {
+            let response = router
+                .clone()
+                .oneshot(
+                    protected_request(Method::POST, &path)
+                        .header(ORIGIN, policy().origin())
+                        .header(CONTENT_TYPE, "application/json")
+                        .body(Body::from(request.to_string()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let bytes = axum::body::to_bytes(response.into_body(), 32768)
+                .await
+                .unwrap();
+            assert_eq!(serde_json::from_slice::<Value>(&bytes).unwrap(), expected);
+        }
+        assert_eq!(
+            *registry.turn_recovery_calls.lock().unwrap(),
+            vec![
+                json!({"operation":"createWorkSet","conversationId":conversation,"turnRequestId":turn,"request":create}),
+                json!({"operation":"cancelWorkItem","workSetId":id,"taskId":task,"request":cancel}),
+                json!({"operation":"integrateWorkItem","workSetId":id,"taskId":task,"request":integrate})
+            ]
+        );
+        let before = registry.turn_recovery_calls.lock().unwrap().len();
+        for path in [
+            format!("/api/v1/agent-work-sets/{}", Uuid::new_v4()),
+            format!(
+                "/api/v1/agent-conversations/{conversation}/messages/{}/work-sets",
+                Uuid::new_v4()
+            ),
+            format!(
+                "/api/v1/agent-work-sets/{id}/items/{}/integration-preflight",
+                Uuid::new_v4()
+            ),
+            "/api/v1/agent-work-sets/not-a-uuid".into(),
+        ] {
+            let response = router
+                .clone()
+                .oneshot(
+                    protected_request(Method::GET, &path)
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        }
+        assert_eq!(registry.turn_recovery_calls.lock().unwrap().len(), before);
+    }
+
+    #[tokio::test]
+    async fn work_set_routes_require_auth_and_reject_renderer_paths_or_commands() {
+        let (registry, set, preflight, _) = work_set_route_fixture();
+        let router = build_router(registry.clone(), policy(), None);
+        let base = format!(
+            "/api/v1/agent-conversations/{}/messages/{}/work-sets",
+            set["conversationId"].as_str().unwrap(),
+            set["requestId"].as_str().unwrap()
+        );
+        let set_path = format!(
+            "/api/v1/agent-work-sets/{}",
+            set["workSetId"].as_str().unwrap()
+        );
+        let item = format!(
+            "{set_path}/items/{}",
+            set["tasks"][0]["taskId"].as_str().unwrap()
+        );
+        let create = json!({"requestId":set["workSetId"],"expectedAfterCheckpointId":set["sourceCheckpointId"],"kind":"alternatives","tasks":[{"taskId":set["tasks"][0]["taskId"],"title":"A","prompt":"Change A.","dependsOn":[]}]});
+        let mutations = [
+            (base.clone(), create),
+            (
+                format!("{item}/cancel"),
+                json!({"requestId":Uuid::new_v4(),"expectedRevision":3}),
+            ),
+            (
+                format!("{item}/integration"),
+                json!({"requestId":Uuid::new_v4(),"effectDigest":preflight["effectDigest"]}),
+            ),
+        ];
+        for path in [
+            base.clone(),
+            set_path,
+            format!("{item}/integration-preflight"),
+        ] {
+            let response = router
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri(&path)
+                        .header(HOST, policy().authority())
+                        .header(REQUEST_HEADER, REQUEST_MARKER)
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        }
+        for (path, body) in mutations {
+            let response = router
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method(Method::POST)
+                        .uri(&path)
+                        .header(HOST, policy().authority())
+                        .header(REQUEST_HEADER, REQUEST_MARKER)
+                        .header(ORIGIN, policy().origin())
+                        .header(CONTENT_TYPE, "application/json")
+                        .body(Body::from(body.to_string()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+            let response = router
+                .clone()
+                .oneshot(
+                    protected_request(Method::POST, &path)
+                        .header(CONTENT_TYPE, "application/json")
+                        .body(Body::from(body.to_string()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::FORBIDDEN);
+            for field in ["command", "workspacePath", "candidatePath", "sourceRoot"] {
+                let mut injected = body.clone();
+                injected[field] = json!("../../outside; touch marker");
+                let response = router
+                    .clone()
+                    .oneshot(
+                        protected_request(Method::POST, &path)
+                            .header(ORIGIN, policy().origin())
+                            .header(CONTENT_TYPE, "application/json")
+                            .body(Body::from(injected.to_string()))
+                            .unwrap(),
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+            }
+        }
+        assert!(registry.turn_recovery_calls.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn work_set_create_route_accepts_eight_maximum_escaped_prompts_and_bounds_the_body() {
+        let (registry, set, _, _) = work_set_route_fixture();
+        let router = build_router(registry.clone(), policy(), None);
+        let path = format!(
+            "/api/v1/agent-conversations/{}/messages/{}/work-sets",
+            set["conversationId"].as_str().unwrap(),
+            set["requestId"].as_str().unwrap()
+        );
+        let tasks = (0..8)
+            .map(|_| {
+                format!(
+                    r#"{{"taskId":"{}","title":"Maximum","prompt":"{}","dependsOn":[]}}"#,
+                    Uuid::new_v4(),
+                    "\\u0078".repeat(16_384)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(",");
+        let body = format!(
+            r#"{{"requestId":"{}","expectedAfterCheckpointId":"{}","kind":"alternatives","tasks":[{}]}}"#,
+            set["workSetId"].as_str().unwrap(),
+            set["sourceCheckpointId"].as_str().unwrap(),
+            tasks
+        );
+        let response = router
+            .clone()
+            .oneshot(
+                protected_request(Method::POST, &path)
+                    .header(ORIGIN, policy().origin())
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let calls = registry.turn_recovery_calls.lock().unwrap().clone();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0]["request"]["tasks"].as_array().unwrap().len(), 8);
+        assert_eq!(
+            calls[0]["request"]["tasks"][7]["prompt"].as_str().unwrap(),
+            "x".repeat(16_384)
+        );
+        let oversized = format!(r#"{{"padding":"{}"}}"#, "x".repeat(1024 * 1024));
+        let response = router
+            .oneshot(
+                protected_request(Method::POST, &path)
+                    .header(ORIGIN, policy().origin())
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(oversized))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+        assert_eq!(registry.turn_recovery_calls.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn queued_message_routes_protect_scope_and_accept_two_maximum_bodies() {
+        let path = format!(
+            "/api/v1/agent-conversations/{}/messages/{}",
+            Uuid::new_v4(),
+            Uuid::new_v4()
+        );
+        for (method, url, body) in [
+            (
+                Method::PATCH,
+                path.clone(),
+                json!({"requestId":Uuid::new_v4(),"expectedBody":"Old request", "body":"Updated request"}),
+            ),
+            (
+                Method::POST,
+                format!("{path}/cancel"),
+                json!({"requestId":Uuid::new_v4(),"expectedBody":"Old request"}),
+            ),
+        ] {
+            let response = app()
+                .oneshot(
+                    protected_request(method.clone(), &url)
+                        .header(CONTENT_TYPE, "application/json")
+                        .body(Body::from(body.to_string()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::FORBIDDEN);
+            let response = app()
+                .oneshot(
+                    Request::builder()
+                        .method(method.clone())
+                        .uri(&url)
+                        .header(HOST, policy().authority())
+                        .header(ORIGIN, policy().origin())
+                        .header(REQUEST_HEADER, REQUEST_MARKER)
+                        .header(CONTENT_TYPE, "application/json")
+                        .body(Body::from(body.to_string()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+            let mut unknown = body;
+            unknown["workspaceId"] = json!(Uuid::new_v4());
+            let response = app()
+                .oneshot(
+                    protected_request(method, &url)
+                        .header(ORIGIN, policy().origin())
+                        .header(CONTENT_TYPE, "application/json")
+                        .body(Body::from(unknown.to_string()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        }
+        let escaped = "\\u0061".repeat(16_384);
+        let body = format!(
+            "{{\"requestId\":\"{}\",\"expectedBody\":\"{escaped}\",\"body\":\"{escaped}\"}}",
+            Uuid::new_v4()
+        );
+        let response = app()
+            .oneshot(
+                protected_request(Method::PATCH, &path)
+                    .header(ORIGIN, policy().origin())
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "valid bodies reach the backend"
+        );
+        let response = app()
+            .oneshot(
+                protected_request(Method::PATCH, &path)
+                    .header(ORIGIN, policy().origin())
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from("a".repeat(2 * 16_384 * 6 + 8193)))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    }
+
+    #[tokio::test]
     async fn agent_session_list_route_serializes_global_handoff_contract() {
         let response = app()
             .oneshot(
@@ -7306,6 +9521,280 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn mr_source_routes_preserve_scope_revision_and_large_literal_text() {
+        let uri = format!(
+            "/api/v1/workspaces/{}/repositories/repo-1/source",
+            Uuid::nil()
+        );
+        let read = app()
+            .oneshot(
+                protected_request(
+                    Method::GET,
+                    &format!("{uri}?filePath=src%2Fsource%20file.ts"),
+                )
+                .body(Body::empty())
+                .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(read.status(), StatusCode::OK);
+        let source = response_json(read).await;
+        assert_eq!(source["filePath"], "src/source file.ts");
+        let content = "literal $text\\\n".repeat(8192);
+        let request = json!({"filePath":"src/source file.ts","content":content,"expectedRevision":source["revision"]});
+        let saved = app()
+            .oneshot(
+                protected_request(Method::PUT, &uri)
+                    .header(ORIGIN, policy().origin())
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(request.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(saved.status(), StatusCode::OK);
+        assert_eq!(response_json(saved).await["content"], content);
+        let conflict = app().oneshot(protected_request(Method::PUT,&uri).header(ORIGIN,policy().origin()).header(CONTENT_TYPE,"application/json").body(Body::from(json!({"filePath":"src/source file.ts","content":"stale","expectedRevision":format!("sha256:{}","c".repeat(64))}).to_string())).unwrap()).await.unwrap();
+        assert_eq!(conflict.status(), StatusCode::CONFLICT);
+        assert_eq!(error_code(conflict).await, "repository_file_conflict");
+    }
+
+    #[tokio::test]
+    async fn mr_source_routes_forward_one_comparison_identity_and_refresh_flag() {
+        let uri = format!(
+            "/api/v1/workspaces/{}/repositories/repo-1/gitlab/17/comparison?refresh=true",
+            Uuid::nil()
+        );
+        let response = app()
+            .oneshot(
+                protected_request(Method::GET, &uri)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let comparison = response_json(response).await;
+        assert_eq!(comparison["iid"], 17);
+        assert_eq!(comparison["published"]["repositoryId"], "repo-1");
+        assert_eq!(comparison["status"], "missingCommits");
+        assert!(comparison.get("latestWork").is_none());
+    }
+
+    #[tokio::test]
+    async fn mr_inline_comment_route_preserves_workspace_and_published_position() {
+        let request = json!({"body":"Explain this line.","filePath":"source.rs","side":"additions","line":1,"workspaceId":Uuid::nil(),"expectedPosition":{"baseCommitOid":"a".repeat(40),"startCommitOid":"a".repeat(40),"headCommitOid":"b".repeat(40)}});
+        let response = app()
+            .oneshot(
+                protected_request(Method::POST, "/api/v1/reviews/gitlab/repo-1/17/comments")
+                    .header(ORIGIN, policy().origin())
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(request.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response_json(response).await["accepted"], true);
+    }
+
+    #[tokio::test]
+    async fn mr_source_routes_reject_untrusted_requests_before_backend_calls() {
+        let backend = Arc::new(FakeRegistry::default());
+        let router = build_router(backend.clone(), policy(), None);
+        let uri = format!(
+            "/api/v1/workspaces/{}/repositories/repo-1/source",
+            Uuid::nil()
+        );
+        let request = json!({"filePath":"source.ts","content":"edit","expectedRevision":format!("sha256:{}","a".repeat(64))});
+        let no_origin = router
+            .clone()
+            .oneshot(
+                protected_request(Method::PUT, &uri)
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(request.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(no_origin.status(), StatusCode::FORBIDDEN);
+        let mut untrusted = request;
+        untrusted["root"] = json!("/outside");
+        let unknown_field = router
+            .clone()
+            .oneshot(
+                protected_request(Method::PUT, &uri)
+                    .header(ORIGIN, policy().origin())
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(untrusted.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(unknown_field.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        let bad_query = router
+            .clone()
+            .oneshot(
+                protected_request(Method::GET, &format!("{uri}?filePath=file&root=outside"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(bad_query.status(), StatusCode::BAD_REQUEST);
+        let no_auth = router
+            .oneshot(
+                Request::builder()
+                    .uri(format!("{uri}?filePath=file"))
+                    .header(HOST, policy().authority())
+                    .header(REQUEST_HEADER, REQUEST_MARKER)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(no_auth.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(backend.source_calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn gitlab_discussions_route_preserves_workspace_scope_and_freshness() {
+        let workspace_id = Uuid::nil();
+        let response = app()
+            .oneshot(
+                protected_request(
+                    Method::GET,
+                    &format!(
+                        "/api/v1/reviews/gitlab/repo-1/17/discussions?workspaceId={workspace_id}"
+                    ),
+                )
+                .body(Body::empty())
+                .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response_json(response).await;
+        assert_eq!(body["repositoryId"], "repo-1");
+        assert_eq!(body["iid"], 17);
+        assert_eq!(body["viewerLogin"], "alice");
+        assert_eq!(body["fromCache"], false);
+        assert_eq!(body["truncated"], false);
+    }
+
+    #[tokio::test]
+    async fn gitlab_discussion_reply_route_preserves_thread_and_body() {
+        let response = app()
+            .oneshot(
+                protected_request(Method::POST, "/api/v1/reviews/gitlab/repo-1/17/discussions/reply")
+                    .header(ORIGIN, policy().origin())
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(json!({"discussionId":"thread-1","body":"Reply with $literal\ntext", "workspaceId":Uuid::nil()}).to_string())).unwrap(),
+            ).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response_json(response).await;
+        assert_eq!(body["discussionId"], "thread-1");
+        assert_eq!(body["comment"]["body"], "Reply with $literal\ntext");
+        assert_eq!(body["comment"]["id"], 92);
+    }
+
+    #[tokio::test]
+    async fn gitlab_discussion_routes_reject_untrusted_requests_before_backend_calls() {
+        let backend = Arc::new(FakeRegistry::default());
+        let router = build_router(backend.clone(), policy(), None);
+        let read_uri = "/api/v1/reviews/gitlab/repo-1/17/discussions";
+        let reply_uri = "/api/v1/reviews/gitlab/repo-1/17/discussions/reply";
+        let unauthenticated = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(read_uri)
+                    .header(HOST, policy().authority())
+                    .header(REQUEST_HEADER, REQUEST_MARKER)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(unauthenticated.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(error_code(unauthenticated).await, "unauthorized");
+        let missing_origin = router
+            .clone()
+            .oneshot(
+                protected_request(Method::POST, reply_uri)
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(r#"{"discussionId":"thread-1","body":"Reply"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(missing_origin.status(), StatusCode::FORBIDDEN);
+        assert_eq!(error_code(missing_origin).await, "invalid_origin");
+        let unknown_field = router.clone().oneshot(protected_request(Method::POST,reply_uri)
+            .header(ORIGIN,policy().origin()).header(CONTENT_TYPE,"application/json")
+            .body(Body::from(r#"{"discussionId":"thread-1","body":"Reply","origin":"https://other.example/project.git"}"#)).unwrap()).await.unwrap();
+        assert_eq!(unknown_field.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(error_code(unknown_field).await, "invalid_payload");
+        for query in ["workspaceId=invalid", "origin=https%3A%2F%2Fother.example"] {
+            let response = router
+                .clone()
+                .oneshot(
+                    protected_request(Method::GET, &format!("{read_uri}?{query}"))
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        }
+        assert_eq!(backend.discussion_calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn gitlab_discussion_reply_failure_asks_for_refresh_before_retry() {
+        let response = ApiError::from_mvp(map_local_mvp_error(
+            LocalWtsError::GitlabDiscussionReplyFailed,
+        ))
+        .into_response();
+        assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+        let body = response_json(response).await;
+        assert_eq!(body["error"]["code"], "gitlab_discussion_reply_failed");
+        assert_eq!(
+            body["error"]["message"],
+            "WTS could not confirm the reply. Refresh the discussion before you try again."
+        );
+    }
+
+    #[tokio::test]
+    async fn a_busy_workspace_gives_a_recovery_step_for_checks_and_restores() {
+        let response =
+            ApiError::from_mvp(map_local_mvp_error(LocalWtsError::AgentConversationBusy))
+                .into_response();
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        let body = response_json(response).await;
+        assert_eq!(body["error"]["code"], "agent_conversation_busy");
+        assert_eq!(
+            body["error"]["message"],
+            "Another WTS task is active in this workspace. Wait for it to finish, then retry."
+        );
+    }
+
+    #[tokio::test]
+    async fn unavailable_clone_branch_has_a_recoverable_http_error() {
+        let response = ApiError::from_mvp(map_local_mvp_error(
+            LocalWtsError::RepositoryCloneBranchUnavailable,
+        ))
+        .into_response();
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        let body = response_json(response).await;
+        assert_eq!(body["error"]["code"], "repository_clone_branch_unavailable");
+        assert_eq!(
+            body["error"]["message"],
+            "The requested branch is not available locally. Refresh the repository branches, or select an available branch."
+        );
+    }
+
+    #[tokio::test]
     async fn activity_watch_route_rejects_remote_endpoints_before_transport() {
         let response = app()
             .oneshot(
@@ -7459,6 +9948,46 @@ mod tests {
     #[test]
     fn mvp_failures_have_stable_sanitized_http_mappings() {
         let cases = [
+            (
+                MvpFailure::InvalidAgentConversation,
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "invalid_agent_conversation",
+            ),
+            (
+                MvpFailure::AgentConversationNotFound,
+                StatusCode::NOT_FOUND,
+                "agent_conversation_not_found",
+            ),
+            (
+                MvpFailure::AgentConversationConflict,
+                StatusCode::CONFLICT,
+                "agent_conversation_conflict",
+            ),
+            (
+                MvpFailure::AgentConversationBusy,
+                StatusCode::CONFLICT,
+                "agent_conversation_busy",
+            ),
+            (
+                MvpFailure::AgentConversationSourceUnavailable,
+                StatusCode::SERVICE_UNAVAILABLE,
+                "agent_conversation_source_unavailable",
+            ),
+            (
+                MvpFailure::AgentConversationPlatformUnavailable,
+                StatusCode::SERVICE_UNAVAILABLE,
+                "agent_conversation_platform_unavailable",
+            ),
+            (
+                MvpFailure::AgentConversationStorageFull,
+                StatusCode::CONFLICT,
+                "agent_conversation_storage_full",
+            ),
+            (
+                MvpFailure::AgentConversationLimit,
+                StatusCode::CONFLICT,
+                "agent_conversation_limit",
+            ),
             (
                 MvpFailure::InvalidLocalConfiguration,
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -8461,6 +10990,148 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn setup_recovery_route_preserves_review_and_requires_an_explicit_exact_action() {
+        let backend = Arc::new(FakeRegistry::default());
+        let router = build_router(Arc::clone(&backend), policy(), None);
+        let workspace_id = create_saved_workspace(&router).await;
+        let digest = format!("sha256:{}", "a".repeat(64));
+        let mut preview = fake_preflight(workspace_id);
+        preview["ready"] = json!(false);
+        preview["setupRecovery"] = json!({
+            "effectDigest": digest,
+            "ready": true,
+            "paths": ["/Users/test/cd/retained-workspace/checkout-api"],
+            "blockers": []
+        });
+        *backend.setup_recovery_preflight.lock().unwrap() =
+            Some(serde_json::from_value(preview.clone()).unwrap());
+        let read = router
+            .clone()
+            .oneshot(
+                protected_request(
+                    Method::GET,
+                    &format!("/api/v1/workspaces/{workspace_id}/preflight"),
+                )
+                .body(Body::empty())
+                .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(read.status(), StatusCode::OK);
+        assert_eq!(response_json(read).await, preview);
+        assert!(backend.setup_recovery_calls.lock().unwrap().is_empty());
+        assert!(backend.materializations.lock().unwrap().is_empty());
+
+        let uri = format!("/api/v1/workspaces/{workspace_id}/setup-recovery");
+        let recover = router
+            .clone()
+            .oneshot(
+                protected_request(Method::POST, &uri)
+                    .header(ORIGIN, policy().origin())
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(json!({"effectDigest":digest}).to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(recover.status(), StatusCode::OK);
+        assert_eq!(response_json(recover).await, fake_preflight(workspace_id));
+        assert_eq!(
+            *backend.setup_recovery_calls.lock().unwrap(),
+            [(workspace_id, digest)]
+        );
+        assert!(backend.materializations.lock().unwrap().is_empty());
+
+        let stale = format!("sha256:{}", "b".repeat(64));
+        let rejected = router
+            .oneshot(
+                protected_request(Method::POST, &uri)
+                    .header(ORIGIN, policy().origin())
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(json!({"effectDigest":stale}).to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(rejected.status(), StatusCode::CONFLICT);
+        assert_eq!(error_code(rejected).await, "stale_preflight");
+        assert!(backend.materializations.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn setup_recovery_route_rejects_untrusted_and_malformed_actions_before_backend() {
+        let backend = Arc::new(FakeRegistry::default());
+        let router = build_router(Arc::clone(&backend), policy(), None);
+        let workspace_id = create_saved_workspace(&router).await;
+        let uri = format!("/api/v1/workspaces/{workspace_id}/setup-recovery");
+        let valid = json!({"effectDigest":format!("sha256:{}", "a".repeat(64))});
+        let unauthenticated = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri(&uri)
+                    .header(HOST, policy().authority())
+                    .header(ORIGIN, policy().origin())
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(valid.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(unauthenticated.status(), StatusCode::UNAUTHORIZED);
+        let missing_origin = router
+            .clone()
+            .oneshot(
+                protected_request(Method::POST, &uri)
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(valid.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(missing_origin.status(), StatusCode::FORBIDDEN);
+        for (path, body, expected) in [
+            (
+                uri.clone(),
+                json!({"effectDigest":valid["effectDigest"],"workspacePath":"/outside"}),
+                StatusCode::UNPROCESSABLE_ENTITY,
+            ),
+            (uri.clone(), json!({}), StatusCode::UNPROCESSABLE_ENTITY),
+            (
+                uri.clone(),
+                json!({"effectDigest":" "}),
+                StatusCode::BAD_REQUEST,
+            ),
+            (
+                uri.clone(),
+                json!({"effectDigest":"sha256:short"}),
+                StatusCode::BAD_REQUEST,
+            ),
+            (
+                "/api/v1/workspaces/not-a-uuid/setup-recovery".to_owned(),
+                valid.clone(),
+                StatusCode::NOT_FOUND,
+            ),
+        ] {
+            let rejected = router
+                .clone()
+                .oneshot(
+                    protected_request(Method::POST, &path)
+                        .header(ORIGIN, policy().origin())
+                        .header(CONTENT_TYPE, "application/json")
+                        .body(Body::from(body.to_string()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(rejected.status(), expected, "{path}: {body}");
+        }
+        assert!(backend.setup_recovery_calls.lock().unwrap().is_empty());
+        assert!(backend.materializations.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
     async fn materialize_and_open_enforce_transport_guards_and_strict_bodies() {
         let router = app();
         let workspace_id = create_saved_workspace(&router).await;
@@ -8932,6 +11603,67 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn removal_routes_preserve_active_operation_recovery_without_deleting() {
+        let backend = Arc::new(FakeRegistry::default());
+        let router = build_router(Arc::clone(&backend), policy(), None);
+        let workspace_id = create_saved_workspace(&router).await;
+        let mut value = fake_removal_preflight(workspace_id, false);
+        value["ready"] = json!(false);
+        value["protectedPaths"] = json!([]);
+        value["blockers"] = json!([{
+            "code": "activeOperation",
+            "message": "An agent task is active. Wait before removal.",
+            "displayPath": format!("/Users/test/cd/{workspace_id}"),
+            "expected": "No active or queued workspace operations.",
+            "observed": "An agent task is active.",
+            "recoverySteps": ["Wait for the task to finish, or stop it from its task controls.", "Select Check again."]
+        }]);
+        *backend.removal_preflight.lock().unwrap() =
+            Some(serde_json::from_value(value.clone()).unwrap());
+        let read = router
+            .clone()
+            .oneshot(
+                protected_request(
+                    Method::GET,
+                    &format!("/api/v1/workspaces/{workspace_id}/removal-preflight"),
+                )
+                .body(Body::empty())
+                .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(read.status(), StatusCode::OK);
+        assert_eq!(response_json(read).await, value);
+        assert!(backend.removal_idempotency.lock().unwrap().is_empty());
+        let remove = router
+            .oneshot(
+                protected_request(
+                    Method::POST,
+                    &format!("/api/v1/workspaces/{workspace_id}/remove"),
+                )
+                .header(ORIGIN, policy().origin())
+                .header(IDEMPOTENCY_HEADER, REMOVE_KEY)
+                .header(CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    r#"{"effectDigest":"sha256:remove-test","deleteProtectedPaths":true}"#,
+                ))
+                .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(remove.status(), StatusCode::CONFLICT);
+        assert_eq!(error_code(remove).await, "workspace_removal_blocked");
+        assert!(
+            backend
+                .workspaces
+                .lock()
+                .unwrap()
+                .contains_key(&workspace_id)
+        );
+        assert!(backend.removal_idempotency.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
     async fn manual_workspace_commands_are_strict_previewed_and_idempotent() {
         let router = app();
         let workspace_id = create_saved_workspace(&router).await;
@@ -9316,6 +12048,32 @@ mod tests {
             .expect("router response");
         assert_eq!(over_authorized.status(), StatusCode::UNPROCESSABLE_ENTITY);
         assert_eq!(error_code(over_authorized).await, "invalid_payload");
+    }
+
+    #[tokio::test]
+    async fn saved_verification_summary_route_returns_only_the_saved_contract() {
+        let router = app();
+        let workspace_id = create_saved_workspace(&router).await;
+        let uri = format!("/api/v1/workspaces/{workspace_id}/verification/summary");
+        let empty = router.clone().oneshot(protected_request(Method::GET, &uri).body(Body::empty()).unwrap()).await.unwrap();
+        assert_eq!(empty.status(), StatusCode::OK);
+        assert_eq!(response_json(empty).await, Value::Null);
+        let materialize_uri = format!("/api/v1/workspaces/{workspace_id}/materialize");
+        let materialized = router.clone().oneshot(protected_request(Method::POST, &materialize_uri)
+            .header(ORIGIN, policy().origin()).header(IDEMPOTENCY_HEADER, MATERIALIZE_KEY)
+            .header(CONTENT_TYPE, "application/json")
+            .body(Body::from(r#"{"effectDigest":"sha256:test"}"#)).unwrap()).await.unwrap();
+        assert_eq!(materialized.status(), StatusCode::OK);
+        let response = router.clone().oneshot(protected_request(Method::GET, &uri).body(Body::empty()).unwrap()).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let wire = response_json(response).await;
+        assert_eq!(wire["workspaceId"], workspace_id.to_string());
+        assert_eq!(wire["verificationResult"]["status"], "failed");
+        assert_eq!(wire["verificationResult"]["planRevision"], 1);
+        assert_eq!(wire.as_object().unwrap().len(), 5);
+        assert!(wire.get("context").is_none());
+        let untrusted = router.oneshot(Request::builder().method(Method::GET).uri(uri).body(Body::empty()).unwrap()).await.unwrap();
+        assert_ne!(untrusted.status(), StatusCode::OK);
     }
 
     #[tokio::test]

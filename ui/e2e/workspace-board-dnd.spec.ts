@@ -14,11 +14,16 @@ async function seedBoardWorkspaces(page: Page) {
       "X-WTS-Request": "local-ui",
       "X-WTS-Session": bootstrap.sessionToken,
     };
-    const repositoriesResponse = await fetch("/api/v1/repositories", {
-      headers,
-    });
+    let repositoriesResponse = await fetch("/api/v1/repositories", { headers });
+    for (let attempt = 0; attempt < 20 && repositoriesResponse.status === 429; attempt += 1) {
+      const failure = await repositoriesResponse.clone().json();
+      if (failure.error?.code !== "scan_capacity_exhausted") break;
+      // Let the page finish its initial repository scan before test setup retries.
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      repositoriesResponse = await fetch("/api/v1/repositories", { headers });
+    }
     if (!repositoriesResponse.ok) {
-      throw new Error("The repository list could not load.");
+      throw new Error(`The repository list failed (${repositoriesResponse.status}): ${await repositoriesResponse.text()}`);
     }
     const catalog = (await repositoriesResponse.json()) as {
       repositories: Array<{
@@ -71,7 +76,8 @@ async function dragTo(
   target: Locator,
   targetEdge: "center" | "bottom" = "center",
 ) {
-  const handle = source.getByRole("button", { name: /^Drag workspace / });
+  const handle = source.getByRole("button", { name: /^Open .* details$/ });
+  await source.scrollIntoViewIfNeeded();
   const sourceBox = await handle.boundingBox();
   const targetBox = await target.boundingBox();
   if (!sourceBox || !targetBox) throw new Error("The drag target is not visible.");
@@ -101,7 +107,8 @@ async function dragBackToSource(
   source: Locator,
   target: Locator,
 ) {
-  const handle = source.getByRole("button", { name: /^Drag workspace / });
+  const handle = source.getByRole("button", { name: /^Open .* details$/ });
+  await source.scrollIntoViewIfNeeded();
   const sourceBox = await handle.boundingBox();
   const targetBox = await target.boundingBox();
   if (!sourceBox || !targetBox) throw new Error("The drag target is not visible.");
@@ -234,7 +241,8 @@ test("archives from the action shelf without reusing a prior card neighbor", asy
   const target = ready.locator(
     `[data-workspace-id="${initialOrder[1]}"]`,
   );
-  const handle = source.getByRole("button", { name: /^Drag workspace / });
+  const handle = source.getByRole("button", { name: /^Open .* details$/ });
+  await source.scrollIntoViewIfNeeded();
   const sourceBox = await handle.boundingBox();
   const targetBox = await target.boundingBox();
   if (!sourceBox || !targetBox) throw new Error("The drag target is not visible.");
@@ -268,7 +276,7 @@ test("archives from the action shelf without reusing a prior card neighbor", asy
   expect(requestBody).not.toHaveProperty("afterWorkspaceId");
 });
 
-test("reorders a workspace from the keyboard drag handle", async ({ page }) => {
+test("moves a workspace with the keyboard menu", async ({ page }) => {
   test.setTimeout(30_000);
   await page.goto("/");
   const createdIds = await seedBoardWorkspaces(page);
@@ -283,19 +291,26 @@ test("reorders a workspace from the keyboard drag handle", async ({ page }) => {
   const source = ready.locator(
     `[data-workspace-id="${initialOrder[0]}"]`,
   );
-  const handle = source.getByRole("button", { name: /^Drag workspace / });
+  const move = source.getByRole("button", { name: /^Move Board drag / });
   const requestPromise = nextBoardPlacementRequest(page);
-  await handle.focus();
-  await page.keyboard.press("Space");
+  await move.focus();
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("menuitem", { name: "Move to Review" })).toBeFocused();
   await page.keyboard.press("ArrowDown");
-  await page.keyboard.press("Space");
-  expect((await requestPromise).postDataJSON()).toMatchObject({ state: "ready" });
+  await expect(page.getByRole("menuitem", { name: "Move to Active" })).toBeFocused();
+  await page.keyboard.press("Enter");
+  expect((await requestPromise).postDataJSON()).toMatchObject({ state: "active" });
+  const active = board.getByRole("region", { name: "Active" });
   await expect
-    .poll(() => seededWorkspaceIds(ready, createdIds))
-    .toEqual([initialOrder[1], initialOrder[0]]);
+    .poll(() => seededWorkspaceIds(active, createdIds))
+    .toEqual([initialOrder[0]]);
+  await page.reload();
+  await expect
+    .poll(() => seededWorkspaceIds(active, createdIds))
+    .toEqual([initialOrder[0]]);
 });
 
-test("disables board placement while search hides workspaces", async ({
+test("prevents card dragging while search hides other workspaces", async ({
   page,
 }) => {
   await page.goto("/");
@@ -310,6 +325,22 @@ test("disables board placement while search hides workspaces", async ({
   const ready = board.getByRole("region", { name: "Ready" });
   const handle = ready
     .locator(`[data-workspace-id="${createdIds[0]}"]`)
-    .getByRole("button", { name: "Drag workspace Board drag first" });
-  await expect(handle).toBeDisabled();
+    .getByRole("button", { name: /^Open .* details$/ });
+  const placementRequests: string[] = [];
+  page.on("request", (request) => {
+    if (request.method() === "PATCH" && request.url().endsWith("/board-placement")) {
+      placementRequests.push(request.url());
+    }
+  });
+  await handle.scrollIntoViewIfNeeded();
+  const sourceBox = await handle.boundingBox();
+  const targetBox = await board.getByRole("region", { name: "Active" }).boundingBox();
+  if (!sourceBox || !targetBox) throw new Error("The drag target is not visible.");
+  await page.mouse.move(sourceBox.x + sourceBox.width / 2, sourceBox.y + sourceBox.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(targetBox.x + targetBox.width / 2, targetBox.y + 100, { steps: 10 });
+  await expect(page.getByLabel("Workspace drop actions")).toHaveCount(0);
+  await page.mouse.up();
+  await expect.poll(() => seededWorkspaceIds(ready, createdIds)).toEqual([createdIds[0]]);
+  expect(placementRequests).toEqual([]);
 });

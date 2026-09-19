@@ -1,0 +1,30 @@
+import { ORIGINAL_MR_TASK, UNRELATED_DRAFT, expect, mountFeedback, test } from "./fixtures/agentFeedback";
+
+test("keeps the real transcript and queue usable on a short screen", async ({ page, feedbackOrigin }, testInfo) => {
+  await page.setViewportSize({ width: 375, height: 500 });
+  const fixture = await mountFeedback(page, feedbackOrigin);
+  const log = page.getByRole("log", { name: "Agent messages" });
+  await expect(log.getByText(ORIGINAL_MR_TASK, { exact: true })).toBeVisible();
+  await expect(page.getByRole("navigation", { name: "Agent tasks" })).toHaveCount(0);
+  const queue = page.getByRole("region", { name: "Queued requests" });
+  const composer = page.getByRole("textbox", { name: "Message to agent" });
+  await expect(queue).toBeVisible();
+  await expect(composer).toHaveValue(UNRELATED_DRAFT);
+  const transcriptScroller = log.locator("..");
+  expect(await transcriptScroller.evaluate(element => element.clientHeight)).toBeGreaterThanOrEqual(100);
+  await log.getByText(ORIGINAL_MR_TASK, { exact: true }).scrollIntoViewIfNeeded();
+  await page.screenshot({ animations: "disabled", path: testInfo.outputPath("feedback-transcript-short-history.png") });
+  await log.getByText(ORIGINAL_MR_TASK, { exact: true }).hover();
+  await page.mouse.wheel(0, 1000);
+  await expect.poll(() => transcriptScroller.evaluate(element => element.scrollTop)).toBeGreaterThan(0);
+  await expect(page.getByRole("button", { name: "Queue request", exact: true })).toBeInViewport();
+  await composer.scrollIntoViewIfNeeded();
+  await expect(composer).toBeInViewport();
+  await expect(page.getByRole("button", { name: "Queue request", exact: true })).toBeInViewport();
+  expect(await queue.evaluate((element, composerId) => Boolean(element.compareDocumentPosition(document.getElementById(composerId)!) & Node.DOCUMENT_POSITION_FOLLOWING), "agent-feedback-message")).toBe(true);
+  expect(await page.evaluate(() => window.scrollY)).toBe(0);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(375);
+  await page.screenshot({ animations: "disabled", path: testInfo.outputPath("feedback-transcript-short.png") });
+  expect(fixture.sends).toHaveLength(0);
+  expect(fixture.unexpected).toEqual([]);
+});

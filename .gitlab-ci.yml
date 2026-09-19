@@ -1,0 +1,49 @@
+workflow:
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_PIPELINE_SOURCE == "web"'
+    - when: never
+
+stages:
+  - test
+
+variables:
+  CARGO_BUILD_JOBS: "4"
+  RUST_TEST_THREADS: "4"
+  CARGO_TERM_COLOR: always
+
+default:
+  interruptible: true
+  cache:
+    key:
+      prefix: "$CI_JOB_NAME"
+      files:
+        - Cargo.lock
+        - ui/package-lock.json
+    paths:
+      - .tools/gitlab-ci/
+      - target/
+  artifacts:
+    when: on_failure
+    expire_in: 14 days
+    paths:
+      - artifacts/ci/
+      - ui/playwright-report/
+      - ui/test-results/
+
+linux-gate:
+  stage: test
+  image: debian:bookworm-slim
+  tags:
+    - backend-docker-large
+  timeout: 45 minutes
+  script:
+    - bash scripts/test-gitlab.sh linux
+
+macos-native:
+  stage: test
+  tags:
+    - mac-vm-large
+  timeout: 45 minutes
+  script:
+    - bash scripts/test-gitlab.sh macos

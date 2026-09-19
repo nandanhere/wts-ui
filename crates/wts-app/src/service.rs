@@ -1,3 +1,27 @@
+#[path = "planning_documents.rs"]
+mod planning_documents;
+use planning_documents::{
+    discover_generated_planning_documents, read_planning_document, replace_planning_document,
+    resolve_planning_document_file_name,
+};
+
+#[path = "verification_summary.rs"]
+mod verification_summary;
+
+#[cfg(test)]
+#[path = "materialization_rollback_tests.rs"]
+mod materialization_rollback_tests;
+#[cfg(test)]
+use materialization_rollback_tests::{MaterializationStage, run_materialization_test_hook};
+
+#[path = "setup_recovery.rs"]
+mod setup_recovery;
+use setup_recovery::{SetupAttemptStore, SetupAttemptWriter, setup_recovery_blocker};
+
+#[path = "agent_conversations.rs"]
+mod agent_conversations;
+pub use agent_conversations::*;
+
 use crate::{
     AcceptanceFileDigest, AdapterFailure, AgentProvider, AgentReportStatus, AgentRunFailure,
     AgentRunResult, AgentRunState, AgentRunSummary, AgentSession, AgentSessionCategory,
@@ -48,6 +72,7 @@ use crate::{
     code_workspace::{CodeWorkspaceImportError, import_code_workspace},
     copilot_observation::CopilotSessionObserver,
     evidence::{EVIDENCE_DIRECTORY, EvidenceStore, EvidenceStoreError},
+    generated_files::GeneratedFiles,
     model::{MATERIALIZATION_MANIFEST_SCHEMA_VERSION, RepositoryCheckoutAlias},
     runtime_analysis::{RuntimeRepositorySource, analyze_runtime},
     verification::{approved_fixed_command, execute_check_with_cancellation},
@@ -79,18 +104,19 @@ use wts_core::workspace::{
     WorkspaceRepositoryRequest,
 };
 use wts_git::{
-    GitError, GitWorktreeService, RepositoryInspection, RepositoryRequest,
+    GitError, GitWorktreeService, RepositoryCloneOptions, RepositoryInspection, RepositoryRequest,
     WorkspaceWorktreeRequest, WorktreePlan, WorktreeRemovalRequest,
 };
 use wts_integrations::{
     ActivityWatchConnector, ActivityWatchDailyReview, ActivityWatchError, ActivityWatchReviewError,
     ActivityWatchStatus, GithubReviewInbox, GithubReviewsAdapter, GithubTrustedRepository,
-    GitlabIntegrationStatus, GitlabMergeRequestInbox, GitlabMergeRequestsAdapter,
-    GitlabReviewCommentRequest, GitlabReviewInbox, GitlabReviewPatch,
+    GitlabDiscussions, GitlabIntegrationStatus, GitlabMergeRequestInbox,
+    GitlabMergeRequestsAdapter, GitlabReviewCommentRequest, GitlabReviewInbox, GitlabReviewPatch,
     GitlabReviewTrustedRepository, GitlabTrustedRepository, IntegrationDetector,
     JiraActiveIssueList, JiraIssue, JiraMcpAdapter, JiraMcpError, JiraMcpVerification,
     OpenProjectAdapter, OpenProjectError, OpenProjectVerification,
-    PublishGitlabReviewCommentResult, SetupSnapshot, TimeReviewAgentBrief,
+    PublishGitlabReviewCommentResult, ReplyGitlabDiscussionResult, SetupSnapshot,
+    TimeReviewAgentBrief,
 };
 use wts_store::{
     CreateWorkspaceResult, MAX_WORK_ITEM_CONTENT_BYTES, MAX_WORK_ITEM_STATUS_BYTES,
@@ -104,8 +130,15 @@ use wts_store::{
 const LEGACY_CODE_WORKSPACE_FILE: &str = "wts.code-workspace";
 const WTS_GUIDE_FILE: &str = "WTS.md";
 const WORKSPACE_AGENTS_FILE: &str = "AGENTS.md";
+const WORKSPACE_CLAUDE_FILE: &str = "CLAUDE.md";
+const WORKSPACE_CURSOR_RULES_FILE: &str = ".cursorrules";
+const WORKSPACE_COPILOT_DIR: &str = ".github";
+const WORKSPACE_COPILOT_FILE: &str = ".github/copilot-instructions.md";
 const WTS_CURRENT_TASK_MARKER: &str = "\n## Current task\n\n";
 const WTS_MANAGED_AGENTS_MARKER: &str = "<!-- managed-by-wts: workspace-agents -->";
+const WTS_MANAGED_CLAUDE_MARKER: &str = "<!-- managed-by-wts: workspace-claude -->";
+const WTS_MANAGED_CURSOR_MARKER: &str = "<!-- managed-by-wts: workspace-cursorrules -->";
+const WTS_MANAGED_COPILOT_MARKER: &str = "<!-- managed-by-wts: workspace-copilot -->";
 const MATERIALIZATION_MANIFEST_FILE: &str = ".wts-workspace.json";
 const WORK_ITEMS_FILE: &str = "work-items.json";
 const REVIEW_INBOX_FILE: &str = "review-inbox.json";
@@ -117,7 +150,7 @@ const MAX_GENERATED_FILE_BYTES: usize = 256 * 1024;
 const MAX_DISCOVERED_PLANNING_DOCUMENTS: usize = 100;
 const MAX_REMOVAL_TREE_ENTRIES: usize = 100_000;
 const MAX_REMOVAL_TREE_DEPTH: usize = 64;
-const MAX_AGENT_PROMPT_BYTES: usize = 16 * 1024;
+const MAX_AGENT_PROMPT_BYTES: usize = 64 * 1024;
 const MAX_WORKSPACE_AGENT_BRIEF_BYTES: usize = 64 * 1024;
 // Discovery can traverse several configured roots. Keep the UI-facing
 // snapshot warm across a normal create-workspace flow; every operation that
@@ -188,6 +221,30 @@ const NODE_BINARY_ENV: &str = "WTS_BROWSER_NODE";
 
 #[derive(Debug, Error)]
 pub enum LocalWtsError {
+    #[error("The agent conversation request is invalid.")]
+    InvalidAgentConversation,
+    #[error("The agent conversation was not found.")]
+    AgentConversationNotFound,
+    #[error("The request ID belongs to a different message.")]
+    AgentConversationConflict,
+    #[error("Another WTS task is active in this workspace. Wait for it to finish, then retry.")]
+    AgentConversationBusy,
+    #[error(
+        "This workspace has 64 queued requests. Wait for a request to finish or cancel a queued request."
+    )]
+    AgentConversationQueueFull,
+    #[error("The conversation or its workspace is unavailable. Check the workspace and try again.")]
+    AgentConversationUnavailable,
+    #[error(
+        "WTS needs its source repository. Start WTS with WTS_UI_REPOSITORY_ROOT set to the source checkout."
+    )]
+    AgentConversationSourceUnavailable,
+    #[error("Conversation storage is full. Open an existing conversation to continue.")]
+    AgentConversationStorageFull,
+    #[error("This conversation reached its limit. Start a new conversation to continue.")]
+    AgentConversationLimit,
+    #[error("Agent chat execution needs macOS or Linux. Saved chats remain available.")]
+    AgentConversationPlatformUnavailable,
     #[error("repository root must be an absolute local directory")]
     InvalidRepositoryRoot,
     #[error("repository catalog is unavailable")]
@@ -212,10 +269,20 @@ pub enum LocalWtsError {
     RepositoryFileNotText,
     #[error("the repository file exceeds the local size limit")]
     RepositoryFileTooLarge,
+    #[error("The source file changed. Reload the file before you save.")]
+    RepositoryFileConflict,
+    #[error("The source file revision is invalid.")]
+    InvalidRepositoryFileRevision,
+    #[error(
+        "WTS could not load the merge request comparison. Refresh the merge request and check the local branch."
+    )]
+    GitlabComparisonUnavailable,
     #[error("the Git remote URL is invalid or unsupported")]
     InvalidRepositoryRemote,
     #[error("the repository clone target already exists")]
     RepositoryCloneConflict,
+    #[error("The requested clone branch is not available in the local repository.")]
+    RepositoryCloneBranchUnavailable,
     #[error("the repository could not be cloned")]
     RepositoryCloneFailed,
     #[error("the repository branches could not be refreshed")]
@@ -230,6 +297,10 @@ pub enum LocalWtsError {
     RepositoryForgeUnsupported,
     #[error("GitLab did not accept the review comment")]
     GitlabReviewCommentFailed,
+    #[error("WTS could not load the GitLab discussions.")]
+    GitlabDiscussionsUnavailable,
+    #[error("WTS could not confirm the GitLab reply.")]
+    GitlabDiscussionReplyFailed,
     #[error("the system browser is unavailable")]
     BrowserUnavailable,
     #[error("the system browser rejected the repository launch")]
@@ -397,6 +468,7 @@ pub enum LocalWtsError {
 }
 
 struct ServiceInner {
+    agent_conversations: agent_conversations::ConversationStore,
     registry: WorkspaceService,
     repository_roots: Vec<PathBuf>,
     repository_root_display_path: String,
@@ -409,6 +481,7 @@ struct ServiceInner {
     repository_catalog_cache: Mutex<Option<(Instant, RepositoryCatalog)>>,
     repository_clone_lock: Mutex<()>,
     materialization_lock: Mutex<()>,
+    setup_attempts: SetupAttemptStore,
     adapter_lock: Mutex<()>,
     verification_lock: Mutex<()>,
     verification_cancellations: Mutex<BTreeMap<Uuid, Arc<AtomicBool>>>,
@@ -447,6 +520,14 @@ struct PreparedRemoval {
 enum VerificationSelection {
     All,
     Check(String),
+    BoundCheck {
+        check: Box<VerificationCheck>,
+        plan_revision: u64,
+        before_check: Box<dyn Fn() -> bool + Send>,
+        on_started: Box<dyn Fn(i64) -> Result<(), LocalWtsError> + Send>,
+        leases: Vec<Arc<fs::File>>,
+        output: Arc<Mutex<Vec<u8>>>,
+    },
     Failed,
 }
 
@@ -644,8 +725,9 @@ impl LocalWtsService {
             .ok_or(LocalWtsError::InvalidRepositoryRoot)?
             .to_owned();
         let registry = WorkspaceService::open(data_dir, workspace_root_id, &workspace_root)?;
-        Ok(Self {
+        let service = Self {
             inner: Arc::new(ServiceInner {
+                agent_conversations: agent_conversations::ConversationStore::open(data_dir)?,
                 registry,
                 repository_roots,
                 repository_root_display_path,
@@ -660,6 +742,8 @@ impl LocalWtsService {
                 repository_catalog_cache: Mutex::new(None),
                 repository_clone_lock: Mutex::new(()),
                 materialization_lock: Mutex::new(()),
+                setup_attempts: SetupAttemptStore::open(data_dir)
+                    .map_err(|_| LocalWtsError::InvalidMaterializationManifest)?,
                 adapter_lock: Mutex::new(()),
                 verification_lock: Mutex::new(()),
                 verification_cancellations: Mutex::new(BTreeMap::new()),
@@ -670,7 +754,9 @@ impl LocalWtsService {
                 agent_observer: CodexSessionObserver::from_environment(),
                 copilot_observer: CopilotSessionObserver::from_environment(),
             }),
-        })
+        };
+        service.start_agent_conversation_queue()?;
+        Ok(service)
     }
 
     /// Lists explicit individual GitHub review requests for catalog-owned repositories.
@@ -913,12 +999,17 @@ impl LocalWtsService {
                     repository,
                     repository_root_display_path: self.inner.repository_root_display_path.clone(),
                     reused_existing: true,
+                    selected_base_ref: None,
                 });
             }
             Err(LocalWtsError::RepositoryNotFound) => {}
             Err(error) => return Err(error),
         }
-        self.clone_repository(CloneRepositoryRequest { remote_url: origin })
+        self.clone_repository(CloneRepositoryRequest {
+            remote_url: origin,
+            branch: None,
+            shallow: false,
+        })
     }
 
     pub fn gitlab_review_patch(
@@ -950,8 +1041,42 @@ impl LocalWtsService {
         &self,
         repository_id: &str,
         iid: u64,
-        request: GitlabReviewCommentRequest,
+        mut request: GitlabReviewCommentRequest,
     ) -> Result<PublishGitlabReviewCommentResult, LocalWtsError> {
+        if let Some(workspace_id) = request.workspace_id.take() {
+            let workspace_id =
+                Uuid::parse_str(&workspace_id).map_err(|_| LocalWtsError::WorkspaceNotFound)?;
+            let worktree = self.load_source_worktree(workspace_id, repository_id)?;
+            let trusted = self
+                .gitlab_trusted_repositories(workspace_id)?
+                .into_iter()
+                .find(|repository| repository.repository_id() == repository_id)
+                .ok_or(LocalWtsError::RepositoryForgeUnsupported)?;
+            let view = self
+                .inner
+                .registry
+                .get(workspace_id)?
+                .ok_or(LocalWtsError::WorkspaceNotFound)?;
+            let plan_base_branch = view
+                .repositories
+                .iter()
+                .find(|repository| {
+                    repository.repository_id.as_deref() == Some(repository_id)
+                        || (repository.repository_id.is_none()
+                            && repository.label.eq_ignore_ascii_case(&worktree.label))
+                })
+                .map(|repository| {
+                    repository
+                        .base_ref
+                        .strip_prefix("refs/heads/")
+                        .unwrap_or(&repository.base_ref)
+                });
+            return self
+                .inner
+                .gitlab_merge_requests
+                .publish_workspace_review_comment(&trusted, iid, plan_base_branch, request)
+                .map_err(|_| LocalWtsError::GitlabReviewCommentFailed);
+        }
         match self.inner.gitlab_merge_requests.publish_review_comment(
             repository_id,
             iid,
@@ -979,6 +1104,75 @@ impl LocalWtsService {
         }
     }
 
+    pub fn gitlab_discussions(
+        &self,
+        repository_id: &str,
+        iid: u64,
+        workspace_id: Option<Uuid>,
+    ) -> Result<GitlabDiscussions, LocalWtsError> {
+        let repository = self.gitlab_discussion_repository(repository_id, iid, workspace_id)?;
+        self.inner
+            .gitlab_merge_requests
+            .get_discussions(repository_id, iid, repository.as_ref())
+            .map_err(|_| LocalWtsError::GitlabDiscussionsUnavailable)
+    }
+
+    pub fn reply_gitlab_discussion(
+        &self,
+        repository_id: &str,
+        iid: u64,
+        request: crate::ReplyGitlabDiscussionRequest,
+    ) -> Result<ReplyGitlabDiscussionResult, LocalWtsError> {
+        let repository =
+            self.gitlab_discussion_repository(repository_id, iid, request.workspace_id)?;
+        self.inner
+            .gitlab_merge_requests
+            .reply_discussion(
+                repository_id,
+                iid,
+                repository.as_ref(),
+                &request.discussion_id,
+                &request.body,
+            )
+            .map_err(|_| LocalWtsError::GitlabDiscussionReplyFailed)
+    }
+
+    fn gitlab_discussion_repository(
+        &self,
+        repository_id: &str,
+        iid: u64,
+        workspace_id: Option<Uuid>,
+    ) -> Result<Option<GitlabTrustedRepository>, LocalWtsError> {
+        if workspace_id.is_none()
+            && self
+                .inner
+                .gitlab_merge_requests
+                .cached_review_origin(repository_id, iid)
+                .is_none()
+        {
+            let repository = self.repository_for_interaction(repository_id)?;
+            let trusted = repository
+                .origin_url
+                .as_deref()
+                .and_then(|origin| {
+                    GitlabReviewTrustedRepository::from_catalog(repository_id, origin)
+                })
+                .ok_or(LocalWtsError::RepositoryForgeUnsupported)?;
+            self.inner
+                .gitlab_merge_requests
+                .remember_review_repository(&trusted, iid)
+                .map_err(|_| LocalWtsError::RepositoryForgeUnsupported)?;
+        }
+        workspace_id
+            .map(|workspace_id| {
+                self.gitlab_trusted_repositories(workspace_id)?
+                    .into_iter()
+                    .find(|repository| repository.repository_id() == repository_id)
+                    .ok_or(LocalWtsError::RepositoryNotFound)
+            })
+            .transpose()
+    }
+
     pub fn start_agent_session(
         &self,
         workspace_id: Uuid,
@@ -986,6 +1180,25 @@ impl LocalWtsService {
         terminal: TerminalProvider,
         category: AgentSessionCategory,
     ) -> Result<AgentSession, LocalWtsError> {
+        self.start_agent_session_with_guard_callback(
+            workspace_id,
+            provider,
+            terminal,
+            category,
+            || {},
+        )
+    }
+
+    fn start_agent_session_with_guard_callback(
+        &self,
+        workspace_id: Uuid,
+        provider: AgentProvider,
+        terminal: TerminalProvider,
+        category: AgentSessionCategory,
+        before_lease: impl FnOnce(),
+    ) -> Result<AgentSession, LocalWtsError> {
+        before_lease();
+        let _operation = self.lease_workspace_agent_operation(workspace_id)?;
         self.load_materialization(workspace_id)?;
         self.inner
             .agent_sessions
@@ -1103,6 +1316,7 @@ impl LocalWtsService {
         let task = validate_agent_prompt(prompt)?.to_owned();
         let prompt = agent_prompt_with_work_items(&task, &workspace.observed_work_items)?;
         let materialization = self.load_materialization(workspace_id)?;
+        let operation = self.lease_workspace_agent_operation(workspace_id)?;
         self.refresh_workspace_agent_files(&materialization)?;
         let session = self
             .inner
@@ -1126,7 +1340,12 @@ impl LocalWtsService {
                 let heartbeat_service = service.clone();
                 let spawn_service = service.clone();
                 let event_service = service.clone();
-                let outcome = service.inner.adapter.run_agent(
+                let adapter = service
+                    .inner
+                    .adapter
+                    .clone()
+                    .with_process_lease(Arc::clone(&operation));
+                let outcome = adapter.run_agent(
                     workspace_id,
                     provider,
                     &workspace_path,
@@ -1200,6 +1419,8 @@ impl LocalWtsService {
                     cancellations.remove(&session_id);
                 }
                 service.inner.agent_session_details.finish(session_id);
+                drop(adapter);
+                drop(operation);
             })
             .map_err(|_| {
                 if let Ok(mut cancellations) = self.inner.agent_cancellations.lock() {
@@ -1349,17 +1570,12 @@ impl LocalWtsService {
         let (planning_home, planning) = self.trusted_planning_home(workspace_id)?;
         let file_name =
             resolve_planning_document_file_name(&planning_home, planning.format, &document_id)?;
-        let current = read_planning_document(
-            workspace_id,
+        replace_planning_document(
             &planning_home,
-            document_id.clone(),
             &file_name,
+            &request.expected_sha256,
+            request.contents.as_bytes(),
         )?;
-        if current.sha256 != request.expected_sha256 {
-            return Err(LocalWtsError::PlanningDocumentConflict);
-        }
-        let path = planning_home.join(&file_name);
-        atomic_replace_bytes(&path, request.contents.as_bytes())?;
         Ok(WorkspacePlanningDocument {
             workspace_id,
             document_id,
@@ -2268,6 +2484,10 @@ impl LocalWtsService {
         request: CloneRepositoryRequest,
     ) -> Result<CloneRepositoryResult, LocalWtsError> {
         let remote = ValidatedRepositoryRemote::parse(&request.remote_url)?;
+        let clone_options = RepositoryCloneOptions {
+            branch: request.branch,
+            shallow: request.shallow,
+        };
         let _guard = self
             .inner
             .repository_clone_lock
@@ -2289,7 +2509,7 @@ impl LocalWtsService {
 
         let outcome = (|| {
             let catalog = self.repository_catalog()?;
-            if let Some(repository) = catalog
+            if let Some(mut repository) = catalog
                 .repositories
                 .iter()
                 .find(|repository| {
@@ -2297,10 +2517,29 @@ impl LocalWtsService {
                 })
                 .cloned()
             {
+                let selected_base_ref = if clone_options.branch.is_some() {
+                    let inspection = self
+                        .inner
+                        .git
+                        .inspect_repository(Path::new(&repository.display_path))
+                        .map_err(|_| LocalWtsError::RepositoryCloneFailed)?;
+                    if inspection.id.as_str() != repository.id
+                        || inspection.origin_url.as_deref() != Some(remote.display_url.as_str())
+                    {
+                        return Err(LocalWtsError::RepositoryChanged);
+                    }
+                    let selected =
+                        selected_clone_base(&inspection, clone_options.branch.as_deref())?;
+                    repository = repository_summary(&inspection)?;
+                    selected
+                } else {
+                    None
+                };
                 return Ok(CloneRepositoryResult {
                     repository,
                     repository_root_display_path: self.inner.repository_root_display_path.clone(),
                     reused_existing: true,
+                    selected_base_ref,
                 });
             }
 
@@ -2322,6 +2561,8 @@ impl LocalWtsService {
                 if inspection.origin_url.as_deref() != Some(remote.display_url.as_str()) {
                     return Err(LocalWtsError::RepositoryCloneConflict);
                 }
+                let selected_base_ref =
+                    selected_clone_base(&inspection, clone_options.branch.as_deref())?;
                 let mut cache = self
                     .inner
                     .repository_catalog_cache
@@ -2332,6 +2573,7 @@ impl LocalWtsService {
                     repository: repository_summary(&inspection)?,
                     repository_root_display_path: self.inner.repository_root_display_path.clone(),
                     reused_existing: true,
+                    selected_base_ref,
                 });
             }
 
@@ -2340,11 +2582,13 @@ impl LocalWtsService {
                 let inspection = self
                     .inner
                     .git
-                    .clone_repository(&remote.transport_url, &staging)
+                    .clone_repository(&remote.transport_url, &staging, &clone_options)
                     .map_err(|_| LocalWtsError::RepositoryCloneFailed)?;
                 if inspection.origin_url.as_deref() != Some(remote.display_url.as_str()) {
                     return Err(LocalWtsError::RepositoryCloneFailed);
                 }
+                let selected_base_ref =
+                    selected_clone_base(&inspection, clone_options.branch.as_deref())?;
                 if target
                     .try_exists()
                     .map_err(|_| LocalWtsError::RepositoryCloneFailed)?
@@ -2371,6 +2615,7 @@ impl LocalWtsService {
                     repository,
                     repository_root_display_path: self.inner.repository_root_display_path.clone(),
                     reused_existing: false,
+                    selected_base_ref,
                 })
             })();
             if staging.try_exists().unwrap_or(false) {
@@ -3032,8 +3277,8 @@ impl LocalWtsService {
         &self,
         workspace_id: Uuid,
     ) -> Result<WorkspaceRemovalPreflight, LocalWtsError> {
-        self.prepare_workspace_removal(workspace_id)
-            .map(|prepared| prepared.public)
+        self.prepare_guarded_workspace_removal(workspace_id)
+            .map(|(prepared, _operation)| prepared.public)
     }
 
     pub fn get_materialization(
@@ -3558,6 +3803,166 @@ impl LocalWtsService {
             // `workspace_repository_review_graph` after the patch is visible.
             review_graph: None,
         })
+    }
+
+    pub fn workspace_gitlab_comparison(
+        &self,
+        workspace_id: Uuid,
+        repository_id: &str,
+        iid: u64,
+        refresh: bool,
+    ) -> Result<crate::WorkspaceGitlabComparison, LocalWtsError> {
+        let worktree = self.load_source_worktree(workspace_id, repository_id)?;
+        let trusted = self
+            .gitlab_trusted_repositories(workspace_id)?
+            .into_iter()
+            .find(|repository| repository.repository_id() == repository_id)
+            .ok_or(LocalWtsError::RepositoryForgeUnsupported)?;
+        let view = self
+            .inner
+            .registry
+            .get(workspace_id)?
+            .ok_or(LocalWtsError::WorkspaceNotFound)?;
+        let plan_base_branch = view
+            .repositories
+            .iter()
+            .find(|repository| {
+                repository.repository_id.as_deref() == Some(repository_id)
+                    || (repository.repository_id.is_none()
+                        && repository.label.eq_ignore_ascii_case(&worktree.label))
+            })
+            .map(|repository| {
+                repository
+                    .base_ref
+                    .strip_prefix("refs/heads/")
+                    .unwrap_or(&repository.base_ref)
+            });
+        let published = self
+            .inner
+            .gitlab_merge_requests
+            .workspace_review_patch(&trusted, iid, plan_base_branch, refresh)
+            .map_err(|_| LocalWtsError::GitlabComparisonUnavailable)?;
+        let local = self
+            .inner
+            .git
+            .inspect_worktree_comparison(
+                Path::new(&worktree.target_display_path),
+                &published.base_commit_oid,
+                &published.head_commit_oid,
+            )
+            .map_err(|_| LocalWtsError::WorkspaceGitStateChanged)?;
+        self.load_source_worktree(workspace_id, repository_id)?;
+        let to_diff = |diff: wts_git::WorktreeDiff, base: &str| WorkspaceRepositoryDiff {
+            schema_version: MATERIALIZATION_MANIFEST_SCHEMA_VERSION,
+            workspace_id,
+            repository_id: repository_id.to_owned(),
+            repository_label: worktree.label.clone(),
+            base_commit_oid: base.to_owned(),
+            head_commit_oid: local.local_head_commit_oid.clone(),
+            patch_sha256: sha256_bytes(diff.patch.as_bytes()),
+            patch: diff.patch,
+            patch_truncated: diff.patch_truncated,
+            untracked_paths: diff.untracked_paths,
+            untracked_paths_truncated: diff.untracked_paths_truncated,
+            review_graph: None,
+        };
+        let status = match local.status {
+            wts_git::WorktreeComparisonStatus::Ready => {
+                crate::WorkspaceGitlabComparisonStatus::Ready
+            }
+            wts_git::WorktreeComparisonStatus::MissingCommits => {
+                crate::WorkspaceGitlabComparisonStatus::MissingCommits
+            }
+            wts_git::WorktreeComparisonStatus::Diverged => {
+                crate::WorkspaceGitlabComparisonStatus::Diverged
+            }
+        };
+        let latest_work = local
+            .latest_work
+            .map(|diff| to_diff(diff, &published.base_commit_oid));
+        let since_mr = local
+            .since_mr
+            .map(|diff| to_diff(diff, &published.head_commit_oid));
+        Ok(crate::WorkspaceGitlabComparison {
+            schema_version: 1,
+            workspace_id,
+            repository_id: repository_id.to_owned(),
+            repository_label: worktree.label,
+            iid,
+            local_head_commit_oid: local.local_head_commit_oid,
+            status,
+            published,
+            latest_work,
+            since_mr,
+        })
+    }
+
+    pub fn workspace_repository_source(
+        &self,
+        workspace_id: Uuid,
+        repository_id: &str,
+        file_path: &str,
+    ) -> Result<crate::WorkspaceRepositorySource, LocalWtsError> {
+        let worktree = self.load_source_worktree(workspace_id, repository_id)?;
+        let source = self
+            .inner
+            .git
+            .read_worktree_source(Path::new(&worktree.target_display_path), file_path)
+            .map_err(map_source_file_error)?;
+        self.load_source_worktree(workspace_id, repository_id)?;
+        Ok(crate::WorkspaceRepositorySource {
+            schema_version: 1,
+            workspace_id,
+            repository_id: repository_id.to_owned(),
+            file_path: source.file_path,
+            content: source.content,
+            revision: source.revision,
+        })
+    }
+
+    pub fn save_workspace_repository_source(
+        &self,
+        workspace_id: Uuid,
+        repository_id: &str,
+        request: crate::WorkspaceRepositorySourceSaveRequest,
+    ) -> Result<crate::WorkspaceRepositorySource, LocalWtsError> {
+        let worktree = self.load_source_worktree(workspace_id, repository_id)?;
+        let source = self
+            .inner
+            .git
+            .save_worktree_source(
+                Path::new(&worktree.target_display_path),
+                &request.file_path,
+                &request.content,
+                &request.expected_revision,
+            )
+            .map_err(map_source_file_error)?;
+        Ok(crate::WorkspaceRepositorySource {
+            schema_version: 1,
+            workspace_id,
+            repository_id: repository_id.to_owned(),
+            file_path: source.file_path,
+            content: source.content,
+            revision: source.revision,
+        })
+    }
+
+    fn load_source_worktree(
+        &self,
+        workspace_id: Uuid,
+        repository_id: &str,
+    ) -> Result<MaterializedWorktree, LocalWtsError> {
+        let (workspace_path, materialization) = self.read_materialization_receipt(workspace_id)?;
+        let worktree = materialization
+            .worktrees
+            .into_iter()
+            .find(|worktree| worktree.repository_id == repository_id)
+            .ok_or(LocalWtsError::RepositoryNotFound)?;
+        let (branch, _) = self.inspect_materialized_worktree(&workspace_path, &worktree)?;
+        if branch != worktree.branch_name {
+            return Err(LocalWtsError::WorkspaceGitStateChanged);
+        }
+        Ok(worktree)
     }
 
     pub fn workspace_repository_file_review(
@@ -4447,6 +4852,12 @@ impl LocalWtsService {
             .verification_lock
             .lock()
             .map_err(|_| LocalWtsError::EvidenceUnavailable)?;
+        let operation = if matches!(&selection, VerificationSelection::BoundCheck { .. }) {
+            None
+        } else {
+            Some(self.lease_workspace_agent_operation(workspace_id)?)
+        };
+        let operation_leases = operation.into_iter().collect::<Vec<_>>();
         let cancellation = Arc::new(AtomicBool::new(false));
         self.inner
             .verification_cancellations
@@ -4457,6 +4868,7 @@ impl LocalWtsService {
             workspace_id,
             selection,
             cancellation.as_ref(),
+            &operation_leases,
         );
         if let Ok(mut active) = self.inner.verification_cancellations.lock() {
             active.remove(&workspace_id);
@@ -4469,6 +4881,7 @@ impl LocalWtsService {
         workspace_id: Uuid,
         selection: VerificationSelection,
         cancellation: &AtomicBool,
+        operation_leases: &[Arc<fs::File>],
     ) -> Result<WorkspaceEvidence, LocalWtsError> {
         let materialization = self.load_materialization(workspace_id)?;
         let view = self
@@ -4481,17 +4894,44 @@ impl LocalWtsService {
         let evidence = store.read().map_err(map_evidence_failure)?;
         validate_workspace_evidence(&view, &materialization, &evidence)?;
         let plan = evidence.verification_plan;
+        let (bound_guard, bound_started, bound_leases, bound_output) = match &selection {
+            VerificationSelection::BoundCheck {
+                before_check,
+                on_started,
+                leases,
+                output,
+                ..
+            } => (
+                Some(before_check),
+                Some(on_started),
+                leases.as_slice(),
+                Some(output),
+            ),
+            _ => (None, None, operation_leases, None),
+        };
         let selected_check_ids = match selection {
             VerificationSelection::All => plan
                 .checks
                 .iter()
                 .map(|check| check.id.clone())
                 .collect::<BTreeSet<_>>(),
-            VerificationSelection::Check(check_id) => {
-                if !plan.checks.iter().any(|check| check.id == check_id) {
+            VerificationSelection::Check(ref check_id) => {
+                if !plan.checks.iter().any(|check| &check.id == check_id) {
                     return Err(LocalWtsError::VerificationCheckUnavailable);
                 }
-                BTreeSet::from([check_id])
+                BTreeSet::from([check_id.clone()])
+            }
+            VerificationSelection::BoundCheck {
+                ref check,
+                plan_revision,
+                ..
+            } => {
+                if plan.revision != plan_revision
+                    || !plan.checks.iter().any(|current| current == check.as_ref())
+                {
+                    return Err(LocalWtsError::AgentConversationConflict);
+                }
+                BTreeSet::from([check.id.clone()])
             }
             VerificationSelection::Failed => {
                 let failed = evidence
@@ -4515,6 +4955,9 @@ impl LocalWtsService {
             }
         };
         let started_at = now_unix_ms();
+        if let Some(on_started) = bound_started {
+            on_started(started_at)?;
+        }
         let mut result = WorkspaceVerificationResult {
             schema_version: WORKSPACE_EVIDENCE_SCHEMA_VERSION,
             workspace_id,
@@ -4584,7 +5027,34 @@ impl LocalWtsService {
                 .write_verification_result(&result)
                 .map_err(map_evidence_failure)?;
 
-            let execution = execute_check_with_cancellation(check, workspace, cancellation);
+            if bound_guard.is_some_and(|validate| !validate()) {
+                result.checks[index].status = VerificationCheckStatus::Skipped;
+                result.checks[index].completed_at_unix_ms = Some(now_unix_ms());
+                result.checks[index].detail =
+                    "The recorded source state changed. This check did not run.".to_owned();
+                result.status = VerificationStatus::Blocked;
+                result.completed_at_unix_ms = Some(now_unix_ms());
+                result.duration_ms = elapsed_between(started_at, result.completed_at_unix_ms);
+                store
+                    .write_verification_result(&result)
+                    .map_err(map_evidence_failure)?;
+                return Err(LocalWtsError::AgentConversationConflict);
+            }
+            let execution = if bound_leases.is_empty() {
+                execute_check_with_cancellation(check, workspace, cancellation)
+            } else {
+                crate::verification::execute_check_with_cancellation_and_leases(
+                    check,
+                    workspace,
+                    cancellation,
+                    bound_leases,
+                )
+            };
+            if let Some(output) = bound_output {
+                *output
+                    .lock()
+                    .map_err(|_| LocalWtsError::EvidenceUnavailable)? = execution.log.clone();
+            }
             let log_path = store
                 .write_verification_log(&check.id, &execution.log)
                 .map_err(map_evidence_failure)?;
@@ -4876,6 +5346,7 @@ impl LocalWtsService {
         workspace_id: Uuid,
         expected_effect_digest: &str,
     ) -> Result<MaterializeWorkspaceResult, LocalWtsError> {
+        let _setup = self.inner.setup_attempts.lease(workspace_id)?;
         let _guard = self.inner.materialization_lock.lock().map_err(|_| {
             LocalWtsError::MaterializationFailed {
                 cleanup_complete: true,
@@ -4901,161 +5372,260 @@ impl LocalWtsService {
         if expected_effect_digest != prepared.public.effect_digest {
             return Err(LocalWtsError::StalePreflight);
         }
+        let attempt =
+            SetupAttemptWriter::start(&self.inner.setup_attempts, &prepared).map_err(|_| {
+                LocalWtsError::GeneratedFileFailed {
+                    cleanup_complete: true,
+                }
+            })?;
         let plan = prepared
             .plan
             .ok_or_else(|| LocalWtsError::PreflightBlocked {
                 blockers: prepared.public.blockers.clone(),
             })?;
-        let receipt = self.inner.git.materialize(plan).map_err(|error| {
-            LocalWtsError::MaterializationFailed {
-                cleanup_complete: error.rollback.failures.is_empty()
-                    && error.rollback.workspace_root_removal_error.is_none(),
-            }
-        })?;
+        let receipt = self
+            .inner
+            .git
+            .materialize_observed(plan, |progress| attempt.observe(progress))
+            .map_err(|error| {
+                let cleanup_complete = error.rollback.failures.is_empty()
+                    && error.rollback.workspace_root_removal_error.is_none()
+                    && attempt
+                        .clear_after_failure(&self.inner.git)
+                        .unwrap_or(false);
+                LocalWtsError::MaterializationFailed { cleanup_complete }
+            })?;
 
-        let worktrees = receipt
-            .worktrees
-            .iter()
-            .map(|worktree| {
-                let inspection = self
-                    .inner
-                    .git
-                    .inspect_repository(&worktree.target_path)
-                    .map_err(|_| LocalWtsError::InvalidMaterializationManifest)?;
-                let tracking_remote_url = prepared
-                    .view
-                    .repositories
-                    .iter()
-                    .find(|repository| {
-                        repository.repository_id.as_deref() == Some(worktree.repository_id.as_str())
-                            || (repository.repository_id.is_none()
-                                && repository
-                                    .label
-                                    .eq_ignore_ascii_case(&worktree.repository_label))
-                    })
-                    .and_then(|repository| {
-                        self.inner
-                            .git
-                            .tracking_remote_url(&worktree.source_repository, &repository.base_ref)
-                            .ok()
-                            .flatten()
-                    });
-                Ok(MaterializedWorktree {
-                    repository_id: worktree.repository_id.as_str().to_owned(),
-                    label: worktree.repository_label.clone(),
-                    target_display_path: display_path(&worktree.target_path)?,
-                    branch_name: worktree.branch_name.clone(),
-                    base_commit_oid: worktree.base_commit_oid.clone(),
-                    git_state: Some(MaterializedGitState {
-                        head_commit_oid: worktree.base_commit_oid.clone(),
-                        origin_url: tracking_remote_url.or(inspection.origin_url),
-                        upstream_full_ref: inspection.upstream_full_ref,
-                    }),
-                    activity: Some(crate::MaterializedWorktreeActivity {
-                        changed_file_count: 0,
-                        commits_ahead: 0,
-                    }),
-                })
-            })
-            .collect::<Result<Vec<_>, LocalWtsError>>()?;
-        let workspace_path = receipt.workspace_root.clone();
-        let code_workspace_path = workspace_path.join(code_workspace_file_name(
-            &prepared.view.intent,
-            &prepared.view.title,
-        ));
-        let wts_guide_path = workspace_path.join(WTS_GUIDE_FILE);
-        let workspace_agents_path = workspace_path.join(WORKSPACE_AGENTS_FILE);
-        let manifest_path = workspace_path.join(MATERIALIZATION_MANIFEST_FILE);
-        let materialization = WorkspaceMaterialization {
-            schema_version: MATERIALIZATION_MANIFEST_SCHEMA_VERSION,
-            workspace_id,
-            workspace_record_version: prepared.view.record_version,
-            effect_digest: prepared.public.effect_digest.clone(),
-            workspace_display_path: display_path(&workspace_path)?,
-            code_workspace_display_path: display_path(&code_workspace_path)?,
-            branch_name: receipt.branch_name.clone(),
-            worktrees,
-            runtime: prepared.view.runtime.clone(),
-            planning: prepared.view.planning,
-            graph: graph_summary(),
+        let generated_error = || LocalWtsError::GeneratedFileFailed {
+            cleanup_complete: false,
         };
-        let context = evidence_context(&prepared.view, &prepared.public, &materialization)?;
-        let created_at = now_unix_ms();
-        let graph_manifest = WorkspaceGraphManifest {
-            schema_version: WORKSPACE_EVIDENCE_SCHEMA_VERSION,
-            workspace_id,
-            status: WorkspaceGraphEvidenceStatus::NotStarted,
-            graph_display_path: None,
-            graph_sha256: None,
-            indexed_at_unix_ms: None,
-            indexed_repositories: Vec::new(),
-            detail: "Workspace-local Graphify indexing has not started.".to_owned(),
-        };
-        let verification_plan = WorkspaceVerificationPlan {
-            schema_version: WORKSPACE_EVIDENCE_SCHEMA_VERSION,
-            workspace_id,
-            revision: 1,
-            updated_at_unix_ms: created_at,
-            checks: default_verification_checks(&materialization),
-        };
-        let verification_result = WorkspaceVerificationResult {
-            schema_version: WORKSPACE_EVIDENCE_SCHEMA_VERSION,
-            workspace_id,
-            plan_revision: verification_plan.revision,
-            status: VerificationStatus::NotRun,
-            started_at_unix_ms: None,
-            completed_at_unix_ms: None,
-            duration_ms: None,
-            checks: Vec::new(),
-            warnings: Vec::new(),
-        };
-
+        let mut generated = None;
         let file_result = (|| {
+            #[cfg(test)]
+            run_materialization_test_hook(
+                MaterializationStage::AfterGitReceipt,
+                &receipt.workspace_root,
+            )?;
+            generated = Some(
+                attempt
+                    .generated(&receipt.workspace_root)
+                    .map_err(|_| generated_error())?,
+            );
+            let generated = generated.as_mut().expect("generated file journal");
+            let worktrees = receipt
+                .worktrees
+                .iter()
+                .map(|worktree| {
+                    let inspection = self
+                        .inner
+                        .git
+                        .inspect_repository(&worktree.target_path)
+                        .map_err(|_| LocalWtsError::InvalidMaterializationManifest)?;
+                    let tracking_remote_url = prepared
+                        .view
+                        .repositories
+                        .iter()
+                        .find(|repository| {
+                            repository.repository_id.as_deref()
+                                == Some(worktree.repository_id.as_str())
+                                || (repository.repository_id.is_none()
+                                    && repository
+                                        .label
+                                        .eq_ignore_ascii_case(&worktree.repository_label))
+                        })
+                        .and_then(|repository| {
+                            self.inner
+                                .git
+                                .tracking_remote_url(
+                                    &worktree.source_repository,
+                                    &repository.base_ref,
+                                )
+                                .ok()
+                                .flatten()
+                        });
+                    Ok(MaterializedWorktree {
+                        repository_id: worktree.repository_id.as_str().to_owned(),
+                        label: worktree.repository_label.clone(),
+                        target_display_path: display_path(&worktree.target_path)?,
+                        branch_name: worktree.branch_name.clone(),
+                        base_commit_oid: worktree.base_commit_oid.clone(),
+                        git_state: Some(MaterializedGitState {
+                            head_commit_oid: worktree.base_commit_oid.clone(),
+                            origin_url: tracking_remote_url.or(inspection.origin_url),
+                            upstream_full_ref: inspection.upstream_full_ref,
+                        }),
+                        activity: Some(crate::MaterializedWorktreeActivity {
+                            changed_file_count: 0,
+                            commits_ahead: 0,
+                        }),
+                    })
+                })
+                .collect::<Result<Vec<_>, LocalWtsError>>()?;
+            let workspace_path = receipt.workspace_root.clone();
+            let code_workspace_path = workspace_path.join(code_workspace_file_name(
+                &prepared.view.intent,
+                &prepared.view.title,
+            ));
+            let materialization = WorkspaceMaterialization {
+                schema_version: MATERIALIZATION_MANIFEST_SCHEMA_VERSION,
+                workspace_id,
+                workspace_record_version: prepared.view.record_version,
+                effect_digest: prepared.public.effect_digest.clone(),
+                workspace_display_path: display_path(&workspace_path)?,
+                code_workspace_display_path: display_path(&code_workspace_path)?,
+                branch_name: receipt.branch_name.clone(),
+                worktrees,
+                runtime: prepared.view.runtime.clone(),
+                planning: prepared.view.planning,
+                graph: graph_summary(),
+            };
+            let context = evidence_context(&prepared.view, &prepared.public, &materialization)?;
+            let created_at = now_unix_ms();
+            let graph_manifest = WorkspaceGraphManifest {
+                schema_version: WORKSPACE_EVIDENCE_SCHEMA_VERSION,
+                workspace_id,
+                status: WorkspaceGraphEvidenceStatus::NotStarted,
+                graph_display_path: None,
+                graph_sha256: None,
+                indexed_at_unix_ms: None,
+                indexed_repositories: Vec::new(),
+                detail: "Workspace-local Graphify indexing has not started.".to_owned(),
+            };
+            let verification_plan = WorkspaceVerificationPlan {
+                schema_version: WORKSPACE_EVIDENCE_SCHEMA_VERSION,
+                workspace_id,
+                revision: 1,
+                updated_at_unix_ms: created_at,
+                checks: default_verification_checks(&materialization),
+            };
+            let verification_result = WorkspaceVerificationResult {
+                schema_version: WORKSPACE_EVIDENCE_SCHEMA_VERSION,
+                workspace_id,
+                plan_revision: verification_plan.revision,
+                status: VerificationStatus::NotRun,
+                started_at_unix_ms: None,
+                completed_at_unix_ms: None,
+                duration_ms: None,
+                checks: Vec::new(),
+                warnings: Vec::new(),
+            };
+
             if let Some(planning) = materialization.planning {
                 let jira_issue = match &prepared.view.intent {
                     WorkspaceIntent::Jira { issue_key } => JiraMcpAdapter.get_issue(issue_key).ok(),
                     _ => None,
                 };
                 create_planning_home(
-                    &workspace_path,
+                    generated,
                     &prepared.view.title,
                     planning,
                     jira_issue.as_ref(),
                 )?;
             }
             let folders = code_workspace_folders(&materialization)?;
-            atomic_write_json(&code_workspace_path, &CodeWorkspace { folders })?;
-            atomic_write_bytes(&wts_guide_path, workspace_agent_guide(&context).as_bytes())?;
-            atomic_write_bytes(&workspace_agents_path, workspace_agents_guide().as_bytes())?;
-            atomic_write_json(&manifest_path, &materialization)?;
-            let evidence_store =
-                EvidenceStore::create(&workspace_path).map_err(map_evidence_failure)?;
-            evidence_store
-                .write_initial(
-                    &context,
-                    &graph_manifest,
-                    &verification_plan,
-                    &verification_result,
+            let code_workspace_bytes = serde_json::to_vec_pretty(&CodeWorkspace { folders })
+                .map_err(|_| generated_error())?;
+            if code_workspace_bytes.len() > MAX_GENERATED_FILE_BYTES {
+                return Err(generated_error());
+            }
+            generated
+                .write(
+                    Path::new(
+                        code_workspace_path
+                            .file_name()
+                            .ok_or(LocalWtsError::InvalidMaterializationManifest)?,
+                    ),
+                    &code_workspace_bytes,
                 )
-                .map_err(map_evidence_failure)?;
-            self.publish_workspace_review_inbox(&materialization)?;
-            Ok::<(), LocalWtsError>(())
+                .map_err(|_| generated_error())?;
+            for (leaf, contents) in [
+                (WTS_GUIDE_FILE, workspace_agent_guide(&context)),
+                (WORKSPACE_AGENTS_FILE, workspace_agents_guide()),
+                (WORKSPACE_CLAUDE_FILE, workspace_claude_guide()),
+                (WORKSPACE_CURSOR_RULES_FILE, workspace_cursorrules_guide()),
+            ] {
+                if contents.len() > MAX_GENERATED_FILE_BYTES {
+                    return Err(generated_error());
+                }
+                generated
+                    .write(Path::new(leaf), contents.as_bytes())
+                    .map_err(|_| generated_error())?;
+            }
+            generated
+                .create_directory(Path::new(WORKSPACE_COPILOT_DIR))
+                .map_err(|_| generated_error())?;
+            generated
+                .write(
+                    Path::new(WORKSPACE_COPILOT_FILE),
+                    workspace_copilot_guide().as_bytes(),
+                )
+                .map_err(|_| generated_error())?;
+            for directory in EvidenceStore::initial_directories() {
+                generated
+                    .create_directory(&directory)
+                    .map_err(|_| generated_error())?;
+            }
+            for (leaf, bytes) in EvidenceStore::initial_files(
+                &context,
+                &graph_manifest,
+                &verification_plan,
+                &verification_result,
+            )
+            .map_err(map_evidence_failure)?
+            {
+                generated
+                    .write(&Path::new(EVIDENCE_DIRECTORY).join(leaf), &bytes)
+                    .map_err(|_| generated_error())?;
+            }
+            #[cfg(test)]
+            run_materialization_test_hook(
+                MaterializationStage::BeforeReviewInbox,
+                &workspace_path,
+            )?;
+            let inbox = self.build_workspace_review_inbox(workspace_id)?;
+            let inbox_bytes = serde_json::to_vec_pretty(&inbox).map_err(|_| generated_error())?;
+            if inbox_bytes.len() > MAX_REVIEW_INBOX_BYTES {
+                return Err(generated_error());
+            }
+            generated
+                .write(
+                    &Path::new(EVIDENCE_DIRECTORY).join(REVIEW_INBOX_FILE),
+                    &inbox_bytes,
+                )
+                .map_err(|_| generated_error())?;
+            // Publish the success receipt only after every generated file is complete.
+            let manifest_bytes =
+                serde_json::to_vec_pretty(&materialization).map_err(|_| generated_error())?;
+            if manifest_bytes.len() > MAX_GENERATED_FILE_BYTES {
+                return Err(generated_error());
+            }
+            generated
+                .write(Path::new(MATERIALIZATION_MANIFEST_FILE), &manifest_bytes)
+                .map_err(|_| generated_error())?;
+            #[cfg(test)]
+            run_materialization_test_hook(
+                MaterializationStage::AfterManifestPublication,
+                &workspace_path,
+            )?;
+            Ok::<_, LocalWtsError>(materialization)
         })();
-        if file_result.is_err() {
-            let _ = remove_regular_file(&manifest_path);
-            let _ = remove_regular_file(&code_workspace_path);
-            let _ = remove_regular_file(&wts_guide_path);
-            let _ = remove_regular_file(&workspace_agents_path);
-            let planning_cleanup_complete = materialization
-                .planning
-                .is_none_or(|planning| cleanup_planning_home(&workspace_path, planning).is_ok());
-            let rollback = self.inner.git.rollback(&receipt);
-            return Err(LocalWtsError::GeneratedFileFailed {
-                cleanup_complete: rollback.failures.is_empty()
+        let materialization = match file_result {
+            Ok(materialization) => materialization,
+            Err(_) => {
+                let generated_cleanup_complete =
+                    generated.as_ref().is_none_or(GeneratedFiles::rollback);
+                let rollback = self.inner.git.rollback(&receipt);
+                let cleanup_complete = generated_cleanup_complete
+                    && rollback.failures.is_empty()
                     && rollback.workspace_root_removal_error.is_none()
-                    && planning_cleanup_complete,
-            });
-        }
+                    && attempt
+                        .clear_after_failure(&self.inner.git)
+                        .unwrap_or(false);
+                return Err(LocalWtsError::GeneratedFileFailed { cleanup_complete });
+            }
+        };
+        // A published success receipt prevents recovery from cleaning this workspace.
+        let _ = attempt.clear();
         if let Ok(worktree_count) = materialization.worktrees.len().try_into() {
             let _ = self.inner.registry.observe_lifecycle(
                 workspace_id,
@@ -5087,6 +5657,19 @@ impl LocalWtsService {
             self.removal_replay(workspace_id, expected_effect_digest, idempotency_key)?
         {
             return Ok(replay);
+        }
+        // Conversation creation takes the store lock before materialization.
+        // Use the same order, then repeat the filesystem review under both locks.
+        let (initial, _operation) = self.prepare_guarded_workspace_removal(workspace_id)?;
+        if initial
+            .public
+            .blockers
+            .iter()
+            .any(|blocker| blocker.code == RemovalBlockerCode::ActiveOperation)
+        {
+            return Err(LocalWtsError::RemovalBlocked {
+                blockers: initial.public.blockers,
+            });
         }
         let _guard = self
             .inner
@@ -5230,6 +5813,7 @@ impl LocalWtsService {
 
         let outcome = (|| {
             let materialization = self.load_materialization(workspace_id)?;
+            let _operation = self.lease_workspace_agent_operation(workspace_id)?;
             self.refresh_workspace_agent_files(&materialization)?;
             let launch = self
                 .inner
@@ -5411,11 +5995,126 @@ impl LocalWtsService {
         self.run_agent_controlled(workspace_id, provider, prompt, &cancellation, || {})
     }
 
+    pub fn run_agent_with_custom(
+        &self,
+        workspace_id: Uuid,
+        provider: AgentProvider,
+        prompt: &str,
+        agent: Option<&str>,
+    ) -> Result<AgentRunResult, LocalWtsError> {
+        let cancellation = Arc::new(AtomicBool::new(false));
+        self.run_agent_controlled_with_custom(
+            workspace_id,
+            provider,
+            prompt,
+            agent,
+            &cancellation,
+            || {},
+        )
+    }
+
+    pub fn run_workspace_code_review(
+        &self,
+        workspace_id: Uuid,
+        provider: AgentProvider,
+        scope: crate::CodeReviewScope,
+        model: Option<&str>,
+    ) -> Result<crate::WorkspaceCodeReviewResult, LocalWtsError> {
+        let materialization = self.load_materialization(workspace_id)?;
+        let mut context_summary = String::new();
+        const TOTAL_DIFF_BUDGET: usize = 24 * 1024;
+        let mut remaining_budget = TOTAL_DIFF_BUDGET;
+
+        match scope {
+            crate::CodeReviewScope::RecentChanges => {
+                context_summary.push_str("Recent diffs by repository:\n");
+                for repo in &materialization.worktrees {
+                    if let Ok(diff) =
+                        self.workspace_repository_diff(workspace_id, &repo.repository_id)
+                    {
+                        context_summary.push_str(&format!(
+                            "--- Repository: {} (base: {}) ---\n",
+                            repo.label, repo.base_commit_oid
+                        ));
+                        if diff.patch.is_empty() {
+                            context_summary.push_str("No uncommitted or branch changes.\n");
+                        } else if remaining_budget == 0 {
+                            context_summary
+                                .push_str("[Additional changes omitted to fit prompt limit]\n");
+                        } else {
+                            let patch = &diff.patch;
+                            if patch.len() <= remaining_budget {
+                                context_summary.push_str(patch);
+                                context_summary.push('\n');
+                                remaining_budget = remaining_budget.saturating_sub(patch.len());
+                            } else {
+                                let boundary = patch
+                                    .char_indices()
+                                    .map(|(idx, _)| idx)
+                                    .take_while(|&idx| idx <= remaining_budget)
+                                    .last()
+                                    .unwrap_or(0);
+                                context_summary.push_str(&patch[..boundary]);
+                                context_summary.push_str(&format!(
+                                    "\n[... Diff truncated: showing {} of {} bytes to fit prompt limit ...]\n",
+                                    boundary,
+                                    patch.len()
+                                ));
+                                remaining_budget = 0;
+                            }
+                        }
+                    }
+                }
+            }
+            crate::CodeReviewScope::TotalCode => {
+                context_summary.push_str("Repositories in this workspace:\n");
+                for repo in &materialization.worktrees {
+                    context_summary.push_str(&format!(
+                        "- Repository: {} at {}\n",
+                        repo.label, repo.target_display_path
+                    ));
+                }
+            }
+        }
+
+        let prompt = crate::build_code_review_prompt(scope, &context_summary, model);
+        let agent_result = self.run_agent_with_custom(workspace_id, provider, &prompt, model)?;
+        let timestamp_ms = now_unix_ms();
+
+        crate::parse_code_review_outcome(
+            workspace_id,
+            provider,
+            scope,
+            model.map(str::to_string),
+            &agent_result.output,
+            timestamp_ms,
+        )
+    }
+
     fn run_agent_controlled(
         &self,
         workspace_id: Uuid,
         provider: AgentProvider,
         prompt: &str,
+        cancellation: &Arc<AtomicBool>,
+        heartbeat: impl FnMut(),
+    ) -> Result<AgentRunResult, LocalWtsError> {
+        self.run_agent_controlled_with_custom(
+            workspace_id,
+            provider,
+            prompt,
+            None,
+            cancellation,
+            heartbeat,
+        )
+    }
+
+    fn run_agent_controlled_with_custom(
+        &self,
+        workspace_id: Uuid,
+        provider: AgentProvider,
+        prompt: &str,
+        agent: Option<&str>,
         cancellation: &Arc<AtomicBool>,
         heartbeat: impl FnMut(),
     ) -> Result<AgentRunResult, LocalWtsError> {
@@ -5436,6 +6135,7 @@ impl LocalWtsService {
         let outcome = (|| {
             let prompt = validate_agent_prompt(prompt)?;
             let materialization = self.load_materialization(workspace_id)?;
+            let operation = self.lease_workspace_agent_operation(workspace_id)?;
             self.refresh_workspace_agent_files(&materialization)?;
             let _guard = self
                 .inner
@@ -5465,14 +6165,14 @@ impl LocalWtsService {
             evidence_store
                 .write_agent_run(&run)
                 .map_err(map_evidence_failure)?;
-            let result = self
-                .inner
-                .adapter
-                .run_agent(
+            let adapter = self.inner.adapter.clone().with_process_lease(operation);
+            let result = adapter
+                .run_agent_with_custom(
                     workspace_id,
                     provider,
                     Path::new(&materialization.workspace_display_path),
                     prompt,
+                    agent,
                     cancellation,
                     || {},
                     heartbeat,
@@ -6035,6 +6735,46 @@ impl LocalWtsService {
         Ok(Some(result))
     }
 
+    fn prepare_guarded_workspace_removal(
+        &self,
+        workspace_id: Uuid,
+    ) -> Result<
+        (
+            PreparedRemoval,
+            Option<agent_conversations::WorkspaceRemovalOperationGuard<'_>>,
+        ),
+        LocalWtsError,
+    > {
+        let operation = match self.lease_workspace_removal_operation(workspace_id) {
+            Ok(operation) => Some(operation),
+            Err(LocalWtsError::AgentConversationBusy) => None,
+            Err(error) => return Err(error),
+        };
+        let mut prepared = self.prepare_workspace_removal(workspace_id)?;
+        let session_active = match self.ensure_repository_operation_idle(workspace_id) {
+            Ok(()) => false,
+            Err(LocalWtsError::RepositorySyncBusy) => true,
+            Err(error) => return Err(error),
+        };
+        if operation.is_none() || session_active {
+            let path = Path::new(&prepared.public.workspace_display_path);
+            let mut blocker = removal_blocker(
+                RemovalBlockerCode::ActiveOperation,
+                "An agent task or workspace operation is active or queued. WTS cannot remove this workspace yet."
+                    .to_owned(),
+                None,
+            )
+            .at(path);
+            blocker.expected = Some("No active or queued workspace operations.".to_owned());
+            blocker.observed =
+                Some("A workspace task, session, or operation has not finished.".to_owned());
+            prepared.public.blockers.push(blocker);
+            prepared.public.ready = false;
+            prepared.public.effect_digest = removal_effect_digest(&prepared.public)?;
+        }
+        Ok((prepared, operation))
+    }
+
     fn prepare_workspace_removal(
         &self,
         workspace_id: Uuid,
@@ -6065,16 +6805,12 @@ impl LocalWtsService {
         let mut generated_paths = Vec::new();
         let mut protected_paths = Vec::new();
         let mut protected_summaries = Vec::new();
+        let mut retained_branches = Vec::new();
 
         if kind == WorkspaceRemovalKind::SavedPlan {
             if root_exists {
-                blockers.push(RemovalBlocker {
-                    code: RemovalBlockerCode::UnexpectedPath,
-                    message:
-                        "The saved plan has a filesystem path that WTS did not materialize; it will not be removed."
-                            .to_owned(),
-                    repository_label: None,
-                });
+                blockers.push(removal_blocker(RemovalBlockerCode::UnexpectedPath, "The saved plan has a filesystem path that WTS did not materialize; it will not be removed."
+                            .to_owned(), None).at(&workspace_path));
             }
         } else {
             match &root_metadata {
@@ -6085,43 +6821,46 @@ impl LocalWtsService {
                             .canonicalize()
                             .is_ok_and(|canonical| canonical == workspace_path);
                     if !root_is_valid {
-                        blockers.push(RemovalBlocker {
-                            code: RemovalBlockerCode::WorkspaceDrift,
-                            message: "The workspace root no longer matches its canonical WTS path."
-                                .to_owned(),
-                            repository_label: None,
-                        });
+                        blockers.push(
+                            removal_blocker(
+                                RemovalBlockerCode::WorkspaceDrift,
+                                "The workspace root no longer matches its canonical WTS path."
+                                    .to_owned(),
+                                None,
+                            )
+                            .at(&workspace_path),
+                        );
                     }
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                Err(_) => blockers.push(RemovalBlocker {
-                    code: RemovalBlockerCode::WorkspaceDrift,
-                    message: "The workspace root could not be inspected safely.".to_owned(),
-                    repository_label: None,
-                }),
+                Err(_) => blockers.push(
+                    removal_blocker(
+                        RemovalBlockerCode::WorkspaceDrift,
+                        "The workspace root could not be inspected safely.".to_owned(),
+                        None,
+                    )
+                    .at(&workspace_path),
+                ),
             }
 
             let materialization = match self.removal_materialization(&view, &workspace_path) {
                 Ok(materialization) => materialization,
                 Err(_) => {
-                    blockers.push(RemovalBlocker {
-                        code: RemovalBlockerCode::WorkspaceDrift,
-                        message:
-                            "The WTS materialization receipt is missing or no longer matches this workspace."
-                                .to_owned(),
-                        repository_label: None,
-                    });
+                    blockers.push(removal_blocker(RemovalBlockerCode::WorkspaceDrift, "The WTS materialization receipt is missing or no longer matches this workspace."
+                                .to_owned(), None).at(&manifest_path));
                     None
                 }
             };
             if root_exists && materialization.is_none() {
-                blockers.push(RemovalBlocker {
-                    code: RemovalBlockerCode::WorkspaceDrift,
-                    message:
+                blockers.push(
+                    removal_blocker(
+                        RemovalBlockerCode::WorkspaceDrift,
                         "A materialized workspace root cannot be removed without its WTS receipt."
                             .to_owned(),
-                    repository_label: None,
-                });
+                        None,
+                    )
+                    .at(&manifest_path),
+                );
             }
 
             let catalog = self.repository_catalog();
@@ -6139,11 +6878,11 @@ impl LocalWtsService {
                         .push(repository);
                 }
             } else {
-                blockers.push(RemovalBlocker {
-                    code: RemovalBlockerCode::GitUnavailable,
-                    message: "Local Git repositories could not be inspected.".to_owned(),
-                    repository_label: None,
-                });
+                blockers.push(removal_blocker(
+                    RemovalBlockerCode::GitUnavailable,
+                    "Local Git repositories could not be inspected.".to_owned(),
+                    None,
+                ));
             }
 
             let branch_name = materialization.as_ref().map_or_else(
@@ -6165,13 +6904,19 @@ impl LocalWtsService {
                         },
                     )
                 });
+                let worktree_branch = receipt_worktree.map_or(branch_name.as_str(), |worktree| {
+                    worktree.branch_name.as_str()
+                });
+                retained_branches.push(worktree_branch.to_owned());
                 if materialization.is_some() && receipt_worktree.is_none() {
-                    blockers.push(RemovalBlocker {
-                        code: RemovalBlockerCode::WorkspaceDrift,
-                        message: "The repository is missing from the WTS removal receipt."
-                            .to_owned(),
-                        repository_label: Some(repository.label.clone()),
-                    });
+                    blockers.push(
+                        removal_blocker(
+                            RemovalBlockerCode::WorkspaceDrift,
+                            "The repository is missing from the WTS removal receipt.".to_owned(),
+                            Some(repository.label.clone()),
+                        )
+                        .at(&manifest_path),
+                    );
                     continue;
                 }
 
@@ -6183,19 +6928,19 @@ impl LocalWtsService {
                     |repository_id| by_id.get(repository_id),
                 );
                 let Some(matches) = matches else {
-                    blockers.push(RemovalBlocker {
-                        code: RemovalBlockerCode::WorkspaceDrift,
-                        message: "The source repository is no longer available.".to_owned(),
-                        repository_label: Some(repository.label.clone()),
-                    });
+                    blockers.push(removal_blocker(
+                        RemovalBlockerCode::WorkspaceDrift,
+                        "The source repository is no longer available.".to_owned(),
+                        Some(repository.label.clone()),
+                    ));
                     continue;
                 };
                 if matches.len() != 1 {
-                    blockers.push(RemovalBlocker {
-                        code: RemovalBlockerCode::WorkspaceDrift,
-                        message: "The source repository identity is ambiguous.".to_owned(),
-                        repository_label: Some(repository.label.clone()),
-                    });
+                    blockers.push(removal_blocker(
+                        RemovalBlockerCode::WorkspaceDrift,
+                        "The source repository identity is ambiguous.".to_owned(),
+                        Some(repository.label.clone()),
+                    ));
                     continue;
                 }
                 let source = matches[0];
@@ -6206,19 +6951,24 @@ impl LocalWtsService {
                 {
                     Ok(inspection) => inspection,
                     Err(error) => {
-                        blockers.push(removal_git_blocker(error, &repository.label));
+                        blockers.push(
+                            removal_git_blocker(error, &repository.label)
+                                .at(Path::new(&source.display_path)),
+                        );
                         continue;
                     }
                 };
                 let (repository_id, target_path) = if let Some(receipt) = receipt_worktree {
                     if receipt.repository_id != source.id {
-                        blockers.push(RemovalBlocker {
-                            code: RemovalBlockerCode::WorkspaceDrift,
-                            message:
+                        blockers.push(
+                            removal_blocker(
+                                RemovalBlockerCode::WorkspaceDrift,
                                 "The source repository no longer matches the WTS removal receipt."
                                     .to_owned(),
-                            repository_label: Some(repository.label.clone()),
-                        });
+                                Some(repository.label.clone()),
+                            )
+                            .at(Path::new(&source.display_path)),
+                        );
                         continue;
                     }
                     (
@@ -6236,40 +6986,44 @@ impl LocalWtsService {
                     &workspace_path,
                     &target_path,
                     &repository_id,
-                    &branch_name,
+                    worktree_branch,
                 );
                 match self.inner.git.inspect_worktree_removal(&request) {
                     Ok(inspection) => {
                         if inspection.has_changes {
-                            blockers.push(RemovalBlocker {
-                                code: RemovalBlockerCode::WorktreeChanges,
-                                message:
-                                    "Tracked, staged, or untracked files must be saved or removed first."
-                                        .to_owned(),
-                                repository_label: Some(repository.label.clone()),
-                            });
+                            blockers.push(removal_blocker(RemovalBlockerCode::WorktreeChanges, "Tracked, staged, or untracked files must be saved or removed first."
+                                        .to_owned(), Some(repository.label.clone())).at(&target_path));
                         }
                         if inspection.has_ignored_files {
-                            blockers.push(RemovalBlocker {
-                                code: RemovalBlockerCode::IgnoredFiles,
-                                message:
+                            blockers.push(
+                                removal_blocker(
+                                    RemovalBlockerCode::IgnoredFiles,
                                     "Ignored files must be removed or explicitly preserved first."
                                         .to_owned(),
-                                repository_label: Some(repository.label.clone()),
-                            });
+                                    Some(repository.label.clone()),
+                                )
+                                .at(&target_path),
+                            );
                         }
                         summaries.push(RemovalWorktreeSummary {
                             repository_id,
                             label: repository.label.clone(),
                             target_display_path: display_path(&target_path)?,
-                            branch_name: branch_name.clone(),
+                            branch_name: worktree_branch.to_owned(),
                             head_commit_oid: inspection.head_commit_oid,
                             present: inspection.present,
                         });
                         worktrees.push(request);
                     }
                     Err(error) => {
-                        blockers.push(removal_git_blocker(error, &repository.label));
+                        blockers.push(removal_worktree_blocker(
+                            error,
+                            &repository.label,
+                            &target_path,
+                            &repository_id,
+                            worktree_branch,
+                            &self.inner.git,
+                        ));
                     }
                 }
             }
@@ -6282,9 +7036,12 @@ impl LocalWtsService {
                 let known_generated = [
                     (workspace_path.join(EVIDENCE_DIRECTORY), true),
                     (workspace_path.join(GRAPHIFY_DIRECTORY), true),
+                    (workspace_path.join(WORKSPACE_COPILOT_DIR), true),
                     (code_workspace_path.clone(), false),
                     (workspace_path.join(WTS_GUIDE_FILE), false),
                     (workspace_path.join(WORKSPACE_AGENTS_FILE), false),
+                    (workspace_path.join(WORKSPACE_CLAUDE_FILE), false),
+                    (workspace_path.join(WORKSPACE_CURSOR_RULES_FILE), false),
                     (workspace_path.join(MATERIALIZATION_MANIFEST_FILE), false),
                 ];
                 for (path, directory) in known_generated {
@@ -6295,24 +7052,26 @@ impl LocalWtsService {
                                 && ((directory && metadata.is_dir())
                                     || (!directory && metadata.is_file())) =>
                         {
-                            if directory && validate_known_generated_tree(&path).is_err() {
-                                blockers.push(RemovalBlocker {
-                                    code: RemovalBlockerCode::UnexpectedPath,
-                                    message:
-                                        "A generated WTS directory contains an unsafe filesystem entry."
-                                            .to_owned(),
-                                    repository_label: None,
-                                });
-                            } else {
-                                generated_paths.push(path);
+                            if directory {
+                                let mut entries = 0;
+                                if let Err(blocker) =
+                                    validate_known_generated_tree_at(&path, 0, &mut entries)
+                                {
+                                    blockers.push(*blocker);
+                                    continue;
+                                }
                             }
+                            generated_paths.push(path);
                         }
-                        _ => blockers.push(RemovalBlocker {
-                            code: RemovalBlockerCode::UnexpectedPath,
-                            message: "A generated WTS path changed type or became a symbolic link."
-                                .to_owned(),
-                            repository_label: None,
-                        }),
+                        _ => blockers.push(
+                            removal_blocker(
+                                RemovalBlockerCode::UnexpectedPath,
+                                "A generated WTS path changed type or became a symbolic link."
+                                    .to_owned(),
+                                None,
+                            )
+                            .at(&path),
+                        ),
                     }
                 }
 
@@ -6320,12 +7079,25 @@ impl LocalWtsService {
                     .iter()
                     .map(|request| request.target_path().to_owned())
                     .collect::<BTreeSet<_>>();
+                if let Some(receipt) = &materialization {
+                    // These paths already have a blocker if provenance inspection failed.
+                    // This set only prevents duplicate diagnostics. It does not authorize removal.
+                    allowed_paths.extend(
+                        receipt
+                            .worktrees
+                            .iter()
+                            .map(|worktree| PathBuf::from(&worktree.target_display_path)),
+                    );
+                }
                 allowed_paths.extend([
                     workspace_path.join(EVIDENCE_DIRECTORY),
                     workspace_path.join(GRAPHIFY_DIRECTORY),
+                    workspace_path.join(WORKSPACE_COPILOT_DIR),
                     code_workspace_path,
                     workspace_path.join(WTS_GUIDE_FILE),
                     workspace_path.join(WORKSPACE_AGENTS_FILE),
+                    workspace_path.join(WORKSPACE_CLAUDE_FILE),
+                    workspace_path.join(WORKSPACE_CURSOR_RULES_FILE),
                     workspace_path.join(MATERIALIZATION_MANIFEST_FILE),
                 ]);
                 if let Some(planning) = view.planning {
@@ -6339,76 +7111,88 @@ impl LocalWtsService {
                                 && planning_path.canonicalize().ok().as_deref()
                                     == Some(planning_path.as_path()) =>
                         {
-                            let (entries, entries_truncated, file_previews) =
-                                summarize_protected_tree(&planning_path)?;
-                            protected_summaries.push(RemovalProtectedPath {
-                                display_path: display_path(&planning_path)?,
-                                entries,
-                                entries_truncated,
-                                file_previews,
-                            });
-                            protected_paths.push(planning_path.clone());
-                            blockers.push(RemovalBlocker {
-                                code: RemovalBlockerCode::PlanningDocumentsPresent,
-                                message: format!(
-                                    "{} contains user-owned plans or findings. Preserve or manually delete that folder before removing the workspace.",
-                                    planning_folder_leaf(planning.folder)
-                                ),
-                                repository_label: None,
-                            });
+                            match summarize_protected_tree(&planning_path) {
+                                Ok((entries, entries_truncated, file_previews)) => {
+                                    protected_summaries.push(RemovalProtectedPath {
+                                        display_path: display_path(&planning_path)?,
+                                        entries,
+                                        entries_truncated,
+                                        file_previews,
+                                    });
+                                    protected_paths.push(planning_path.clone());
+                                    blockers.push(
+                                        removal_blocker(
+                                            RemovalBlockerCode::PlanningDocumentsPresent,
+                                            "This folder contains user-owned plans or findings."
+                                                .to_owned(),
+                                            None,
+                                        )
+                                        .at(&planning_path),
+                                    );
+                                }
+                                Err(_) => {
+                                    let mut entries = 0;
+                                    let blocker = validate_known_generated_tree_at(&planning_path, 0, &mut entries)
+                                        .err().unwrap_or_else(|| removal_tree_blocker(
+                                            &planning_path,
+                                            "WTS could not read all planning paths within its inspection limits.",
+                                        ));
+                                    blockers.push(*blocker);
+                                }
+                            }
                         }
-                        _ => blockers.push(RemovalBlocker {
-                            code: RemovalBlockerCode::UnexpectedPath,
-                            message: "The planning home changed type or became a symbolic link."
-                                .to_owned(),
-                            repository_label: None,
-                        }),
+                        _ => blockers.push(
+                            removal_blocker(
+                                RemovalBlockerCode::UnexpectedPath,
+                                "The planning home changed type or became a symbolic link."
+                                    .to_owned(),
+                                None,
+                            )
+                            .at(&planning_path),
+                        ),
                     }
                 }
                 match fs::read_dir(&workspace_path) {
                     Ok(entries) => {
                         for entry in entries {
                             let Ok(entry) = entry else {
-                                blockers.push(RemovalBlocker {
-                                    code: RemovalBlockerCode::UnexpectedPath,
-                                    message: "The workspace root could not be enumerated safely."
-                                        .to_owned(),
-                                    repository_label: None,
-                                });
+                                blockers.push(
+                                    removal_blocker(
+                                        RemovalBlockerCode::UnexpectedPath,
+                                        "The workspace root could not be enumerated safely."
+                                            .to_owned(),
+                                        None,
+                                    )
+                                    .at(&workspace_path),
+                                );
                                 break;
                             };
                             if !allowed_paths.contains(&entry.path()) {
-                                blockers.push(RemovalBlocker {
-                                    code: RemovalBlockerCode::UnexpectedPath,
-                                    message:
+                                blockers.push(
+                                    removal_blocker(
+                                        RemovalBlockerCode::UnexpectedPath,
                                         "The workspace root contains a path that WTS does not own."
                                             .to_owned(),
-                                    repository_label: None,
-                                });
+                                        None,
+                                    )
+                                    .at(&entry.path()),
+                                );
                             }
                         }
                     }
-                    Err(_) => blockers.push(RemovalBlocker {
-                        code: RemovalBlockerCode::UnexpectedPath,
-                        message: "The workspace root could not be enumerated safely.".to_owned(),
-                        repository_label: None,
-                    }),
+                    Err(_) => blockers.push(
+                        removal_blocker(
+                            RemovalBlockerCode::UnexpectedPath,
+                            "The workspace root could not be enumerated safely.".to_owned(),
+                            None,
+                        )
+                        .at(&workspace_path),
+                    ),
                 }
             }
         }
 
         summaries.sort_by(|left, right| left.label.cmp(&right.label));
-        let retained_branches = if kind == WorkspaceRemovalKind::MaterializedWorkspace
-            && !view.repositories.is_empty()
-        {
-            let branch_name = summaries.first().map_or_else(
-                || workspace_branch_name(&view),
-                |worktree| worktree.branch_name.clone(),
-            );
-            vec![branch_name; view.repositories.len()]
-        } else {
-            Vec::new()
-        };
         let warnings = match kind {
             WorkspaceRemovalKind::SavedPlan => vec![
                 "Only the saved WTS plan will be removed; no filesystem path will be changed."
@@ -6784,6 +7568,71 @@ impl LocalWtsService {
                             });
                         }
                     }
+                    let directories = EvidenceStore::initial_directories()
+                        .into_iter()
+                        .chain([PathBuf::from(WORKSPACE_COPILOT_DIR)]);
+                    let files = [
+                        PathBuf::from(code_workspace_file_name(&view.intent, &view.title)),
+                        PathBuf::from(WTS_GUIDE_FILE),
+                        PathBuf::from(WORKSPACE_AGENTS_FILE),
+                        PathBuf::from(WORKSPACE_CLAUDE_FILE),
+                        PathBuf::from(WORKSPACE_CURSOR_RULES_FILE),
+                        PathBuf::from(WORKSPACE_COPILOT_FILE),
+                        PathBuf::from(MATERIALIZATION_MANIFEST_FILE),
+                        Path::new(EVIDENCE_DIRECTORY).join(REVIEW_INBOX_FILE),
+                    ]
+                    .into_iter()
+                    .chain(
+                        EvidenceStore::initial_file_names()
+                            .into_iter()
+                            .map(|leaf| Path::new(EVIDENCE_DIRECTORY).join(leaf)),
+                    );
+                    let mut blocked_directories = Vec::<PathBuf>::new();
+                    for (relative, expects_directory) in directories
+                        .map(|path| (path, true))
+                        .chain(files.map(|path| (path, false)))
+                    {
+                        if blocked_directories
+                            .iter()
+                            .any(|blocked| relative.starts_with(blocked))
+                        {
+                            continue;
+                        }
+                        let path = workspace_path.join(&relative);
+                        let reason = match path.symlink_metadata() {
+                            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+                            Ok(metadata)
+                                if expects_directory
+                                    && metadata.is_dir()
+                                    && !metadata.file_type().is_symlink()
+                                    && path
+                                        .canonicalize()
+                                        .is_ok_and(|canonical| canonical == path) =>
+                            {
+                                None
+                            }
+                            Ok(_) => Some(format!(
+                                "WTS cannot create its files at `{}`. Preserve the existing contents and move this path outside the workspace. Select Check again.",
+                                path.display()
+                            )),
+                            Err(_) => Some(format!(
+                                "WTS cannot inspect `{}`. Check access to this path, then select Check again.",
+                                path.display()
+                            )),
+                        };
+                        if let Some(message) = reason {
+                            if expects_directory {
+                                blocked_directories.push(relative);
+                            }
+                            blockers.push(PreflightBlocker {
+                                code: PreflightBlockerCode::TargetConflict,
+                                message,
+                                repository_label: None,
+                                repository_id: None,
+                                requested_base_ref: None,
+                            });
+                        }
+                    }
                     plan = Some(resolved);
                 }
                 Err(error) => blockers.push(blocker_for_git(error)),
@@ -6815,7 +7664,13 @@ impl LocalWtsService {
             blockers,
             warnings,
             graph: graph_summary(),
+            setup_recovery: None,
         };
+        public.setup_recovery = self.setup_recovery_review(&view);
+        if public.setup_recovery.is_some() {
+            public.blockers.push(setup_recovery_blocker());
+            public.ready = false;
+        }
         public.effect_digest = effect_digest(&public)?;
         Ok(PreparedPreflight { view, plan, public })
     }
@@ -7520,12 +8375,11 @@ fn has_npm_test_script(parent: &Path) -> bool {
         .is_some_and(|script| !script.trim().is_empty())
 }
 
-fn validate_workspace_evidence(
+fn validate_workspace_evidence_context<'a>(
     view: &WorkspaceView,
     materialization: &WorkspaceMaterialization,
-    evidence: &WorkspaceEvidence,
-) -> Result<(), LocalWtsError> {
-    let context = &evidence.context;
+    context: &'a WorkspaceEvidenceContext,
+) -> Result<BTreeSet<&'a str>, LocalWtsError> {
     let expected_evidence_path =
         Path::new(&materialization.workspace_display_path).join(EVIDENCE_DIRECTORY);
     if context.schema_version != WORKSPACE_EVIDENCE_SCHEMA_VERSION
@@ -7579,6 +8433,15 @@ fn validate_workspace_evidence(
             return Err(LocalWtsError::InvalidWorkspaceEvidence);
         }
     }
+    Ok(allowed_ids)
+}
+
+fn validate_workspace_evidence(
+    view: &WorkspaceView,
+    materialization: &WorkspaceMaterialization,
+    evidence: &WorkspaceEvidence,
+) -> Result<(), LocalWtsError> {
+    let allowed_ids = validate_workspace_evidence_context(view, materialization, &evidence.context)?;
     validate_graph_evidence(materialization, &evidence.graph_manifest, &allowed_ids)?;
     validate_verification_evidence(
         materialization,
@@ -7974,6 +8837,17 @@ fn materialized_git_state_matches(
                 || saved.origin_url.is_none()
                 || observed.origin_url.is_none())
     })
+}
+
+fn map_source_file_error(error: GitError) -> LocalWtsError {
+    match error {
+        GitError::InvalidWorktreeFilePath => LocalWtsError::InvalidRepositoryFilePath,
+        GitError::InvalidWorktreeFileRevision => LocalWtsError::InvalidRepositoryFileRevision,
+        GitError::WorktreeFileConflict => LocalWtsError::RepositoryFileConflict,
+        GitError::WorktreeFileNotUtf8 => LocalWtsError::RepositoryFileNotText,
+        GitError::WorktreeFileTooLarge => LocalWtsError::RepositoryFileTooLarge,
+        _ => LocalWtsError::RepositoryFileUnavailable,
+    }
 }
 
 fn map_repository_alignment_failure(error: GitError) -> LocalWtsError {
@@ -8500,6 +9374,7 @@ fn agent_provider_log_label(provider: AgentProvider) -> &'static str {
         AgentProvider::Codex => "codex",
         AgentProvider::OpenCode => "openCode",
         AgentProvider::Hermes => "hermes",
+        AgentProvider::Copilot => "copilot",
     }
 }
 
@@ -8547,6 +9422,7 @@ fn operational_failure_category(error: &LocalWtsError) -> &'static str {
         LocalWtsError::RepositoryNotFound => "repository_not_found",
         LocalWtsError::InvalidRepositoryRemote => "invalid_repository_remote",
         LocalWtsError::RepositoryCloneConflict => "repository_clone_conflict",
+        LocalWtsError::RepositoryCloneBranchUnavailable => "repository_clone_branch_unavailable",
         LocalWtsError::RepositoryCloneFailed => "repository_clone_failed",
         LocalWtsError::RepositoryFetchFailed => "repository_fetch_failed",
         LocalWtsError::RepositoryChanged => "repository_changed",
@@ -8591,6 +9467,22 @@ fn validate_agent_prompt(prompt: &str) -> Result<&str, LocalWtsError> {
         return Err(LocalWtsError::InvalidAgentPrompt);
     }
     Ok(prompt)
+}
+
+fn selected_clone_base(
+    repository: &RepositoryInspection,
+    requested: Option<&str>,
+) -> Result<Option<String>, LocalWtsError> {
+    requested
+        .map(|requested| {
+            repository
+                .available_branches
+                .iter()
+                .find(|branch| branch.name == requested && requested.len() <= 256)
+                .map(|branch| branch.name.clone())
+                .ok_or(LocalWtsError::RepositoryCloneBranchUnavailable)
+        })
+        .transpose()
 }
 
 fn repository_summary(
@@ -9107,6 +9999,152 @@ fn repository_addition_effect_digest(
     ))
 }
 
+fn removal_blocker(
+    code: RemovalBlockerCode,
+    message: String,
+    repository_label: Option<String>,
+) -> RemovalBlocker {
+    let recovery_steps: &[&str] = match code {
+        RemovalBlockerCode::ActiveOperation => &[
+            "Wait for active tasks and checks to finish, or stop them from their task or verification controls.",
+            "Cancel queued tasks you no longer need. Keep their saved work.",
+            "Select Check again after all workspace operations finish.",
+        ],
+        RemovalBlockerCode::WorkspaceDrift => &[
+            "Inspect the affected path and compare it with the WTS receipt.",
+            "Restore the expected repository or path from your saved copy. Keep all local work.",
+            "Select Check again after you correct the mismatch.",
+        ],
+        RemovalBlockerCode::WorktreeChanges => &[
+            "Review Changes before you remove this workspace.",
+            "Commit the files you need, or move them outside the workspace.",
+            "Select Check again after you preserve the files.",
+        ],
+        RemovalBlockerCode::IgnoredFiles => &[
+            "Inspect the ignored files in this worktree.",
+            "Move files you need outside the workspace before you remove it.",
+            "Select Check again after you preserve or remove the ignored files.",
+        ],
+        RemovalBlockerCode::PlanningDocumentsPresent => &[
+            "Review Plans before you remove this workspace.",
+            "Move plans you need outside the workspace, or select their deletion in this dialog.",
+            "Select Check again after you move the plans.",
+        ],
+        RemovalBlockerCode::UnexpectedPath => &[
+            "Inspect this path before you change it.",
+            "Move content you need outside the workspace. Remove unwanted content only after you inspect it.",
+            "Select Check again after you correct the path.",
+        ],
+        RemovalBlockerCode::GitUnavailable => &[
+            "Install Git or correct its local configuration.",
+            "Select Check again after Git can inspect this repository.",
+        ],
+    };
+    RemovalBlocker {
+        code,
+        message,
+        repository_label,
+        display_path: None,
+        expected: None,
+        observed: None,
+        recovery_steps: recovery_steps
+            .iter()
+            .map(|step| (*step).to_owned())
+            .collect(),
+    }
+}
+
+impl RemovalBlocker {
+    fn at(mut self, path: &Path) -> Self {
+        self.display_path = path
+            .to_str()
+            .filter(|path| path.len() <= 4096 && !path.chars().any(char::is_control))
+            .map(str::to_owned);
+        self
+    }
+}
+
+fn removal_worktree_blocker(
+    error: GitError,
+    repository_label: &str,
+    target_path: &Path,
+    repository_id: &str,
+    expected_branch: &str,
+    git: &GitWorktreeService,
+) -> RemovalBlocker {
+    let mut blocker = removal_git_blocker(error, repository_label).at(target_path);
+    if blocker.code != RemovalBlockerCode::WorkspaceDrift {
+        return blocker;
+    }
+    blocker.expected = Some("The recorded repository at its original worktree path.".to_owned());
+    let metadata = match target_path.symlink_metadata() {
+        Ok(metadata) => metadata,
+        Err(error) => {
+            blocker.observed = Some(
+                if error.kind() == std::io::ErrorKind::NotFound {
+                    "The worktree path is missing."
+                } else {
+                    "WTS cannot read the worktree path."
+                }
+                .to_owned(),
+            );
+            return blocker;
+        }
+    };
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        blocker.observed = Some(
+            if metadata.file_type().is_symlink() {
+                "The worktree path is a symbolic link."
+            } else {
+                "The worktree path is not a directory."
+            }
+            .to_owned(),
+        );
+        return blocker;
+    }
+    if target_path.canonicalize().ok().as_deref() != Some(target_path) {
+        blocker.observed =
+            Some("A parent path no longer matches the recorded location.".to_owned());
+        return blocker;
+    }
+    match git.inspect_repository(target_path) {
+        Ok(inspection) if inspection.id.as_str() == repository_id => {
+            let observed = inspection
+                .current_branch_full_ref
+                .as_deref()
+                .and_then(|branch| branch.strip_prefix("refs/heads/"));
+            if observed != Some(expected_branch) {
+                blocker.message = "The worktree branch differs from its WTS receipt.".to_owned();
+                blocker.expected = Some(expected_branch.to_owned());
+                blocker.observed = Some(observed.unwrap_or("Detached HEAD").to_owned());
+                blocker.recovery_steps = vec![
+                    "Review Changes and preserve your local work.".to_owned(),
+                    "If this branch change is intentional, select Register changes & re-index."
+                        .to_owned(),
+                    "Otherwise, restore the expected branch after you preserve your work."
+                        .to_owned(),
+                    "Select Check again after the workspace receipt matches your worktree."
+                        .to_owned(),
+                ];
+            } else {
+                blocker.observed = Some(
+                    "Git could not verify the worktree registration or branch commit.".to_owned(),
+                );
+            }
+        }
+        Ok(inspection) => {
+            blocker.message = "The worktree belongs to a different source repository.".to_owned();
+            blocker.expected = Some(repository_id.to_owned());
+            blocker.observed = Some(inspection.id.as_str().to_owned());
+        }
+        Err(_) => {
+            blocker.observed =
+                Some("Git cannot identify a valid worktree at this path.".to_owned());
+        }
+    }
+    blocker
+}
+
 fn removal_git_blocker(error: GitError, repository_label: &str) -> RemovalBlocker {
     let (code, message) = match error {
         GitError::WorktreeHasChanges => (
@@ -9121,21 +10159,25 @@ fn removal_git_blocker(error: GitError, repository_label: &str) -> RemovalBlocke
             RemovalBlockerCode::GitUnavailable,
             "Git could not inspect this worktree.",
         ),
+        GitError::NotAWorktree => (
+            RemovalBlockerCode::WorkspaceDrift,
+            "The path is not a Git worktree.",
+        ),
+        GitError::RepositoryPathUnavailable => (
+            RemovalBlockerCode::WorkspaceDrift,
+            "The source repository path is unavailable.",
+        ),
         _ => (
             RemovalBlockerCode::WorkspaceDrift,
             "The worktree no longer matches its WTS repository, branch, and path receipt.",
         ),
     };
-    RemovalBlocker {
-        code,
-        message: message.to_owned(),
-        repository_label: Some(repository_label.to_owned()),
-    }
+    removal_blocker(code, message.to_owned(), Some(repository_label.to_owned()))
 }
 
 fn validate_known_generated_tree(path: &Path) -> Result<(), ()> {
     let mut entries = 0_usize;
-    validate_known_generated_tree_at(path, 0, &mut entries)
+    validate_known_generated_tree_at(path, 0, &mut entries).map_err(|_| ())
 }
 
 fn summarize_protected_tree(
@@ -9214,35 +10256,73 @@ fn validate_known_generated_tree_at(
     path: &Path,
     depth: usize,
     entries: &mut usize,
-) -> Result<(), ()> {
+) -> Result<(), Box<RemovalBlocker>> {
     if depth > MAX_REMOVAL_TREE_DEPTH {
-        return Err(());
+        return Err(removal_tree_blocker(
+            path,
+            "This folder exceeds the inspection depth limit.",
+        ));
     }
-    let metadata = path.symlink_metadata().map_err(|_| ())?;
+    let metadata = path
+        .symlink_metadata()
+        .map_err(|_| removal_tree_blocker(path, "WTS cannot inspect this path."))?;
     if metadata.file_type().is_symlink() || !metadata.is_dir() {
-        return Err(());
+        return Err(removal_tree_blocker(
+            path,
+            "The expected folder is a symbolic link or a different path type.",
+        ));
     }
-    for entry in fs::read_dir(path).map_err(|_| ())? {
-        let entry = entry.map_err(|_| ())?;
-        *entries = entries.checked_add(1).ok_or(())?;
+    for entry in fs::read_dir(path)
+        .map_err(|_| removal_tree_blocker(path, "WTS cannot read this folder."))?
+    {
+        let entry =
+            entry.map_err(|_| removal_tree_blocker(path, "WTS cannot read a folder entry."))?;
+        *entries = entries.checked_add(1).ok_or_else(|| {
+            removal_tree_blocker(path, "This folder exceeds the inspection entry limit.")
+        })?;
         if *entries > MAX_REMOVAL_TREE_ENTRIES {
-            return Err(());
+            return Err(removal_tree_blocker(
+                path,
+                "This folder exceeds the inspection entry limit.",
+            ));
         }
         let child = entry.path();
         if child.parent() != Some(path) {
-            return Err(());
+            return Err(removal_tree_blocker(
+                path,
+                "A folder entry is outside its expected parent.",
+            ));
         }
-        let metadata = child.symlink_metadata().map_err(|_| ())?;
+        let metadata = child
+            .symlink_metadata()
+            .map_err(|_| removal_tree_blocker(&child, "WTS cannot inspect this path."))?;
         if metadata.file_type().is_symlink() {
-            return Err(());
+            return Err(removal_tree_blocker(
+                &child,
+                "This path is a symbolic link. WTS will not follow it.",
+            ));
         }
         if metadata.is_dir() {
             validate_known_generated_tree_at(&child, depth + 1, entries)?;
         } else if !metadata.is_file() {
-            return Err(());
+            return Err(removal_tree_blocker(
+                &child,
+                "This path is not a regular file or folder.",
+            ));
         }
     }
     Ok(())
+}
+
+fn removal_tree_blocker(path: &Path, reason: &str) -> Box<RemovalBlocker> {
+    let mut blocker = removal_blocker(
+        RemovalBlockerCode::UnexpectedPath,
+        "WTS cannot safely inspect this workspace entry.".to_owned(),
+        None,
+    )
+    .at(path);
+    blocker.observed = Some(reason.to_owned());
+    Box::new(blocker)
 }
 
 fn remove_known_generated_path(path: &Path) -> Result<(), LocalWtsError> {
@@ -9345,92 +10425,6 @@ fn fixed_planning_document_file_name(
     }
 }
 
-fn generated_planning_document_id(file_name: &str) -> WorkspacePlanningDocumentId {
-    let mut hasher = Sha256::new();
-    hasher.update(b"wts-planning-document-v1\0");
-    hasher.update(file_name.as_bytes());
-    WorkspacePlanningDocumentId::Generated(format!(
-        "generated-{}",
-        hasher.finalize().encode_hex::<String>()
-    ))
-}
-
-fn supported_generated_planning_file(file_name: &str) -> bool {
-    Path::new(file_name)
-        .extension()
-        .and_then(OsStr::to_str)
-        .is_some_and(|extension| {
-            matches!(
-                extension.to_ascii_lowercase().as_str(),
-                "md" | "csv" | "txt" | "mmd" | "mermaid"
-            )
-        })
-}
-
-fn discover_generated_planning_documents(
-    planning_home: &Path,
-    format: WorkspacePlanningFormat,
-) -> Result<Vec<WorkspacePlanningDocumentDescriptor>, LocalWtsError> {
-    let fixed_file_names: BTreeSet<_> = planning_document_ids(format)
-        .iter()
-        .filter_map(fixed_planning_document_file_name)
-        .collect();
-    let entries =
-        fs::read_dir(planning_home).map_err(|_| LocalWtsError::InvalidPlanningDocument)?;
-    let mut documents = Vec::new();
-    for entry in entries {
-        let Ok(entry) = entry else { continue };
-        let file_name = entry.file_name();
-        let Some(file_name) = file_name.to_str() else {
-            continue;
-        };
-        if fixed_file_names.contains(file_name) || !supported_generated_planning_file(file_name) {
-            continue;
-        }
-        let path = entry.path();
-        let Ok(metadata) = path.symlink_metadata() else {
-            continue;
-        };
-        if metadata.file_type().is_symlink()
-            || !metadata.is_file()
-            || metadata.len() as usize > MAX_PLANNING_DOCUMENT_BYTES
-            || path.parent() != Some(planning_home)
-            || path.canonicalize().ok().as_deref() != Some(path.as_path())
-        {
-            continue;
-        }
-        documents.push(WorkspacePlanningDocumentDescriptor {
-            document_id: generated_planning_document_id(file_name),
-            file_name: file_name.to_owned(),
-        });
-    }
-    documents.sort_by(|left, right| {
-        left.file_name
-            .to_ascii_lowercase()
-            .cmp(&right.file_name.to_ascii_lowercase())
-            .then_with(|| left.file_name.cmp(&right.file_name))
-    });
-    documents.truncate(MAX_DISCOVERED_PLANNING_DOCUMENTS);
-    Ok(documents)
-}
-
-fn resolve_planning_document_file_name(
-    planning_home: &Path,
-    format: WorkspacePlanningFormat,
-    document_id: &WorkspacePlanningDocumentId,
-) -> Result<String, LocalWtsError> {
-    if let Some(file_name) = fixed_planning_document_file_name(document_id) {
-        return planning_document_ids(format)
-            .contains(document_id)
-            .then(|| file_name.to_owned())
-            .ok_or(LocalWtsError::PlanningDocumentUnavailable);
-    }
-    discover_generated_planning_documents(planning_home, format)?
-        .into_iter()
-        .find(|document| &document.document_id == document_id)
-        .map(|document| document.file_name)
-        .ok_or(LocalWtsError::PlanningDocumentUnavailable)
-}
 
 fn review_author_to_store(author: ReviewAuthor) -> StoredReviewAuthor {
     match author {
@@ -9449,44 +10443,6 @@ fn map_review_store_error(error: WorkspaceStoreError) -> LocalWtsError {
     }
 }
 
-fn read_planning_document(
-    workspace_id: Uuid,
-    planning_home: &Path,
-    document_id: WorkspacePlanningDocumentId,
-    file_name: &str,
-) -> Result<WorkspacePlanningDocument, LocalWtsError> {
-    let path = planning_home.join(file_name);
-    let metadata = match path.symlink_metadata() {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return Err(LocalWtsError::PlanningDocumentUnavailable);
-        }
-        Err(_) => return Err(LocalWtsError::InvalidPlanningDocument),
-    };
-    if metadata.len() as usize > MAX_PLANNING_DOCUMENT_BYTES {
-        return Err(LocalWtsError::PlanningDocumentTooLarge);
-    }
-    if metadata.file_type().is_symlink()
-        || !metadata.is_file()
-        || path.parent() != Some(planning_home)
-        || path.canonicalize().ok().as_deref() != Some(path.as_path())
-    {
-        return Err(LocalWtsError::InvalidPlanningDocument);
-    }
-    let bytes = fs::read(&path).map_err(|_| LocalWtsError::InvalidPlanningDocument)?;
-    if bytes.len() > MAX_PLANNING_DOCUMENT_BYTES {
-        return Err(LocalWtsError::PlanningDocumentTooLarge);
-    }
-    let sha256 = sha256_bytes(&bytes);
-    let contents = String::from_utf8(bytes).map_err(|_| LocalWtsError::InvalidPlanningDocument)?;
-    Ok(WorkspacePlanningDocument {
-        workspace_id,
-        document_id,
-        file_name: file_name.to_owned(),
-        contents,
-        sha256,
-    })
-}
 
 fn planning_file_names(format: WorkspacePlanningFormat) -> &'static [&'static str] {
     match format {
@@ -9620,7 +10576,7 @@ fn planning_starter_files(
         const MAX_IMPORTED_JIRA_DESCRIPTION_BYTES: usize =
             MAX_PLANNING_DOCUMENT_BYTES - (16 * 1024);
         let description = bounded_text_with_notation(
-            &issue.content,
+            &issue.description(),
             MAX_IMPORTED_JIRA_DESCRIPTION_BYTES,
             "\n\n_[Jira description truncated by WTS.]_",
         );
@@ -9677,36 +10633,25 @@ fn bounded_text_with_notation(value: &str, max_bytes: usize, notation: &str) -> 
 }
 
 fn create_planning_home(
-    workspace: &Path,
+    generated: &mut GeneratedFiles,
     title: &str,
     planning: WorkspacePlanningSelection,
     jira_issue: Option<&JiraIssue>,
 ) -> Result<(), LocalWtsError> {
-    let path = workspace.join(planning_folder_leaf(planning.folder));
-    fs::create_dir(&path).map_err(|_| LocalWtsError::GeneratedFileFailed {
+    let error = || LocalWtsError::GeneratedFileFailed {
         cleanup_complete: false,
-    })?;
+    };
+    let path = Path::new(planning_folder_leaf(planning.folder));
+    generated.create_directory(path).map_err(|_| error())?;
     for (name, contents) in planning_starter_files(title, planning.format, jira_issue) {
-        atomic_write_bytes(&path.join(name), contents.as_bytes())?;
+        if contents.len() > MAX_GENERATED_FILE_BYTES {
+            return Err(error());
+        }
+        generated
+            .write(&path.join(name), contents.as_bytes())
+            .map_err(|_| error())?;
     }
     Ok(())
-}
-
-fn cleanup_planning_home(
-    workspace: &Path,
-    planning: WorkspacePlanningSelection,
-) -> Result<(), LocalWtsError> {
-    let path = workspace.join(planning_folder_leaf(planning.folder));
-    for name in planning_file_names(planning.format) {
-        remove_regular_file(&path.join(name))?;
-    }
-    match fs::remove_dir(&path) {
-        Ok(()) => Ok(()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(_) => Err(LocalWtsError::GeneratedFileFailed {
-            cleanup_complete: false,
-        }),
-    }
 }
 
 fn validate_planning_home(
@@ -9807,6 +10752,26 @@ fn write_relocated_workspace_files(
     atomic_upsert_managed_bytes(
         &workspace.join(WORKSPACE_AGENTS_FILE),
         workspace_agents_guide().as_bytes(),
+    )?;
+    atomic_upsert_managed_bytes(
+        &workspace.join(WORKSPACE_CLAUDE_FILE),
+        workspace_claude_guide().as_bytes(),
+    )?;
+    atomic_upsert_managed_bytes(
+        &workspace.join(WORKSPACE_CURSOR_RULES_FILE),
+        workspace_cursorrules_guide().as_bytes(),
+    )?;
+    let copilot_dir = workspace.join(WORKSPACE_COPILOT_DIR);
+    if let Err(error) = fs::create_dir_all(&copilot_dir)
+        && error.kind() != std::io::ErrorKind::AlreadyExists
+    {
+        return Err(LocalWtsError::GeneratedFileFailed {
+            cleanup_complete: false,
+        });
+    }
+    atomic_upsert_managed_bytes(
+        &workspace.join(WORKSPACE_COPILOT_FILE),
+        workspace_copilot_guide().as_bytes(),
     )
 }
 
@@ -9843,14 +10808,20 @@ fn rollback_workspace_move(
 fn code_workspace_folders(
     materialization: &WorkspaceMaterialization,
 ) -> Result<Vec<CodeWorkspaceFolder>, LocalWtsError> {
-    let mut folders = materialization
-        .worktrees
-        .iter()
-        .map(|worktree| CodeWorkspaceFolder {
-            name: worktree.label.clone(),
-            path: worktree.target_display_path.clone(),
-        })
-        .collect::<Vec<_>>();
+    let mut folders = Vec::with_capacity(materialization.worktrees.len() + 2);
+    folders.push(CodeWorkspaceFolder {
+        name: "Workspace (WTS)".to_owned(),
+        path: materialization.workspace_display_path.clone(),
+    });
+    folders.extend(
+        materialization
+            .worktrees
+            .iter()
+            .map(|worktree| CodeWorkspaceFolder {
+                name: worktree.label.clone(),
+                path: worktree.target_display_path.clone(),
+            }),
+    );
     if let Some(planning) = materialization.planning {
         let workspace = Path::new(&materialization.workspace_display_path);
         folders.push(CodeWorkspaceFolder {
@@ -9989,6 +10960,42 @@ fn workspace_agents_guide() -> String {
     )
 }
 
+fn workspace_claude_guide() -> String {
+    format!(
+        "# WTS workspace instructions\n\n\
+         {WTS_MANAGED_CLAUDE_MARKER}\n\n\
+         WTS manages this file at the workspace root. Repository-owned `CLAUDE.md` files remain under Git control.\n\n\
+         1. Read `WTS.md` before you inspect or change a repository.\n\
+         2. Follow the current workspace boundary and reporting rules in `WTS.md`.\n\
+         3. Treat a repository-owned `CLAUDE.md` or `AGENTS.md` as additional instructions for that repository.\n\
+         4. Do not edit WTS-owned files in `.wts/`.\n"
+    )
+}
+
+fn workspace_cursorrules_guide() -> String {
+    format!(
+        "# WTS workspace instructions\n\n\
+         {WTS_MANAGED_CURSOR_MARKER}\n\n\
+         WTS manages this file at the workspace root. Repository-owned `.cursorrules` files remain under Git control.\n\n\
+         1. Read `WTS.md` before you inspect or change a repository.\n\
+         2. Follow the current workspace boundary and reporting rules in `WTS.md`.\n\
+         3. Treat repository-owned agent files as additional instructions for that repository.\n\
+         4. Do not edit WTS-owned files in `.wts/`.\n"
+    )
+}
+
+fn workspace_copilot_guide() -> String {
+    format!(
+        "# WTS workspace instructions\n\n\
+         {WTS_MANAGED_COPILOT_MARKER}\n\n\
+         WTS manages this file at the workspace root. Repository-owned `.github/copilot-instructions.md` files remain under Git control.\n\n\
+         1. Read `WTS.md` before you inspect or change a repository.\n\
+         2. Follow the current workspace boundary and reporting rules in `WTS.md`.\n\
+         3. Treat repository-owned instructions as additional instructions for that repository.\n\
+         4. Do not edit WTS-owned files in `.wts/`.\n"
+    )
+}
+
 fn refresh_workspace_agent_files(
     workspace: &Path,
     context: &WorkspaceEvidenceContext,
@@ -10020,31 +11027,66 @@ fn refresh_workspace_agent_files(
         }
         Err(_) => return Err(LocalWtsError::EvidenceUnavailable),
     }
-    refresh_workspace_agents_file(workspace)
+    refresh_workspace_agents_file(workspace)?;
+    refresh_workspace_claude_file(workspace)?;
+    refresh_workspace_cursor_file(workspace)?;
+    refresh_workspace_copilot_file(workspace)
 }
 
 fn refresh_workspace_agents_file(workspace: &Path) -> Result<(), LocalWtsError> {
     let path = workspace.join(WORKSPACE_AGENTS_FILE);
     let refreshed = workspace_agents_guide();
+    refresh_managed_guide_file(&path, WTS_MANAGED_AGENTS_MARKER, &refreshed)
+}
+
+fn refresh_workspace_claude_file(workspace: &Path) -> Result<(), LocalWtsError> {
+    let path = workspace.join(WORKSPACE_CLAUDE_FILE);
+    let refreshed = workspace_claude_guide();
+    refresh_managed_guide_file(&path, WTS_MANAGED_CLAUDE_MARKER, &refreshed)
+}
+
+fn refresh_workspace_cursor_file(workspace: &Path) -> Result<(), LocalWtsError> {
+    let path = workspace.join(WORKSPACE_CURSOR_RULES_FILE);
+    let refreshed = workspace_cursorrules_guide();
+    refresh_managed_guide_file(&path, WTS_MANAGED_CURSOR_MARKER, &refreshed)
+}
+
+fn refresh_workspace_copilot_file(workspace: &Path) -> Result<(), LocalWtsError> {
+    let dir = workspace.join(WORKSPACE_COPILOT_DIR);
+    if let Err(error) = fs::create_dir_all(&dir)
+        && error.kind() != std::io::ErrorKind::AlreadyExists
+    {
+        return Err(LocalWtsError::InvalidMaterializationManifest);
+    }
+    let path = workspace.join(WORKSPACE_COPILOT_FILE);
+    let refreshed = workspace_copilot_guide();
+    refresh_managed_guide_file(&path, WTS_MANAGED_COPILOT_MARKER, &refreshed)
+}
+
+fn refresh_managed_guide_file(
+    path: &Path,
+    marker: &str,
+    refreshed: &str,
+) -> Result<(), LocalWtsError> {
     match path.symlink_metadata() {
         Ok(metadata)
             if metadata.is_file()
                 && !metadata.file_type().is_symlink()
                 && metadata.len() as usize <= MAX_GENERATED_FILE_BYTES =>
         {
-            let existing = fs::read_to_string(&path)
+            let existing = fs::read_to_string(path)
                 .map_err(|_| LocalWtsError::InvalidMaterializationManifest)?;
-            if !existing.contains(WTS_MANAGED_AGENTS_MARKER) {
+            if !existing.contains(marker) {
                 return Err(LocalWtsError::InvalidMaterializationManifest);
             }
             if existing != refreshed {
-                atomic_replace_bytes(&path, refreshed.as_bytes())?;
+                atomic_replace_bytes(path, refreshed.as_bytes())?;
             }
             Ok(())
         }
         Ok(_) => Err(LocalWtsError::InvalidMaterializationManifest),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            atomic_write_bytes(&path, refreshed.as_bytes())
+            atomic_write_bytes(path, refreshed.as_bytes())
         }
         Err(_) => Err(LocalWtsError::EvidenceUnavailable),
     }
@@ -10141,7 +11183,7 @@ fn atomic_replace_bytes(path: &Path, bytes: &[u8]) -> Result<(), LocalWtsError> 
             cleanup_complete: false,
         })?;
     let result = (|| {
-        file.write_all(&bytes)?;
+        file.write_all(bytes)?;
         file.sync_all()?;
         fs::rename(&temp, path)?;
         Ok::<(), std::io::Error>(())
@@ -10249,27 +11291,43 @@ fn validate_code_workspace(
         folders: code_workspace_folders(materialization)?,
     };
     if actual != expected {
-        return Err(LocalWtsError::InvalidMaterializationManifest);
+        // Support legacy code-workspace files created before the "Workspace (WTS)" folder was included.
+        let legacy_expected = CodeWorkspace {
+            folders: legacy_code_workspace_folders(materialization)?,
+        };
+        if actual != legacy_expected {
+            return Err(LocalWtsError::InvalidMaterializationManifest);
+        }
     }
     Ok(())
 }
 
-fn valid_commit_oid(value: &str) -> bool {
-    matches!(value.len(), 40 | 64) && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+fn legacy_code_workspace_folders(
+    materialization: &WorkspaceMaterialization,
+) -> Result<Vec<CodeWorkspaceFolder>, LocalWtsError> {
+    let mut folders = materialization
+        .worktrees
+        .iter()
+        .map(|worktree| CodeWorkspaceFolder {
+            name: worktree.label.clone(),
+            path: worktree.target_display_path.clone(),
+        })
+        .collect::<Vec<_>>();
+    if let Some(planning) = materialization.planning {
+        let workspace = Path::new(&materialization.workspace_display_path);
+        folders.push(CodeWorkspaceFolder {
+            name: match planning.folder {
+                WorkspacePlanningFolder::Plans => "Plans".to_owned(),
+                WorkspacePlanningFolder::PlansAndKanban => "Plans & Kanban".to_owned(),
+            },
+            path: display_path(&workspace.join(planning_folder_leaf(planning.folder)))?,
+        });
+    }
+    Ok(folders)
 }
 
-fn remove_regular_file(path: &Path) -> Result<(), LocalWtsError> {
-    match path.symlink_metadata() {
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Ok(metadata) if metadata.is_file() && !metadata.file_type().is_symlink() => {
-            fs::remove_file(path).map_err(|_| LocalWtsError::GeneratedFileFailed {
-                cleanup_complete: false,
-            })
-        }
-        _ => Err(LocalWtsError::GeneratedFileFailed {
-            cleanup_complete: false,
-        }),
-    }
+fn valid_commit_oid(value: &str) -> bool {
+    matches!(value.len(), 40 | 64) && value.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
 fn display_path(path: &Path) -> Result<String, LocalWtsError> {
@@ -10593,9 +11651,9 @@ mod tests {
     use super::{
         BUILT_IN_WTS_JOURNEY, MAX_PLANNING_DOCUMENT_BYTES, RepositoryDiscoveryLimits,
         ValidatedRepositoryRemote, agent_change_request_verification, agent_prompt_with_work_items,
-        built_in_test_journey, code_workspace_file_name, default_verification_checks,
-        discover_repositories, git_patch_header_path, graph_summary, has_npm_test_script,
-        is_workspace_code_file, jira_keys_in_text, load_code_review_snapshots,
+        built_in_test_journey, code_workspace_file_name, create_planning_home,
+        default_verification_checks, discover_repositories, git_patch_header_path, graph_summary,
+        has_npm_test_script, is_workspace_code_file, jira_keys_in_text, load_code_review_snapshots,
         map_change_request_publish_error, materialization_matches_repository_plans,
         merge_observed_repository_recommendations, patch_contains_changed_line,
         planning_starter_files, repository_recommendations, should_record_graph_failure,
@@ -11325,8 +12383,9 @@ mod tests {
             super::agent_provider_log_label(crate::AgentProvider::Codex),
             super::agent_provider_log_label(crate::AgentProvider::OpenCode),
             super::agent_provider_log_label(crate::AgentProvider::Hermes),
+            super::agent_provider_log_label(crate::AgentProvider::Copilot),
         ];
-        assert_eq!(providers, ["codex", "openCode", "hermes"]);
+        assert_eq!(providers, ["codex", "openCode", "hermes", "copilot"]);
 
         let categories = [
             super::operational_failure_category(&super::LocalWtsError::InvalidAgentPrompt),
@@ -11433,6 +12492,74 @@ mod tests {
         assert_eq!(utc_date_for_unix_ms(0), "1970-01-01");
         assert_eq!(utc_date_for_unix_ms(1_775_003_400_000), "2026-04-01");
         assert_eq!(utc_date_for_unix_ms(-1), "1969-12-31");
+    }
+
+    #[test]
+    fn jira_planning_files_render_serialized_descriptions_without_rewriting_existing_files() {
+        let description = "## User outcome\n\nKeep the repository selection.\n\n- Retain the draft 🧪.\n- Show this code example unchanged: `{\"description\":\"sample\"}`.";
+        for payload in [
+            serde_json::json!({
+                "key": "PLATFORM-42", "summary": "Retain selection",
+                "status": { "name": "In progress" }, "description": description,
+                "customfield_12345": "Private provider metadata",
+            }),
+            serde_json::json!({
+                "key": "PLATFORM-42", "fields": {
+                    "summary": "Retain selection", "status": { "name": "In progress" },
+                    "description": description,
+                },
+                "self": "https://jira.example.test/rest/api/2/issue/12345",
+            }),
+        ] {
+            let fixture = tempfile::tempdir().expect("planning fixture");
+            let issue: JiraIssue = serde_json::from_value(serde_json::json!({
+                "issueKey": "PLATFORM-42", "summary": "Retain selection",
+                "status": "In progress", "content": payload.to_string(), "browserUrl": null,
+            }))
+            .expect("serialized imported issue");
+            let planning = wts_core::workspace::WorkspacePlanningSelection {
+                folder: wts_core::workspace::WorkspacePlanningFolder::PlansAndKanban,
+                format: WorkspacePlanningFormat::Kanban,
+            };
+            create_planning_home(
+                &mut crate::generated_files::GeneratedFiles::new(
+                    &fixture.path().canonicalize().unwrap(),
+                )
+                .unwrap(),
+                "Retain selection",
+                planning,
+                Some(&issue),
+            )
+            .expect("create planning files");
+            for name in ["PLAN.md", "KANBAN.md"] {
+                let path = fixture.path().join("plans-and-kanban").join(name);
+                let contents = fs::read_to_string(&path).expect("read generated planning file");
+                assert!(
+                    contents.contains(&format!("### Imported description\n\n{description}\n\n")),
+                    "{name} must contain decoded description text"
+                );
+                assert!(!contents.contains("Private provider metadata"));
+                assert!(!contents.contains("rest/api/2/issue"));
+                assert!(contents.contains("- Summary: Retain selection"));
+                assert!(contents.contains("- Status: In progress"));
+                fs::write(&path, format!("User edit\n{contents}")).expect("retain user content");
+            }
+            let plan_path = fixture.path().join("plans-and-kanban/PLAN.md");
+            let user_content = fs::read(&plan_path).expect("user plan");
+            assert!(
+                create_planning_home(
+                    &mut crate::generated_files::GeneratedFiles::new(
+                        &fixture.path().canonicalize().unwrap()
+                    )
+                    .unwrap(),
+                    "Changed title",
+                    planning,
+                    Some(&issue)
+                )
+                .is_err()
+            );
+            assert_eq!(fs::read(plan_path).expect("retained plan"), user_content);
+        }
     }
 
     #[test]

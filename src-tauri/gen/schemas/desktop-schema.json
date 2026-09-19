@@ -195,10 +195,28 @@
           "markdownDescription": "Enables the analyze_workspace_runtime command without any pre-configured scope."
         },
         {
+          "description": "Enables the cancel_agent_conversation_message command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-cancel-agent-conversation-message",
+          "markdownDescription": "Enables the cancel_agent_conversation_message command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the cancel_agent_work_item command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-cancel-agent-work-item",
+          "markdownDescription": "Enables the cancel_agent_work_item command without any pre-configured scope."
+        },
+        {
           "description": "Enables the cancel_workspace_verification command without any pre-configured scope.",
           "type": "string",
           "const": "allow-cancel-workspace-verification",
           "markdownDescription": "Enables the cancel_workspace_verification command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the capture_ui_region command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-capture-ui-region",
+          "markdownDescription": "Enables the capture_ui_region command without any pre-configured scope."
         },
         {
           "description": "Enables the check_for_update command without any pre-configured scope.",
@@ -217,6 +235,18 @@
           "type": "string",
           "const": "allow-confirm-workspace-jira-link",
           "markdownDescription": "Enables the confirm_workspace_jira_link command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the create_agent_conversation command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-create-agent-conversation",
+          "markdownDescription": "Enables the create_agent_conversation command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the create_agent_work_set command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-create-agent-work-set",
+          "markdownDescription": "Enables the create_agent_work_set command without any pre-configured scope."
         },
         {
           "description": "Enables the create_workspace command without any pre-configured scope.",
@@ -273,10 +303,40 @@
           "markdownDescription": "Enables the get_activity_watch_time_review_brief command without any pre-configured scope."
         },
         {
+          "description": "Enables the get_agent_conversation command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-agent-conversation",
+          "markdownDescription": "Enables the get_agent_conversation command without any pre-configured scope."
+        },
+        {
           "description": "Enables the get_agent_session_detail command without any pre-configured scope.",
           "type": "string",
           "const": "allow-get-agent-session-detail",
           "markdownDescription": "Enables the get_agent_session_detail command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the get_agent_turn_changes command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-agent-turn-changes",
+          "markdownDescription": "Enables the get_agent_turn_changes command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the get_agent_turn_checks command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-agent-turn-checks",
+          "markdownDescription": "Enables the get_agent_turn_checks command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the get_agent_turn_decisions command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-agent-turn-decisions",
+          "markdownDescription": "Enables the get_agent_turn_decisions command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the get_agent_work_set command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-agent-work-set",
+          "markdownDescription": "Enables the get_agent_work_set command without any pre-configured scope."
         },
         {
           "description": "Enables the get_app_info command without any pre-configured scope.",
@@ -295,6 +355,12 @@
           "type": "string",
           "const": "allow-get-github-review-inbox",
           "markdownDescription": "Enables the get_github_review_inbox command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the get_gitlab_discussions command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-gitlab-discussions",
+          "markdownDescription": "Enables the get_gitlab_discussions command without any pre-configured scope."
         },
         {
           "description": "Enables the get_gitlab_integration_status command without any pre-configured scope.",
@@ -345,6 +411,12 @@
           "markdownDescription": "Enables the get_workspace_evidence command without any pre-configured scope."
         },
         {
+          "description": "Enables the get_workspace_gitlab_comparison command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-workspace-gitlab-comparison",
+          "markdownDescription": "Enables the get_workspace_gitlab_comparison command without any pre-configured scope."
+        },
+        {
           "description": "Enables the get_workspace_materialization command without any pre-configured scope.",
           "type": "string",
           "const": "allow-get-workspace-materialization",
@@ -369,10 +441,22 @@
           "markdownDescription": "Enables the get_workspace_repository_review_graph command without any pre-configured scope."
         },
         {
+          "description": "Enables the get_workspace_repository_source command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-workspace-repository-source",
+          "markdownDescription": "Enables the get_workspace_repository_source command without any pre-configured scope."
+        },
+        {
           "description": "Enables the get_workspace_test_run command without any pre-configured scope.",
           "type": "string",
           "const": "allow-get-workspace-test-run",
           "markdownDescription": "Enables the get_workspace_test_run command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the get_workspace_verification_summary command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-workspace-verification-summary",
+          "markdownDescription": "Enables the get_workspace_verification_summary command without any pre-configured scope."
         },
         {
           "description": "Enables the heartbeat_agent_session command without any pre-configured scope.",
@@ -405,6 +489,12 @@
           "markdownDescription": "Enables the index_workspace_graph command without any pre-configured scope."
         },
         {
+          "description": "Enables the integrate_agent_work_item command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-integrate-agent-work-item",
+          "markdownDescription": "Enables the integrate_agent_work_item command without any pre-configured scope."
+        },
+        {
           "description": "Enables the launch_agent_session command without any pre-configured scope.",
           "type": "string",
           "const": "allow-launch-agent-session",
@@ -417,10 +507,22 @@
           "markdownDescription": "Enables the list_active_jira_issues command without any pre-configured scope."
         },
         {
+          "description": "Enables the list_agent_conversations command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-list-agent-conversations",
+          "markdownDescription": "Enables the list_agent_conversations command without any pre-configured scope."
+        },
+        {
           "description": "Enables the list_agent_sessions command without any pre-configured scope.",
           "type": "string",
           "const": "allow-list-agent-sessions",
           "markdownDescription": "Enables the list_agent_sessions command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the list_agent_work_sets command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-list-agent-work-sets",
+          "markdownDescription": "Enables the list_agent_work_sets command without any pre-configured scope."
         },
         {
           "description": "Enables the list_repositories command without any pre-configured scope.",
@@ -463,6 +565,12 @@
           "type": "string",
           "const": "allow-materialize-workspace",
           "markdownDescription": "Enables the materialize_workspace command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the open_agent_work_item_preview command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-open-agent-work-item-preview",
+          "markdownDescription": "Enables the open_agent_work_item_preview command without any pre-configured scope."
         },
         {
           "description": "Enables the open_github_review command without any pre-configured scope.",
@@ -517,6 +625,18 @@
           "type": "string",
           "const": "allow-place-workspace-on-board",
           "markdownDescription": "Enables the place_workspace_on_board command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the preflight_agent_turn_restore command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-preflight-agent-turn-restore",
+          "markdownDescription": "Enables the preflight_agent_turn_restore command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the preflight_agent_work_item_integration command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-preflight-agent-work-item-integration",
+          "markdownDescription": "Enables the preflight_agent_work_item_integration command without any pre-configured scope."
         },
         {
           "description": "Enables the preflight_workspace command without any pre-configured scope.",
@@ -591,6 +711,18 @@
           "markdownDescription": "Enables the read_workspace_planning_document command without any pre-configured scope."
         },
         {
+          "description": "Enables the record_agent_turn_decision command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-record-agent-turn-decision",
+          "markdownDescription": "Enables the record_agent_turn_decision command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the recover_workspace_setup command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-recover-workspace-setup",
+          "markdownDescription": "Enables the recover_workspace_setup command without any pre-configured scope."
+        },
+        {
           "description": "Enables the refresh_repository_branches command without any pre-configured scope.",
           "type": "string",
           "const": "allow-refresh-repository-branches",
@@ -627,6 +759,12 @@
           "markdownDescription": "Enables the rename_workspace command without any pre-configured scope."
         },
         {
+          "description": "Enables the reply_gitlab_discussion command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-reply-gitlab-discussion",
+          "markdownDescription": "Enables the reply_gitlab_discussion command without any pre-configured scope."
+        },
+        {
           "description": "Enables the rerun_failed_workspace_verification command without any pre-configured scope.",
           "type": "string",
           "const": "allow-rerun-failed-workspace-verification",
@@ -639,10 +777,28 @@
           "markdownDescription": "Enables the resolve_workspace_review_thread command without any pre-configured scope."
         },
         {
+          "description": "Enables the restore_agent_turn command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-restore-agent-turn",
+          "markdownDescription": "Enables the restore_agent_turn command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the run_agent_turn_check command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-run-agent-turn-check",
+          "markdownDescription": "Enables the run_agent_turn_check command without any pre-configured scope."
+        },
+        {
           "description": "Enables the run_workspace_agent command without any pre-configured scope.",
           "type": "string",
           "const": "allow-run-workspace-agent",
           "markdownDescription": "Enables the run_workspace_agent command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the run_workspace_code_review command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-run-workspace-code-review",
+          "markdownDescription": "Enables the run_workspace_code_review command without any pre-configured scope."
         },
         {
           "description": "Enables the run_workspace_test_journey command without any pre-configured scope.",
@@ -661,6 +817,18 @@
           "type": "string",
           "const": "allow-run-workspace-verification-check",
           "markdownDescription": "Enables the run_workspace_verification_check command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the save_workspace_repository_source command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-save-workspace-repository-source",
+          "markdownDescription": "Enables the save_workspace_repository_source command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the send_agent_conversation_message command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-send-agent-conversation-message",
+          "markdownDescription": "Enables the send_agent_conversation_message command without any pre-configured scope."
         },
         {
           "description": "Enables the send_desktop_notification command without any pre-configured scope.",
@@ -697,6 +865,12 @@
           "type": "string",
           "const": "allow-unlink-workspace-work-item",
           "markdownDescription": "Enables the unlink_workspace_work_item command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the update_agent_conversation_message command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-update-agent-conversation-message",
+          "markdownDescription": "Enables the update_agent_conversation_message command without any pre-configured scope."
         },
         {
           "description": "Enables the update_workspace_planning_document command without any pre-configured scope.",
@@ -747,10 +921,28 @@
           "markdownDescription": "Denies the analyze_workspace_runtime command without any pre-configured scope."
         },
         {
+          "description": "Denies the cancel_agent_conversation_message command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-cancel-agent-conversation-message",
+          "markdownDescription": "Denies the cancel_agent_conversation_message command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the cancel_agent_work_item command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-cancel-agent-work-item",
+          "markdownDescription": "Denies the cancel_agent_work_item command without any pre-configured scope."
+        },
+        {
           "description": "Denies the cancel_workspace_verification command without any pre-configured scope.",
           "type": "string",
           "const": "deny-cancel-workspace-verification",
           "markdownDescription": "Denies the cancel_workspace_verification command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the capture_ui_region command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-capture-ui-region",
+          "markdownDescription": "Denies the capture_ui_region command without any pre-configured scope."
         },
         {
           "description": "Denies the check_for_update command without any pre-configured scope.",
@@ -769,6 +961,18 @@
           "type": "string",
           "const": "deny-confirm-workspace-jira-link",
           "markdownDescription": "Denies the confirm_workspace_jira_link command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the create_agent_conversation command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-create-agent-conversation",
+          "markdownDescription": "Denies the create_agent_conversation command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the create_agent_work_set command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-create-agent-work-set",
+          "markdownDescription": "Denies the create_agent_work_set command without any pre-configured scope."
         },
         {
           "description": "Denies the create_workspace command without any pre-configured scope.",
@@ -825,10 +1029,40 @@
           "markdownDescription": "Denies the get_activity_watch_time_review_brief command without any pre-configured scope."
         },
         {
+          "description": "Denies the get_agent_conversation command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-agent-conversation",
+          "markdownDescription": "Denies the get_agent_conversation command without any pre-configured scope."
+        },
+        {
           "description": "Denies the get_agent_session_detail command without any pre-configured scope.",
           "type": "string",
           "const": "deny-get-agent-session-detail",
           "markdownDescription": "Denies the get_agent_session_detail command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_agent_turn_changes command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-agent-turn-changes",
+          "markdownDescription": "Denies the get_agent_turn_changes command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_agent_turn_checks command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-agent-turn-checks",
+          "markdownDescription": "Denies the get_agent_turn_checks command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_agent_turn_decisions command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-agent-turn-decisions",
+          "markdownDescription": "Denies the get_agent_turn_decisions command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_agent_work_set command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-agent-work-set",
+          "markdownDescription": "Denies the get_agent_work_set command without any pre-configured scope."
         },
         {
           "description": "Denies the get_app_info command without any pre-configured scope.",
@@ -847,6 +1081,12 @@
           "type": "string",
           "const": "deny-get-github-review-inbox",
           "markdownDescription": "Denies the get_github_review_inbox command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_gitlab_discussions command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-gitlab-discussions",
+          "markdownDescription": "Denies the get_gitlab_discussions command without any pre-configured scope."
         },
         {
           "description": "Denies the get_gitlab_integration_status command without any pre-configured scope.",
@@ -897,6 +1137,12 @@
           "markdownDescription": "Denies the get_workspace_evidence command without any pre-configured scope."
         },
         {
+          "description": "Denies the get_workspace_gitlab_comparison command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-workspace-gitlab-comparison",
+          "markdownDescription": "Denies the get_workspace_gitlab_comparison command without any pre-configured scope."
+        },
+        {
           "description": "Denies the get_workspace_materialization command without any pre-configured scope.",
           "type": "string",
           "const": "deny-get-workspace-materialization",
@@ -921,10 +1167,22 @@
           "markdownDescription": "Denies the get_workspace_repository_review_graph command without any pre-configured scope."
         },
         {
+          "description": "Denies the get_workspace_repository_source command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-workspace-repository-source",
+          "markdownDescription": "Denies the get_workspace_repository_source command without any pre-configured scope."
+        },
+        {
           "description": "Denies the get_workspace_test_run command without any pre-configured scope.",
           "type": "string",
           "const": "deny-get-workspace-test-run",
           "markdownDescription": "Denies the get_workspace_test_run command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_workspace_verification_summary command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-workspace-verification-summary",
+          "markdownDescription": "Denies the get_workspace_verification_summary command without any pre-configured scope."
         },
         {
           "description": "Denies the heartbeat_agent_session command without any pre-configured scope.",
@@ -957,6 +1215,12 @@
           "markdownDescription": "Denies the index_workspace_graph command without any pre-configured scope."
         },
         {
+          "description": "Denies the integrate_agent_work_item command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-integrate-agent-work-item",
+          "markdownDescription": "Denies the integrate_agent_work_item command without any pre-configured scope."
+        },
+        {
           "description": "Denies the launch_agent_session command without any pre-configured scope.",
           "type": "string",
           "const": "deny-launch-agent-session",
@@ -969,10 +1233,22 @@
           "markdownDescription": "Denies the list_active_jira_issues command without any pre-configured scope."
         },
         {
+          "description": "Denies the list_agent_conversations command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-list-agent-conversations",
+          "markdownDescription": "Denies the list_agent_conversations command without any pre-configured scope."
+        },
+        {
           "description": "Denies the list_agent_sessions command without any pre-configured scope.",
           "type": "string",
           "const": "deny-list-agent-sessions",
           "markdownDescription": "Denies the list_agent_sessions command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the list_agent_work_sets command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-list-agent-work-sets",
+          "markdownDescription": "Denies the list_agent_work_sets command without any pre-configured scope."
         },
         {
           "description": "Denies the list_repositories command without any pre-configured scope.",
@@ -1015,6 +1291,12 @@
           "type": "string",
           "const": "deny-materialize-workspace",
           "markdownDescription": "Denies the materialize_workspace command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the open_agent_work_item_preview command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-open-agent-work-item-preview",
+          "markdownDescription": "Denies the open_agent_work_item_preview command without any pre-configured scope."
         },
         {
           "description": "Denies the open_github_review command without any pre-configured scope.",
@@ -1069,6 +1351,18 @@
           "type": "string",
           "const": "deny-place-workspace-on-board",
           "markdownDescription": "Denies the place_workspace_on_board command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the preflight_agent_turn_restore command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-preflight-agent-turn-restore",
+          "markdownDescription": "Denies the preflight_agent_turn_restore command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the preflight_agent_work_item_integration command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-preflight-agent-work-item-integration",
+          "markdownDescription": "Denies the preflight_agent_work_item_integration command without any pre-configured scope."
         },
         {
           "description": "Denies the preflight_workspace command without any pre-configured scope.",
@@ -1143,6 +1437,18 @@
           "markdownDescription": "Denies the read_workspace_planning_document command without any pre-configured scope."
         },
         {
+          "description": "Denies the record_agent_turn_decision command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-record-agent-turn-decision",
+          "markdownDescription": "Denies the record_agent_turn_decision command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the recover_workspace_setup command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-recover-workspace-setup",
+          "markdownDescription": "Denies the recover_workspace_setup command without any pre-configured scope."
+        },
+        {
           "description": "Denies the refresh_repository_branches command without any pre-configured scope.",
           "type": "string",
           "const": "deny-refresh-repository-branches",
@@ -1179,6 +1485,12 @@
           "markdownDescription": "Denies the rename_workspace command without any pre-configured scope."
         },
         {
+          "description": "Denies the reply_gitlab_discussion command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-reply-gitlab-discussion",
+          "markdownDescription": "Denies the reply_gitlab_discussion command without any pre-configured scope."
+        },
+        {
           "description": "Denies the rerun_failed_workspace_verification command without any pre-configured scope.",
           "type": "string",
           "const": "deny-rerun-failed-workspace-verification",
@@ -1191,10 +1503,28 @@
           "markdownDescription": "Denies the resolve_workspace_review_thread command without any pre-configured scope."
         },
         {
+          "description": "Denies the restore_agent_turn command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-restore-agent-turn",
+          "markdownDescription": "Denies the restore_agent_turn command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the run_agent_turn_check command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-run-agent-turn-check",
+          "markdownDescription": "Denies the run_agent_turn_check command without any pre-configured scope."
+        },
+        {
           "description": "Denies the run_workspace_agent command without any pre-configured scope.",
           "type": "string",
           "const": "deny-run-workspace-agent",
           "markdownDescription": "Denies the run_workspace_agent command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the run_workspace_code_review command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-run-workspace-code-review",
+          "markdownDescription": "Denies the run_workspace_code_review command without any pre-configured scope."
         },
         {
           "description": "Denies the run_workspace_test_journey command without any pre-configured scope.",
@@ -1213,6 +1543,18 @@
           "type": "string",
           "const": "deny-run-workspace-verification-check",
           "markdownDescription": "Denies the run_workspace_verification_check command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the save_workspace_repository_source command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-save-workspace-repository-source",
+          "markdownDescription": "Denies the save_workspace_repository_source command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the send_agent_conversation_message command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-send-agent-conversation-message",
+          "markdownDescription": "Denies the send_agent_conversation_message command without any pre-configured scope."
         },
         {
           "description": "Denies the send_desktop_notification command without any pre-configured scope.",
@@ -1249,6 +1591,12 @@
           "type": "string",
           "const": "deny-unlink-workspace-work-item",
           "markdownDescription": "Denies the unlink_workspace_work_item command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the update_agent_conversation_message command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-update-agent-conversation-message",
+          "markdownDescription": "Denies the update_agent_conversation_message command without any pre-configured scope."
         },
         {
           "description": "Denies the update_workspace_planning_document command without any pre-configured scope.",

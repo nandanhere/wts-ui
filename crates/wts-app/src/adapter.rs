@@ -1,3 +1,7 @@
+#[path = "conversation_process.rs"]
+mod conversation_process;
+pub(crate) use conversation_process::{ConversationCapture, ConversationOutput};
+
 use crate::{
     AgentProvider, AgentRunResult, GraphIndexResult, GraphWorkspaceStatus,
     agent_session_details::{AgentProcessEvent, AgentProcessEventKind},
@@ -24,6 +28,7 @@ use std::{
     time::{Duration, Instant},
 };
 use uuid::Uuid;
+use wts_integrations::{PathResolver, SystemPathResolver};
 
 const AGENT_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 const GRAPH_TIMEOUT: Duration = Duration::from_secs(10 * 60);
@@ -83,7 +88,9 @@ impl CollaborationAdapter for ProcessCollaborationAdapter {
             AgentProvider::Codex => CollaborationConfinement::WorkspaceWriteIsolated,
             #[cfg(not(unix))]
             AgentProvider::Codex => CollaborationConfinement::Unverified,
-            AgentProvider::OpenCode | AgentProvider::Hermes => CollaborationConfinement::Unverified,
+            AgentProvider::OpenCode | AgentProvider::Hermes | AgentProvider::Copilot => {
+                CollaborationConfinement::Unverified
+            }
         }
     }
 
@@ -142,7 +149,12 @@ pub struct ProcessWorkspaceAdapter {
     codex_executable: OsString,
     open_code_executable: OsString,
     hermes_executable: OsString,
+    copilot_executable: OsString,
     graphify_executable: OsString,
+    process_lease: Option<Arc<fs::File>>,
+    image_context: Option<PathBuf>,
+    conversation_capture: Option<Arc<std::sync::Mutex<ConversationCapture>>>,
+    conversation_final_path: Option<PathBuf>,
 }
 
 impl Default for ProcessWorkspaceAdapter {
@@ -151,12 +163,173 @@ impl Default for ProcessWorkspaceAdapter {
             codex_executable: OsString::from("codex"),
             open_code_executable: OsString::from("opencode"),
             hermes_executable: OsString::from("hermes"),
+            copilot_executable: OsString::from("copilot"),
             graphify_executable: OsString::from("graphify"),
+            process_lease: None,
+            conversation_capture: None,
+            conversation_final_path: None,
+            image_context: None,
         }
     }
 }
 
+fn resolve_codex_executable(configured: &OsStr) -> OsString {
+    if configured == OsStr::new("codex")
+        && let Ok(Some(executable)) = SystemPathResolver.resolve("codex")
+        && let Ok(executable) = executable.canonicalize()
+    {
+        return executable.into_os_string();
+    }
+    resolve_codex_executable_from_home(
+        configured,
+        std::env::var_os("HOME").as_deref().map(Path::new),
+    )
+}
+
+fn resolve_codex_executable_from_home(configured: &OsStr, home: Option<&Path>) -> OsString {
+    if configured != OsStr::new("codex") {
+        return configured.to_os_string();
+    }
+    let mut candidates = Vec::new();
+    if let Some(home) = home {
+        candidates.push(home.join(".local/bin/codex"));
+        for extensions_root in [
+            home.join(".vscode/extensions"),
+            home.join(".cursor/extensions"),
+        ] {
+            let Ok(entries) = fs::read_dir(extensions_root) else {
+                continue;
+            };
+            let mut extension_candidates = entries
+                .filter_map(Result::ok)
+                .filter(|entry| {
+                    entry
+                        .file_name()
+                        .to_string_lossy()
+                        .starts_with("openai.chatgpt-")
+                })
+                .map(|entry| entry.path().join(codex_extension_binary_path()))
+                .collect::<Vec<_>>();
+            extension_candidates.sort_by(|left, right| right.cmp(left));
+            candidates.extend(extension_candidates);
+        }
+    }
+    candidates.extend([
+        PathBuf::from("/opt/homebrew/bin/codex"),
+        PathBuf::from("/usr/local/bin/codex"),
+    ]);
+    candidates
+        .into_iter()
+        .find(|candidate| is_codex_executable(candidate))
+        .map(PathBuf::into_os_string)
+        .unwrap_or_else(|| configured.to_os_string())
+}
+
+fn is_codex_executable(path: &Path) -> bool {
+    let Ok(metadata) = fs::metadata(path) else {
+        return false;
+    };
+    if !metadata.is_file() {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        metadata.permissions().mode() & 0o111 != 0
+    }
+    #[cfg(not(unix))]
+    {
+        true
+    }
+}
+
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+fn codex_extension_binary_path() -> &'static Path {
+    Path::new("bin/macos-aarch64/codex")
+}
+
+#[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+fn codex_extension_binary_path() -> &'static Path {
+    Path::new("bin/macos-x86_64/codex")
+}
+
+#[cfg(all(target_os = "linux", target_arch = "aarch64"))]
+fn codex_extension_binary_path() -> &'static Path {
+    Path::new("bin/linux-aarch64/codex")
+}
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+fn codex_extension_binary_path() -> &'static Path {
+    Path::new("bin/linux-x86_64/codex")
+}
+
+#[cfg(not(any(
+    all(target_os = "macos", target_arch = "aarch64"),
+    all(target_os = "macos", target_arch = "x86_64"),
+    all(target_os = "linux", target_arch = "aarch64"),
+    all(target_os = "linux", target_arch = "x86_64")
+)))]
+fn codex_extension_binary_path() -> &'static Path {
+    Path::new("bin/codex")
+}
+
+fn resolve_copilot_executable(configured: &OsStr) -> OsString {
+    let configured_str = configured.to_string_lossy();
+    if configured_str != "copilot" {
+        return configured.to_os_string();
+    }
+    if let Some(home) = std::env::var_os("HOME") {
+        let home_path = PathBuf::from(home);
+        let vscode_bundled = home_path.join(
+            "Library/Application Support/Code/User/globalStorage/github.copilot-chat/copilotCli/copilot",
+        );
+        if vscode_bundled.exists() {
+            return vscode_bundled.into_os_string();
+        }
+    }
+    if Path::new("/opt/homebrew/bin/copilot").exists() {
+        return OsString::from("/opt/homebrew/bin/copilot");
+    }
+    if Path::new("/usr/local/bin/copilot").exists() {
+        return OsString::from("/usr/local/bin/copilot");
+    }
+    configured.to_os_string()
+}
+
 impl ProcessWorkspaceAdapter {
+    pub(crate) fn for_conversation(mut self, final_path: PathBuf) -> Self {
+        self.conversation_capture = Some(Arc::new(std::sync::Mutex::new(
+            ConversationCapture::default(),
+        )));
+        self.conversation_final_path = Some(final_path);
+        self
+    }
+
+    pub(crate) fn conversation_output(
+        &self,
+        provider: AgentProvider,
+        succeeded: bool,
+        failure: Option<AdapterFailure>,
+    ) -> Option<ConversationOutput> {
+        let capture = self.conversation_capture.as_ref()?.lock().ok()?;
+        Some(capture.finish(
+            provider,
+            succeeded,
+            failure,
+            self.conversation_final_path.as_ref()?,
+        ))
+    }
+
+    pub(crate) fn with_image_context(mut self, image: Option<PathBuf>) -> Self {
+        self.image_context = image;
+        self
+    }
+
+    pub(crate) fn with_process_lease(mut self, lease: Arc<fs::File>) -> Self {
+        self.process_lease = Some(lease);
+        self
+    }
+
     pub fn with_agent_executable(
         mut self,
         provider: AgentProvider,
@@ -167,6 +340,7 @@ impl ProcessWorkspaceAdapter {
             AgentProvider::Codex => self.codex_executable = executable,
             AgentProvider::OpenCode => self.open_code_executable = executable,
             AgentProvider::Hermes => self.hermes_executable = executable,
+            AgentProvider::Copilot => self.copilot_executable = executable,
         }
         self
     }
@@ -176,6 +350,10 @@ impl ProcessWorkspaceAdapter {
         self
     }
 
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "Keep lifecycle callbacks explicit at the process boundary."
+    )]
     pub fn run_agent(
         &self,
         workspace_id: Uuid,
@@ -183,11 +361,42 @@ impl ProcessWorkspaceAdapter {
         workspace: &Path,
         prompt: &str,
         cancellation: &Arc<AtomicBool>,
+        on_spawn: impl FnMut(),
+        heartbeat: impl FnMut(),
+        on_event: impl FnMut(AgentProcessEvent),
+    ) -> Result<AgentRunResult, AdapterFailure> {
+        self.run_agent_with_custom(
+            workspace_id,
+            provider,
+            workspace,
+            prompt,
+            None,
+            cancellation,
+            on_spawn,
+            heartbeat,
+            on_event,
+        )
+    }
+
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "Keep lifecycle callbacks explicit at the process boundary."
+    )]
+    pub fn run_agent_with_custom(
+        &self,
+        workspace_id: Uuid,
+        provider: AgentProvider,
+        workspace: &Path,
+        prompt: &str,
+        agent: Option<&str>,
+        cancellation: &Arc<AtomicBool>,
         mut on_spawn: impl FnMut(),
         mut heartbeat: impl FnMut(),
         mut on_event: impl FnMut(AgentProcessEvent),
     ) -> Result<AgentRunResult, AdapterFailure> {
         let mut args = Vec::<OsString>::new();
+        let resolved_codex;
+        let resolved_copilot;
         let executable = match provider {
             AgentProvider::Codex => {
                 args.extend([
@@ -201,10 +410,19 @@ impl ProcessWorkspaceAdapter {
                     "--skip-git-repo-check".into(),
                     "--cd".into(),
                     workspace.as_os_str().to_owned(),
-                    "--".into(),
-                    prompt.into(),
                 ]);
-                &self.codex_executable
+                if let Some(model_name) = agent.filter(|s| !s.trim().is_empty()) {
+                    args.extend(["--model".into(), model_name.into()]);
+                }
+                if let Some(path) = &self.conversation_final_path {
+                    args.extend(["--output-last-message".into(), path.as_os_str().to_owned()]);
+                }
+                if let Some(image) = &self.image_context {
+                    args.extend(["--image".into(), image.as_os_str().to_owned()]);
+                }
+                args.extend(["--".into(), prompt.into()]);
+                resolved_codex = resolve_codex_executable(&self.codex_executable);
+                &resolved_codex
             }
             AgentProvider::OpenCode => {
                 args.extend([
@@ -213,8 +431,11 @@ impl ProcessWorkspaceAdapter {
                     "json".into(),
                     "--dir".into(),
                     workspace.as_os_str().to_owned(),
-                    prompt.into(),
                 ]);
+                if let Some(model_name) = agent.filter(|s| !s.trim().is_empty()) {
+                    args.extend(["--model".into(), model_name.into()]);
+                }
+                args.extend([prompt.into()]);
                 &self.open_code_executable
             }
             AgentProvider::Hermes => {
@@ -228,24 +449,55 @@ impl ProcessWorkspaceAdapter {
                 ]);
                 &self.hermes_executable
             }
+            AgentProvider::Copilot => {
+                args.extend([
+                    "--allow-all".into(),
+                    "--silent".into(),
+                    "-C".into(),
+                    workspace.as_os_str().to_owned(),
+                ]);
+                if let Some(model_name) = agent.filter(|s| !s.trim().is_empty()) {
+                    args.extend(["--model".into(), model_name.into()]);
+                }
+                args.extend(["-p".into(), prompt.into()]);
+                resolved_copilot = resolve_copilot_executable(&self.copilot_executable);
+                &resolved_copilot
+            }
         };
         let started_at = Instant::now();
-        let output = run_bounded_controlled(
-            executable,
-            &args,
-            workspace,
-            AGENT_TIMEOUT,
-            cancellation,
-            &mut on_spawn,
-            &mut heartbeat,
-            &mut |line| {
-                if provider == AgentProvider::Codex
-                    && let Some(event) = parse_codex_event(line)
-                {
-                    on_event(event);
-                }
-            },
-        )?;
+        let output = if let Some(capture) = &self.conversation_capture {
+            conversation_process::run_conversation_process(
+                executable,
+                &args,
+                workspace,
+                provider,
+                conversation_process::CONVERSATION_TIMEOUT,
+                cancellation,
+                self.process_lease.as_deref(),
+                capture,
+                &mut on_spawn,
+                &mut heartbeat,
+                &mut on_event,
+            )?
+        } else {
+            run_bounded_controlled(
+                executable,
+                &args,
+                workspace,
+                AGENT_TIMEOUT,
+                cancellation,
+                self.process_lease.as_deref(),
+                &mut on_spawn,
+                &mut heartbeat,
+                &mut |line| {
+                    if provider == AgentProvider::Codex
+                        && let Some(event) = parse_codex_event(line)
+                    {
+                        on_event(event);
+                    }
+                },
+            )?
+        };
         let text = preferred_output(&output.stdout, &output.stderr);
         Ok(AgentRunResult {
             workspace_id,
@@ -547,18 +799,24 @@ fn run_bounded(
         current_dir,
         timeout,
         &cancellation,
+        None,
         &mut || {},
         &mut || {},
         &mut |_| {},
     )
 }
 
+#[allow(
+    clippy::too_many_arguments,
+    reason = "Keep lifecycle callbacks explicit at the process boundary."
+)]
 fn run_bounded_controlled(
     executable: impl AsRef<OsStr>,
     args: &[OsString],
     current_dir: &Path,
     timeout: Duration,
     cancellation: &Arc<AtomicBool>,
+    lease: Option<&fs::File>,
     on_spawn: &mut impl FnMut(),
     heartbeat: &mut impl FnMut(),
     on_stdout_line: &mut impl FnMut(&[u8]),
@@ -574,6 +832,7 @@ fn run_bounded_controlled(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     configure_process_group(&mut command);
+    inherit_process_lease(&mut command, lease);
     let mut child = command.spawn().map_err(|error| match error.kind() {
         io::ErrorKind::NotFound | io::ErrorKind::PermissionDenied => AdapterFailure::Unavailable,
         _ => AdapterFailure::SpawnFailed,
@@ -596,7 +855,12 @@ fn run_bounded_controlled(
             last_heartbeat = Instant::now();
         }
         match child.try_wait() {
-            Ok(Some(status)) => break status,
+            Ok(Some(status)) => {
+                // The root exited. Reap its helpers before waiting for inherited output pipes.
+                terminate_process_group(&mut child, true)
+                    .map_err(|_| AdapterFailure::SpawnFailed)?;
+                break status;
+            }
             Ok(None) if started_at.elapsed() < timeout => thread::sleep(POLL_INTERVAL),
             Ok(None) => {
                 let _ = terminate_process_group(&mut child, false);
@@ -621,6 +885,28 @@ fn run_bounded_controlled(
         stdout,
         stderr,
     })
+}
+
+pub(crate) fn inherit_process_lease(command: &mut Command, lease: Option<&fs::File>) {
+    #[cfg(unix)]
+    if let Some(lease) = lease {
+        use std::os::{fd::AsRawFd, unix::process::CommandExt};
+        let descriptor = lease.as_raw_fd();
+        // Change only the child descriptor. Other host subprocesses cannot inherit this lease.
+        unsafe {
+            command.pre_exec(move || {
+                let flags = libc::fcntl(descriptor, libc::F_GETFD);
+                if flags < 0
+                    || libc::fcntl(descriptor, libc::F_SETFD, flags & !libc::FD_CLOEXEC) < 0
+                {
+                    return Err(io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = (command, lease);
 }
 
 fn read_bounded(reader: impl Read) -> io::Result<Vec<u8>> {
@@ -821,13 +1107,12 @@ fn bounded_agent_message(value: &str) -> Option<String> {
     if normalized.is_empty() {
         return None;
     }
-    Some(
-        normalized
-            .chars()
-            .filter(|character| !character.is_control() || *character == '\n')
-            .take(800)
-            .collect(),
-    )
+    let summary = normalized
+        .chars()
+        .filter(|character| !character.is_control() || *character == '\n')
+        .take(800)
+        .collect::<String>();
+    (!summary.trim().is_empty()).then_some(summary)
 }
 
 fn bounded_codex_output(stdout: &[u8], stderr: &[u8], succeeded: bool) -> String {
@@ -881,6 +1166,138 @@ mod tests {
     use tempfile::tempdir;
 
     #[test]
+    fn codex_resolver_finds_the_vscode_extension_binary() {
+        let directory = tempdir().expect("temporary directory");
+        let executable = directory
+            .path()
+            .join(".vscode/extensions/openai.chatgpt-26.900.0")
+            .join(codex_extension_binary_path());
+        fs::create_dir_all(executable.parent().expect("executable parent"))
+            .expect("extension directory");
+        fs::write(&executable, b"fake codex").expect("Codex executable");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&executable, fs::Permissions::from_mode(0o700))
+                .expect("executable permissions");
+        }
+
+        assert_eq!(
+            resolve_codex_executable_from_home(OsStr::new("codex"), Some(directory.path())),
+            executable.into_os_string(),
+        );
+    }
+
+    #[test]
+    fn codex_resolver_preserves_a_configured_executable() {
+        let configured = OsStr::new("/trusted/tools/codex");
+        assert_eq!(
+            resolve_codex_executable_from_home(configured, None),
+            configured,
+        );
+    }
+
+    #[cfg(unix)]
+    fn fake_codex(executable: &Path, marker: &str, mode: u32) {
+        use std::os::unix::fs::PermissionsExt;
+
+        fs::create_dir_all(executable.parent().expect("executable parent"))
+            .expect("executable directory");
+        fs::write(
+            executable,
+            format!("#!/bin/sh\nprintf '%s\\n' '{marker}'\n"),
+        )
+        .expect("fake Codex executable");
+        fs::set_permissions(executable, fs::Permissions::from_mode(mode))
+            .expect("executable permissions");
+    }
+
+    #[cfg(unix)]
+    fn run_fake_codex(executable: OsString, workspace: &Path) -> AgentRunResult {
+        ProcessWorkspaceAdapter::default()
+            .with_agent_executable(AgentProvider::Codex, executable)
+            .run_agent(
+                Uuid::nil(),
+                AgentProvider::Codex,
+                workspace,
+                "Inspect the fixture.",
+                &Arc::new(AtomicBool::new(false)),
+                || {},
+                || {},
+                |_| {},
+            )
+            .expect("fake Codex process")
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn codex_agent_runs_the_path_executable_before_home_fallbacks() {
+        let directory = tempdir().expect("temporary directory");
+        let path_directory = directory.path().join("path-bin");
+        let home = directory.path().join("home");
+        let workspace = directory.path().join("workspace");
+        fs::create_dir(&workspace).expect("workspace directory");
+        fake_codex(&path_directory.join("codex"), "PATH_CODEX", 0o700);
+        fake_codex(&home.join(".local/bin/codex"), "FALLBACK_CODEX", 0o700);
+
+        for search_path in [path_directory.into_os_string(), OsString::from("path-bin")] {
+            let child = Command::new(std::env::current_exe().expect("test executable"))
+                .args([
+                    "--exact",
+                    "adapter::tests::codex_agent_path_resolution_child",
+                    "--nocapture",
+                ])
+                .current_dir(directory.path())
+                .env("WTS_TEST_CODEX_WORKSPACE", &workspace)
+                .env("HOME", &home)
+                .env("PATH", search_path)
+                .output()
+                .expect("isolated test process");
+
+            assert!(
+                child.status.success(),
+                "isolated Codex process failed: {}{}",
+                String::from_utf8_lossy(&child.stdout),
+                String::from_utf8_lossy(&child.stderr),
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn codex_agent_path_resolution_child() {
+        let Some(workspace) = std::env::var_os("WTS_TEST_CODEX_WORKSPACE") else {
+            return;
+        };
+        let result = run_fake_codex(OsString::from("codex"), Path::new(&workspace));
+        assert!(result.succeeded);
+        assert_eq!(result.output, "PATH_CODEX");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn codex_agent_skips_a_home_fallback_without_execute_permission() {
+        let directory = tempdir().expect("temporary directory");
+        fake_codex(
+            &directory.path().join(".local/bin/codex"),
+            "UNEXECUTABLE_CODEX",
+            0o600,
+        );
+        let extension = directory
+            .path()
+            .join(".vscode/extensions/openai.chatgpt-26.900.0")
+            .join(codex_extension_binary_path());
+        fake_codex(&extension, "EXTENSION_CODEX", 0o700);
+
+        let executable =
+            resolve_codex_executable_from_home(OsStr::new("codex"), Some(directory.path()));
+        let result = run_fake_codex(executable, directory.path());
+
+        assert!(result.succeeded);
+        assert_eq!(result.output, "EXTENSION_CODEX");
+    }
+
+    #[test]
     fn collaboration_confinement_is_codex_only() {
         let adapter = ProcessCollaborationAdapter::default();
         #[cfg(unix)]
@@ -905,6 +1322,43 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn conversation_child_keeps_exclusive_lease_after_host_descriptor_closes() {
+        use std::{io::Write, os::fd::AsRawFd};
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("turn.lease");
+        let lease = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .unwrap();
+        assert_eq!(
+            unsafe { libc::flock(lease.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) },
+            0
+        );
+        let mut command = Command::new("sh");
+        command.args(["-c", "read release"]).stdin(Stdio::piped());
+        inherit_process_lease(&mut command, Some(&lease));
+        let mut child = command.spawn().unwrap();
+        drop(lease);
+        let contender = fs::OpenOptions::new().write(true).open(&path).unwrap();
+        let result = unsafe { libc::flock(contender.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+        if result == 0 {
+            unsafe { libc::flock(contender.as_raw_fd(), libc::LOCK_UN) };
+        }
+        child.stdin.take().unwrap().write_all(b"release\n").unwrap();
+        assert!(child.wait().unwrap().success());
+        assert_ne!(
+            result, 0,
+            "a surviving child must block another workspace writer"
+        );
+        assert_eq!(
+            unsafe { libc::flock(contender.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) },
+            0
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn controlled_agent_run_cancels_and_reaps_the_owned_process_group() {
         let directory = tempdir().expect("temporary directory");
         let descendant_file = directory.path().join("agent-descendant.pid");
@@ -924,6 +1378,7 @@ mod tests {
                 &workdir,
                 Duration::from_secs(5),
                 &worker_cancellation,
+                None,
                 &mut || {},
                 &mut || {},
                 &mut |_| {},
@@ -941,6 +1396,49 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn exited_provider_does_not_wait_for_inherited_output_pipes() {
+        for (redirect, code) in [("", "0"), (">&2", "7")] {
+            let directory = tempdir().unwrap();
+            let pid_path = directory.path().join("descendant.pid");
+            let script = format!(
+                "sleep 30 {redirect} & child=$!; printf '%s' \"$child\" > \"$1\"; printf '%s\\n' '{{\"type\":\"item.completed\",\"item\":{{\"type\":\"agent_message\",\"text\":\"FINAL_REPLY_MARKER\"}}}}' '{{\"type\":\"turn.completed\"}}'; printf '%s\\n' 'provider diagnostic' >&2; exit {code}"
+            );
+            let mut events = Vec::new();
+            let output = run_bounded_controlled(
+                "/bin/sh",
+                &[
+                    "-c".into(),
+                    script.into(),
+                    "wts-inherited-pipe".into(),
+                    pid_path.as_os_str().to_owned(),
+                ],
+                directory.path(),
+                Duration::from_secs(2),
+                &Arc::new(AtomicBool::new(false)),
+                None,
+                &mut || {},
+                &mut || {},
+                &mut |line| {
+                    if let Some(event) = parse_codex_event(line) {
+                        events.push(event);
+                    }
+                },
+            )
+            .expect("a reaped provider must not wait for inherited pipes");
+            assert_eq!(output.success, code == "0");
+            assert!(String::from_utf8_lossy(&output.stdout).contains("FINAL_REPLY_MARKER"));
+            assert!(String::from_utf8_lossy(&output.stderr).contains("provider diagnostic"));
+            assert!(
+                events
+                    .iter()
+                    .any(|event| event.kind == AgentProcessEventKind::Completed)
+            );
+            assert_process_gone(wait_for_pid(&pid_path));
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn codex_progress_is_reported_before_process_exit_without_private_event_fields() {
         use std::os::unix::fs::PermissionsExt;
 
@@ -952,7 +1450,7 @@ mod tests {
 printf '%s\n' '{"type":"item.completed","item":{"type":"reasoning","text":"private reasoning"}}'
 printf '%s\n' '{"type":"item.started","item":{"type":"command_execution","command":"secret command"}}'
 printf '%s\n' '{"type":"item.completed","item":{"type":"agent_message","text":"I found the failing boundary."}}'
-sleep 1
+while [ ! -f .codex-progress-release ]; do sleep 0.05; done
 printf '%s\n' '{"type":"turn.completed","usage":{"secret":"private usage"}}'
 "#,
         )
@@ -982,7 +1480,7 @@ printf '%s\n' '{"type":"turn.completed","usage":{"secret":"private usage"}}'
             )
         });
 
-        let deadline = Instant::now() + Duration::from_millis(700);
+        let deadline = Instant::now() + Duration::from_secs(10);
         let mut progress = Vec::new();
         while Instant::now() < deadline {
             if let Ok(event) = receiver.recv_timeout(Duration::from_millis(50)) {
@@ -996,6 +1494,12 @@ printf '%s\n' '{"type":"turn.completed","usage":{"secret":"private usage"}}'
             }
         }
 
+        let finished_before_release = worker.is_finished();
+        fs::write(directory.path().join(".codex-progress-release"), "release")
+            .expect("release the fake Codex process");
+        let outcome = worker.join().expect("agent worker");
+
+        assert!(!finished_before_release);
         assert!(
             progress
                 .iter()
@@ -1008,7 +1512,13 @@ printf '%s\n' '{"type":"turn.completed","usage":{"secret":"private usage"}}'
         assert!(progress.iter().all(|event| {
             !event.summary.contains("private") && !event.summary.contains("secret")
         }));
-        assert!(worker.join().expect("agent worker").is_ok());
+        assert!(outcome.is_ok());
+    }
+
+    #[test]
+    fn codex_control_only_progress_is_not_serialized_as_an_empty_update() {
+        let event = serde_json::json!({"type":"item.completed","item":{"type":"agent_message","text":"\0"}});
+        assert!(parse_codex_event(&serde_json::to_vec(&event).unwrap()).is_none());
     }
 
     #[test]

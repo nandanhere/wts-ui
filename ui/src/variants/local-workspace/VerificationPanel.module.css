@@ -2677,3 +2677,31 @@
     transition: none;
   }
 }
+
+.selectedResult {
+  padding: 16px 20px;
+  border: 1px solid var(--verify-blue);
+  border-radius: 8px;
+  background: var(--verify-surface);
+  outline-offset: 3px;
+}
+.selectedResult header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+.selectedResult button {
+  padding: 6px 10px;
+  border: 1px solid var(--verify-line);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--verify-ink);
+  cursor: pointer;
+}
+.selectedResult p { color: var(--verify-text); }
+.selectedResult pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: 12px/1.6 monospace;
+}

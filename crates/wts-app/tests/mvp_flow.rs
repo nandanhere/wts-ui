@@ -868,6 +868,11 @@ fn agent_handoff_refreshes_workspace_instructions_and_preserves_the_current_task
     let workspace_path = materialize_test_workspace(&fixture, workspace_id);
     let guide_path = workspace_path.join("WTS.md");
     let agents_path = workspace_path.join("AGENTS.md");
+    let claude_path = workspace_path.join("CLAUDE.md");
+    let cursor_path = workspace_path.join(".cursorrules");
+    let copilot_path = workspace_path
+        .join(".github")
+        .join("copilot-instructions.md");
     let repository_path = workspace_path
         .read_dir()
         .expect("workspace entries")
@@ -886,6 +891,21 @@ fn agent_handoff_refreshes_workspace_instructions_and_preserves_the_current_task
         "# Old workspace instructions\n\n<!-- managed-by-wts: workspace-agents -->\n",
     )
     .expect("stale workspace instructions");
+    fs::write(
+        &claude_path,
+        "# Old claude\n\n<!-- managed-by-wts: workspace-claude -->\n",
+    )
+    .expect("stale claude instructions");
+    fs::write(
+        &cursor_path,
+        "# Old cursor\n\n<!-- managed-by-wts: workspace-cursorrules -->\n",
+    )
+    .expect("stale cursor instructions");
+    fs::write(
+        &copilot_path,
+        "# Old copilot\n\n<!-- managed-by-wts: workspace-copilot -->\n",
+    )
+    .expect("stale copilot instructions");
     fs::write(
         &repository_agents,
         "# Repository instructions\n\nKeep this file.\n",
@@ -912,10 +932,37 @@ fn agent_handoff_refreshes_workspace_instructions_and_preserves_the_current_task
     let agents = fs::read_to_string(&agents_path).expect("refreshed workspace instructions");
     assert!(agents.contains("Read `WTS.md` before"), "{agents}");
     assert!(!agents.contains("Old workspace instructions"), "{agents}");
+    let claude = fs::read_to_string(&claude_path).expect("refreshed claude instructions");
+    assert!(claude.contains("Read `WTS.md` before"), "{claude}");
+    assert!(!claude.contains("Old claude"), "{claude}");
+    let cursor = fs::read_to_string(&cursor_path).expect("refreshed cursor instructions");
+    assert!(cursor.contains("Read `WTS.md` before"), "{cursor}");
+    assert!(!cursor.contains("Old cursor"), "{cursor}");
+    let copilot = fs::read_to_string(&copilot_path).expect("refreshed copilot instructions");
+    assert!(copilot.contains("Read `WTS.md` before"), "{copilot}");
+    assert!(!copilot.contains("Old copilot"), "{copilot}");
     assert_eq!(
         fs::read_to_string(repository_agents).expect("repository instructions remain"),
         "# Repository instructions\n\nKeep this file.\n"
     );
+}
+
+#[test]
+fn refresh_workspace_agent_files_refuses_to_overwrite_unmanaged_agent_files() {
+    let fixture = Fixture::new();
+    let workspace_id = fixture.create_plan(&["checkout-api"]);
+    let workspace_path = materialize_test_workspace(&fixture, workspace_id);
+    let claude_path = workspace_path.join("CLAUDE.md");
+    fs::write(&claude_path, "# User custom claude without marker\n").expect("custom claude");
+
+    assert!(matches!(
+        fixture.service.open_workspace_cli(
+            workspace_id,
+            AgentProvider::Codex,
+            TerminalProvider::Terminal,
+        ),
+        Err(wts_app::LocalWtsError::InvalidMaterializationManifest)
+    ));
 }
 
 #[cfg(unix)]
@@ -1119,6 +1166,8 @@ fn clone_request_reuses_an_existing_trusted_checkout_with_the_same_origin() {
         .service
         .clone_repository(CloneRepositoryRequest {
             remote_url: "https://github.com/acme/checkout-api.git".to_owned(),
+            branch: None,
+            shallow: false,
         })
         .expect("reuse repository");
 
@@ -1137,6 +1186,191 @@ fn clone_request_reuses_an_existing_trusted_checkout_with_the_same_origin() {
             .to_str()
             .expect("UTF-8 repository path")
     );
+}
+
+#[test]
+fn clone_request_preserves_an_explicit_branch_in_a_full_clone() {
+    let directory = tempfile::tempdir().expect("clone fixture");
+    let source = create_repository(directory.path(), "source");
+    git(Some(&source), ["checkout", "-b", "release/next"]);
+    fs::write(source.join("release.txt"), "release commit\n").expect("release file");
+    git(Some(&source), ["add", "release.txt"]);
+    git(Some(&source), ["commit", "-m", "release"]);
+    git(Some(&source), ["checkout", "main"]);
+    let config = directory.path().join("clone.gitconfig");
+    fs::write(
+        &config,
+        format!(
+            "[url \"file://{}\"]\n\tinsteadOf = https://clone.example.invalid/release.git\n[protocol \"file\"]\n\tallow = always\n",
+            source.display()
+        ),
+    )
+    .expect("isolated clone configuration");
+    let output = Command::new(std::env::current_exe().expect("test executable"))
+        .args(["--exact", "clone_request_full_clone_child", "--nocapture"])
+        .env("WTS_TEST_CLONE_ROOT", directory.path())
+        .env("GIT_CONFIG_GLOBAL", &config)
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env_remove("GIT_CONFIG_COUNT")
+        .env_remove("GIT_CONFIG_PARAMETERS")
+        .output()
+        .expect("isolated clone test");
+    assert!(
+        output.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn clone_request_full_clone_child() {
+    let Some(root) = std::env::var_os("WTS_TEST_CLONE_ROOT").map(PathBuf::from) else {
+        return;
+    };
+    let repository_root = root.join("repositories");
+    fs::create_dir(&repository_root).expect("repository root");
+    let service = LocalWtsService::open_with_launcher(
+        root.join("data"),
+        "test",
+        root.join("workspaces"),
+        &repository_root,
+        RecordingLauncher::default(),
+    )
+    .expect("clone service");
+    let result = service
+        .clone_repository(CloneRepositoryRequest {
+            remote_url: "https://clone.example.invalid/release.git".to_owned(),
+            branch: Some("release/next".to_owned()),
+            shallow: false,
+        })
+        .expect("full clone");
+    let wire = serde_json::to_value(&result).expect("clone response");
+    assert_eq!(wire["selectedBaseRef"], "release/next");
+    assert_eq!(result.repository.default_branch.name, "main");
+    assert!(!result.reused_existing);
+    assert_eq!(
+        git_output(
+            Some(Path::new(&result.repository.display_path)),
+            ["branch", "--show-current"]
+        )
+        .trim(),
+        "release/next"
+    );
+    let plan = service
+        .create_workspace(
+            &Uuid::new_v4().to_string(),
+            CreateWorkspaceRequest {
+                intent: WorkspaceIntent::RepositorySet {
+                    label: "release".to_owned(),
+                },
+                title: "Release plan".to_owned(),
+                preferred_provider: WorkspaceProvider::Codex,
+                repositories: vec![WorkspaceRepositoryRequest {
+                    repository_id: Some(result.repository.id),
+                    label: result.repository.label,
+                    base_ref: wire["selectedBaseRef"]
+                        .as_str()
+                        .expect("selected branch")
+                        .to_owned(),
+                }],
+                runtime: None,
+                planning: None,
+            },
+        )
+        .expect("save release plan");
+    assert_eq!(plan.workspace.repositories[0].base_ref, "release/next");
+}
+
+#[test]
+fn clone_request_reuses_local_and_cached_branches_without_changing_the_checkout() {
+    let fixture = Fixture::new();
+    git(
+        Some(&fixture.api),
+        [
+            "remote",
+            "add",
+            "origin",
+            "https://clone.example.invalid/release.git",
+        ],
+    );
+    git(Some(&fixture.api), ["branch", "release/next"]);
+    git(
+        Some(&fixture.api),
+        ["update-ref", "refs/remotes/origin/release/cached", "HEAD"],
+    );
+    fs::write(fixture.api.join("local-notes.txt"), "keep this file\n").expect("local work");
+    let head = git_output(Some(&fixture.api), ["rev-parse", "HEAD"]);
+    let refs = git_output(Some(&fixture.api), ["show-ref"]);
+    let status = git_output(Some(&fixture.api), ["status", "--porcelain"]);
+
+    for branch in ["release/next", "release/cached"] {
+        let result = fixture
+            .service
+            .clone_repository(CloneRepositoryRequest {
+                remote_url: "https://clone.example.invalid/release.git".to_owned(),
+                branch: Some(branch.to_owned()),
+                shallow: false,
+            })
+            .expect("reuse requested branch");
+        assert!(result.reused_existing);
+        assert_eq!(result.repository.default_branch.name, "main");
+        assert_eq!(
+            serde_json::to_value(result).expect("clone response")["selectedBaseRef"],
+            branch
+        );
+    }
+    assert_eq!(
+        git_output(Some(&fixture.api), ["branch", "--show-current"]).trim(),
+        "main"
+    );
+    assert_eq!(git_output(Some(&fixture.api), ["rev-parse", "HEAD"]), head);
+    assert_eq!(git_output(Some(&fixture.api), ["show-ref"]), refs);
+    assert_eq!(
+        git_output(Some(&fixture.api), ["status", "--porcelain"]),
+        status
+    );
+    assert!(!fixture.api.join(".git/FETCH_HEAD").exists());
+}
+
+#[test]
+fn clone_request_rejects_a_branch_removed_after_the_catalog_snapshot() {
+    let fixture = Fixture::new();
+    git(
+        Some(&fixture.api),
+        [
+            "remote",
+            "add",
+            "origin",
+            "https://clone.example.invalid/release.git",
+        ],
+    );
+    git(Some(&fixture.api), ["branch", "release/removed"]);
+    fixture
+        .service
+        .repository_catalog()
+        .expect("cached catalog");
+    git(Some(&fixture.api), ["branch", "-D", "release/removed"]);
+    let refs = git_output(Some(&fixture.api), ["show-ref"]);
+
+    let error = fixture
+        .service
+        .clone_repository(CloneRepositoryRequest {
+            remote_url: "https://clone.example.invalid/release.git".to_owned(),
+            branch: Some("release/removed".to_owned()),
+            shallow: false,
+        })
+        .expect_err("missing branch must not use the default branch");
+    assert_eq!(
+        error.to_string(),
+        "The requested clone branch is not available in the local repository."
+    );
+    assert_eq!(git_output(Some(&fixture.api), ["show-ref"]), refs);
+    assert_eq!(
+        git_output(Some(&fixture.api), ["branch", "--show-current"]).trim(),
+        "main"
+    );
+    assert!(!fixture.api.join(".git/FETCH_HEAD").exists());
 }
 
 #[test]
@@ -1631,6 +1865,174 @@ fn gitlab_status_uses_the_managed_base_tracking_remote_without_origin() {
 
     assert_eq!(status.accounts.len(), 1);
     assert_eq!(status.accounts[0].host, "gitlab.example.test");
+}
+
+#[cfg(unix)]
+#[test]
+fn gitlab_discussions_use_catalog_on_cold_start_and_managed_tracking_remote() {
+    use std::os::unix::fs::PermissionsExt;
+    let directory = tempfile::tempdir().unwrap();
+    let executable = directory.path().join("glab");
+    fs::write(
+        &executable,
+        r#"#!/bin/sh
+set -eu
+root="$WTS_TEST_DISCUSSION_ROOT"
+printf '%s\n' "$4" >> "$root/endpoints"
+case "$4" in
+ /user) printf '{"id":1,"username":"alice"}' ;;
+ */discussions/*/notes) printf 'post\n' >> "$root/posts"; cat "$root/note.json" ;;
+ */discussions\?*) printf '[]' ;;
+ */discussions/*) cat "$root/thread.json" ;;
+ */merge_requests/17) cat "$root/mr.json" ;;
+ *) exit 31 ;;
+esac
+"#,
+    )
+    .unwrap();
+    fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
+    let mut paths = vec![directory.path().to_path_buf()];
+    paths.extend(std::env::split_paths(
+        &std::env::var_os("PATH").unwrap_or_default(),
+    ));
+    let output = Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "gitlab_discussions_trusted_scope_child",
+            "--nocapture",
+        ])
+        .env("WTS_TEST_DISCUSSION_ROOT", directory.path())
+        .env("PATH", std::env::join_paths(paths).unwrap())
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn gitlab_discussions_trusted_scope_child() {
+    let Some(root) = std::env::var_os("WTS_TEST_DISCUSSION_ROOT").map(PathBuf::from) else {
+        return;
+    };
+    let fixture = Fixture::new();
+    git(
+        Some(&fixture.api),
+        [
+            "remote",
+            "add",
+            "origin",
+            "https://gitlab.example.test/catalog/checkout-api.git",
+        ],
+    );
+    git(
+        Some(&fixture.api),
+        [
+            "remote",
+            "add",
+            "upstream",
+            "https://gitlab.example.test/trusted/checkout-api.git",
+        ],
+    );
+    git(
+        Some(&fixture.api),
+        ["update-ref", "refs/remotes/upstream/main", "HEAD"],
+    );
+    git(
+        Some(&fixture.api),
+        ["config", "branch.main.remote", "upstream"],
+    );
+    git(
+        Some(&fixture.api),
+        ["config", "branch.main.merge", "refs/heads/main"],
+    );
+    let repository = fixture
+        .service
+        .repository_catalog()
+        .unwrap()
+        .repositories
+        .into_iter()
+        .find(|repository| repository.label == "checkout-api")
+        .unwrap();
+    let review = fixture
+        .service
+        .gitlab_discussions(&repository.id, 17, None)
+        .expect("cold-start review discussions");
+    assert!(review.discussions.is_empty());
+    let initial_endpoints = fs::read_to_string(root.join("endpoints")).unwrap();
+    assert!(
+        initial_endpoints
+            .contains("/projects/catalog%2Fcheckout-api/merge_requests/17/discussions?"),
+        "{initial_endpoints}"
+    );
+    let note = serde_json::json!({"id":92,"body":"Reply","author":{"username":"alice"},"created_at":"2026-09-17T00:00:00Z","system":false});
+    fs::write(root.join("note.json"), serde_json::to_vec(&note).unwrap()).unwrap();
+    fs::write(
+        root.join("thread.json"),
+        serde_json::to_vec(&serde_json::json!({"id":"thread-1","notes":[note]})).unwrap(),
+    )
+    .unwrap();
+    let reopened = fixture.reopen(RecordingLauncher::default());
+    let reply = reopened
+        .reply_gitlab_discussion(
+            &repository.id,
+            17,
+            wts_app::ReplyGitlabDiscussionRequest {
+                discussion_id: "thread-1".to_owned(),
+                body: "Reply".to_owned(),
+                workspace_id: None,
+            },
+        )
+        .expect("cold-start review reply");
+    assert_eq!(reply.comment.id, 92);
+
+    let workspace_id = fixture.create_plan(&["checkout-api"]);
+    let preflight = fixture.service.preflight_workspace(workspace_id).unwrap();
+    let materialization = fixture
+        .service
+        .materialize_workspace(workspace_id, &preflight.effect_digest)
+        .unwrap();
+    let worktree = &materialization.materialization.worktrees[0];
+    let branch = git_output(
+        Some(Path::new(&worktree.target_display_path)),
+        ["branch", "--show-current"],
+    );
+    let mut metadata = serde_json::json!({"id":77,"iid":17,"title":"Change","web_url":"https://gitlab.example.test/trusted/checkout-api/-/merge_requests/17","state":"opened","source_branch":branch.trim(),"target_branch":"main","author":{"username":"alice"},"updated_at":"2026-09-17T00:00:00Z"});
+    fs::write(root.join("mr.json"), serde_json::to_vec(&metadata).unwrap()).unwrap();
+    let authored = fixture
+        .service
+        .gitlab_discussions(&repository.id, 17, Some(workspace_id))
+        .expect("managed tracking remote");
+    assert_ne!(authored.scope_id, review.scope_id);
+    let endpoints = fs::read_to_string(root.join("endpoints")).unwrap();
+    assert!(endpoints.contains("/projects/trusted%2Fcheckout-api/merge_requests/17/discussions?"));
+    metadata["source_branch"] = serde_json::json!("other-branch");
+    fs::write(root.join("mr.json"), serde_json::to_vec(&metadata).unwrap()).unwrap();
+    assert!(
+        fixture
+            .service
+            .gitlab_discussions(&repository.id, 17, Some(workspace_id))
+            .is_err()
+    );
+    assert!(
+        fixture
+            .service
+            .reply_gitlab_discussion(
+                &repository.id,
+                17,
+                wts_app::ReplyGitlabDiscussionRequest {
+                    discussion_id: "thread-1".to_owned(),
+                    body: "Reply".to_owned(),
+                    workspace_id: Some(workspace_id)
+                }
+            )
+            .is_err()
+    );
+    assert_eq!(fs::read_to_string(root.join("posts")).unwrap(), "post\n");
 }
 
 #[test]
@@ -2449,11 +2851,33 @@ fn materializes_once_and_opens_only_the_generated_vscode_workspace() {
     assert!(guide.contains("including its `sha256:` prefix"), "{guide}");
     assert!(guide.contains("checkout-api"), "{guide}");
     assert!(guide.contains("checkout-web"), "{guide}");
-    let workspace_agents = fs::read_to_string(
-        Path::new(&first.materialization.workspace_display_path).join("AGENTS.md"),
-    )
-    .expect("generated workspace agent instructions");
+    let workspace_root = Path::new(&first.materialization.workspace_display_path);
+    let workspace_agents = fs::read_to_string(workspace_root.join("AGENTS.md"))
+        .expect("generated workspace agent instructions");
     assert!(workspace_agents.contains("Read `WTS.md` before"));
+    let workspace_claude = fs::read_to_string(workspace_root.join("CLAUDE.md"))
+        .expect("generated workspace CLAUDE.md");
+    assert!(workspace_claude.contains("Read `WTS.md` before"));
+    let workspace_cursorrules = fs::read_to_string(workspace_root.join(".cursorrules"))
+        .expect("generated workspace .cursorrules");
+    assert!(workspace_cursorrules.contains("Read `WTS.md` before"));
+    let workspace_copilot = fs::read_to_string(
+        workspace_root
+            .join(".github")
+            .join("copilot-instructions.md"),
+    )
+    .expect("generated workspace copilot instructions");
+    assert!(workspace_copilot.contains("Read `WTS.md` before"));
+
+    let code_workspace_bytes = fs::read(&first.materialization.code_workspace_display_path)
+        .expect("read code-workspace file");
+    let code_workspace: serde_json::Value =
+        serde_json::from_slice(&code_workspace_bytes).expect("parse code-workspace JSON");
+    assert_eq!(code_workspace["folders"][0]["name"], "Workspace (WTS)");
+    assert_eq!(
+        code_workspace["folders"][0]["path"],
+        first.materialization.workspace_display_path
+    );
     let evidence_root = Path::new(&first.materialization.workspace_display_path).join(".wts");
     for leaf in [
         "context.json",
@@ -4241,6 +4665,24 @@ fn manually_removes_clean_committed_worktree_and_retains_branch() {
             .iter()
             .any(|path| path.ends_with("AGENTS.md"))
     );
+    assert!(
+        preflight
+            .generated_paths
+            .iter()
+            .any(|path| path.ends_with("CLAUDE.md"))
+    );
+    assert!(
+        preflight
+            .generated_paths
+            .iter()
+            .any(|path| path.ends_with(".cursorrules"))
+    );
+    assert!(
+        preflight
+            .generated_paths
+            .iter()
+            .any(|path| path.ends_with(".github"))
+    );
     let retained_branch = materialized.materialization.branch_name.clone();
 
     let removed = fixture
@@ -4570,6 +5012,72 @@ fn planning_document_api_lists_generated_files_and_writes_with_compare_and_swap(
         updated.contents
     );
 
+    fs::create_dir_all(planning_home.join("epics/payments")).expect("nested planning folder");
+    fs::create_dir_all(planning_home.join("epics/refunds")).expect("second planning folder");
+    fs::write(
+        planning_home.join("epics/payments/PLAN.md"),
+        "# Payment plan\n",
+    )
+    .expect("nested payment plan");
+    fs::write(
+        planning_home.join("epics/refunds/PLAN.md"),
+        "# Refund plan\n",
+    )
+    .expect("nested refund plan");
+    let nested = fixture
+        .service
+        .list_workspace_planning_documents(workspace_id)
+        .expect("list nested planning documents");
+    let payment = nested
+        .documents
+        .iter()
+        .find(|document| document.file_name == "epics/payments/PLAN.md")
+        .expect("the document list includes subdirectories");
+    let refund = nested
+        .documents
+        .iter()
+        .find(|document| document.file_name == "epics/refunds/PLAN.md")
+        .expect("another document with the same basename");
+    assert_ne!(payment.document_id, refund.document_id);
+    assert_ne!(payment.document_id, WorkspacePlanningDocumentId::Plan);
+    let payment = fixture
+        .service
+        .read_workspace_planning_document(workspace_id, payment.document_id.clone())
+        .expect("read the nested payment plan");
+    let revised = fixture
+        .service
+        .update_workspace_planning_document(
+            workspace_id,
+            payment.document_id.clone(),
+            UpdateWorkspacePlanningDocumentRequest {
+                expected_sha256: payment.sha256.clone(),
+                contents: "# Revised payment plan\n".to_owned(),
+            },
+        )
+        .expect("update the nested payment plan");
+    assert_eq!(revised.file_name, "epics/payments/PLAN.md");
+    assert_eq!(
+        fs::read_to_string(planning_home.join("epics/payments/PLAN.md"))
+            .expect("saved payment plan"),
+        revised.contents
+    );
+    assert_eq!(
+        fs::read_to_string(planning_home.join("epics/refunds/PLAN.md"))
+            .expect("unchanged refund plan"),
+        "# Refund plan\n"
+    );
+    assert!(matches!(
+        fixture.service.update_workspace_planning_document(
+            workspace_id,
+            payment.document_id,
+            UpdateWorkspacePlanningDocumentRequest {
+                expected_sha256: payment.sha256,
+                contents: "stale update".to_owned(),
+            }
+        ),
+        Err(LocalWtsError::PlanningDocumentConflict)
+    ));
+
     fs::write(planning_home.join("KANBAN.md"), [0xff, 0xfe]).expect("write invalid UTF-8 fixture");
     assert!(matches!(
         fixture
@@ -4820,6 +5328,334 @@ fn materialize_test_workspace(fixture: &Fixture, workspace_id: Uuid) -> PathBuf 
             .materialization
             .workspace_display_path,
     )
+}
+
+#[test]
+fn materialization_preflight_preserves_an_existing_workspace_guide() {
+    let fixture = Fixture::new();
+    let workspace_id = fixture.create_plan(&["checkout-api"]);
+    let initial = fixture
+        .service
+        .preflight_workspace(workspace_id)
+        .expect("initial preflight");
+    let workspace = PathBuf::from(&initial.workspace_display_path);
+    fs::create_dir(&workspace).expect("existing workspace directory");
+    let guide = b"# User guide\n\nKeep these existing instructions.\n";
+    fs::write(workspace.join("WTS.md"), guide).expect("existing user guide");
+    let preflight = fixture
+        .service
+        .preflight_workspace(workspace_id)
+        .expect("preflight with existing guide");
+    assert!(
+        !preflight.ready,
+        "an existing guide must block setup before Git writes"
+    );
+    assert!(preflight.blockers.iter().any(|blocker| {
+        blocker.code == PreflightBlockerCode::TargetConflict
+            && blocker
+                .message
+                .contains(workspace.join("WTS.md").to_str().unwrap())
+    }));
+
+    assert!(matches!(
+        fixture
+            .service
+            .materialize_workspace(workspace_id, &initial.effect_digest),
+        Err(LocalWtsError::PreflightBlocked { .. })
+    ));
+
+    assert_eq!(
+        fs::read(workspace.join("WTS.md")).expect("existing guide must survive rollback"),
+        guide
+    );
+    assert_eq!(directory_entry_names(&workspace), ["WTS.md"]);
+    assert!(!has_branch(&fixture.api, &preflight.branch_name));
+    assert_eq!(branch(&fixture.api), "main");
+    assert!(git_output(Some(&fixture.api), ["status", "--porcelain"]).is_empty());
+}
+
+#[test]
+fn materialization_preflight_checks_generated_destinations_and_allows_existing_directories() {
+    let fixture = Fixture::new();
+    let workspace_id = fixture.create_plan(&["checkout-api"]);
+    let initial = fixture
+        .service
+        .preflight_workspace(workspace_id)
+        .expect("initial preflight");
+    let workspace = PathBuf::from(&initial.workspace_display_path);
+    fs::create_dir(&workspace).expect("existing workspace directory");
+    let parent_directories = [".github", ".wts", ".wts/agent-runs", ".wts/logs"];
+    for relative in parent_directories {
+        let path = workspace.join(relative);
+        fs::write(&path, b"Keep the conflicting file.\n").expect("parent type conflict");
+        let blocked = fixture
+            .service
+            .preflight_workspace(workspace_id)
+            .expect("directory preflight");
+        assert!(!blocked.ready, "{relative}");
+        assert!(
+            blocked.blockers.iter().any(|blocker| {
+                blocker.code == PreflightBlockerCode::TargetConflict
+                    && blocker.message.contains(path.to_str().unwrap())
+            }),
+            "{relative}: {:?}",
+            blocked.blockers
+        );
+        assert_eq!(fs::read(&path).unwrap(), b"Keep the conflicting file.\n");
+        fs::remove_file(&path).expect("resolve fixture parent conflict");
+        fs::create_dir(&path).expect("existing parent directory");
+    }
+    let code_workspace = PathBuf::from(&initial.code_workspace_display_path);
+    let destinations = [
+        "WTS.md",
+        "AGENTS.md",
+        "CLAUDE.md",
+        ".cursorrules",
+        ".wts-workspace.json",
+        ".github/copilot-instructions.md",
+        ".wts/context.json",
+        ".wts/graph-manifest.json",
+        ".wts/verification-plan.json",
+        ".wts/verification-result.json",
+        ".wts/verification-history.json",
+        ".wts/agent-report.json",
+        ".wts/review-inbox.json",
+    ]
+    .map(|relative| workspace.join(relative));
+    for path in destinations.into_iter().chain([code_workspace]) {
+        fs::write(&path, b"Keep the existing contents.\n").expect("generated destination conflict");
+        let blocked = fixture
+            .service
+            .preflight_workspace(workspace_id)
+            .expect("file preflight");
+        assert!(!blocked.ready, "{}", path.display());
+        assert!(
+            blocked.blockers.iter().any(|blocker| {
+                blocker.code == PreflightBlockerCode::TargetConflict
+                    && blocker.message.contains(path.to_str().unwrap())
+            }),
+            "{}: {:?}",
+            path.display(),
+            blocked.blockers
+        );
+        assert_eq!(fs::read(&path).unwrap(), b"Keep the existing contents.\n");
+        fs::remove_file(&path).expect("resolve fixture file conflict");
+    }
+    let ready = fixture
+        .service
+        .preflight_workspace(workspace_id)
+        .expect("resolved preflight");
+    assert!(ready.ready, "{:?}", ready.blockers);
+    assert!(!has_branch(&fixture.api, &ready.branch_name));
+    let created = fixture
+        .service
+        .materialize_workspace(workspace_id, &ready.effect_digest)
+        .expect("setup accepts existing regular parent directories");
+    assert!(!created.replayed);
+    assert!(workspace.join(".wts/review-inbox.json").is_file());
+    assert_eq!(branch(&fixture.api), "main");
+}
+
+#[cfg(unix)]
+#[test]
+fn materialization_preflight_blocks_linked_generated_parent_directories() {
+    use std::os::unix::fs::symlink;
+
+    let fixture = Fixture::new();
+    let workspace_id = fixture.create_plan(&["checkout-api"]);
+    let initial = fixture
+        .service
+        .preflight_workspace(workspace_id)
+        .expect("initial preflight");
+    let workspace = PathBuf::from(&initial.workspace_display_path);
+    fs::create_dir(&workspace).expect("workspace directory");
+    let outside = fixture._directory.path().join("outside-generated-parent");
+    fs::create_dir(&outside).expect("outside directory");
+    fs::write(outside.join("user.txt"), b"Keep outside contents.\n").expect("outside contents");
+    for relative in [".github", ".wts"] {
+        let path = workspace.join(relative);
+        symlink(&outside, &path).expect("linked parent directory");
+        let blocked = fixture
+            .service
+            .preflight_workspace(workspace_id)
+            .expect("linked parent preflight");
+        assert!(!blocked.ready, "{relative}");
+        assert!(
+            blocked.blockers.iter().any(|blocker| {
+                blocker.code == PreflightBlockerCode::TargetConflict
+                    && blocker.message.contains(path.to_str().unwrap())
+            }),
+            "{relative}: {:?}",
+            blocked.blockers
+        );
+        assert!(matches!(
+            fixture
+                .service
+                .materialize_workspace(workspace_id, &initial.effect_digest),
+            Err(LocalWtsError::PreflightBlocked { .. })
+        ));
+        assert!(path.symlink_metadata().unwrap().file_type().is_symlink());
+        assert_eq!(
+            fs::read(outside.join("user.txt")).unwrap(),
+            b"Keep outside contents.\n"
+        );
+        assert_eq!(directory_entry_names(&outside), ["user.txt"]);
+        assert!(!has_branch(&fixture.api, &initial.branch_name));
+        fs::remove_file(&path).expect("remove fixture symlink");
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn materialization_rollback_preserves_a_plan_created_during_checkout() {
+    let fixture = Fixture::new();
+    let workspace_id = fixture
+        .service
+        .create_workspace(
+            &Uuid::new_v4().to_string(),
+            CreateWorkspaceRequest {
+                intent: WorkspaceIntent::RepositorySet {
+                    label: "rollback-plans".to_owned(),
+                },
+                title: "Preserve external planning files".to_owned(),
+                preferred_provider: WorkspaceProvider::Codex,
+                repositories: vec![WorkspaceRepositoryRequest {
+                    repository_id: None,
+                    label: "checkout-api".to_owned(),
+                    base_ref: "main".to_owned(),
+                }],
+                runtime: None,
+                planning: Some(WorkspacePlanningSelection {
+                    folder: WorkspacePlanningFolder::Plans,
+                    format: WorkspacePlanningFormat::Notes,
+                }),
+            },
+        )
+        .expect("planning workspace")
+        .workspace
+        .workspace_id;
+    let preflight = fixture
+        .service
+        .preflight_workspace(workspace_id)
+        .expect("planning preflight");
+    assert!(preflight.ready, "{:?}", preflight.blockers);
+    install_materialization_checkout_hook(
+        &fixture.api,
+        "mkdir -p ../plans\nprintf '%s\\n' '# External plan' 'Keep these user notes.' > ../plans/PLAN.md\n",
+    );
+    let workspace = PathBuf::from(&preflight.workspace_display_path);
+
+    assert!(
+        fixture
+            .service
+            .materialize_workspace(workspace_id, &preflight.effect_digest)
+            .is_err()
+    );
+
+    assert_eq!(
+        fs::read_to_string(workspace.join("plans/PLAN.md"))
+            .expect("external plan must survive rollback"),
+        "# External plan\nKeep these user notes.\n"
+    );
+    assert_eq!(directory_entry_names(&workspace), ["plans"]);
+    assert_eq!(directory_entry_names(&workspace.join("plans")), ["PLAN.md"]);
+    assert!(!has_branch(&fixture.api, &preflight.branch_name));
+    assert_eq!(branch(&fixture.api), "main");
+}
+
+#[cfg(unix)]
+#[test]
+fn materialization_rollback_cleans_partial_evidence_and_allows_a_safe_retry() {
+    let fixture = Fixture::new();
+    let workspace_id = fixture.create_plan(&["checkout-api"]);
+    let preflight = fixture
+        .service
+        .preflight_workspace(workspace_id)
+        .expect("initial preflight");
+    assert!(preflight.ready, "{:?}", preflight.blockers);
+    let hook = install_materialization_checkout_hook(
+        &fixture.api,
+        "mkdir -p ../.wts/verification-plan.json\n",
+    );
+    let workspace = PathBuf::from(&preflight.workspace_display_path);
+
+    let result = fixture
+        .service
+        .materialize_workspace(workspace_id, &preflight.effect_digest);
+    assert!(
+        matches!(
+            result,
+            Err(LocalWtsError::GeneratedFileFailed {
+                cleanup_complete: false
+            })
+        ),
+        "{result:?}"
+    );
+    assert!(workspace.join(".wts/verification-plan.json").is_dir());
+    assert_eq!(directory_entry_names(&workspace), [".wts"]);
+    assert_eq!(
+        directory_entry_names(&workspace.join(".wts")),
+        ["verification-plan.json"]
+    );
+    assert!(!has_branch(&fixture.api, &preflight.branch_name));
+    assert!(
+        fixture
+            .service
+            .get_materialization(workspace_id)
+            .unwrap()
+            .is_none()
+    );
+
+    fs::remove_file(hook).expect("disable fixture hook");
+    fs::remove_dir(workspace.join(".wts/verification-plan.json"))
+        .expect("user removes the external blocker");
+    let reopened = fixture.reopen(RecordingLauncher::default());
+    let retry = reopened
+        .preflight_workspace(workspace_id)
+        .expect("fresh retry preflight");
+    let recovery = retry
+        .setup_recovery
+        .expect("the failed attempt needs explicit cleanup review");
+    assert!(recovery.ready, "{:?}", recovery.blockers);
+    let retry = reopened
+        .recover_workspace_setup(workspace_id, &recovery.effect_digest)
+        .expect("clean reviewed setup files");
+    assert!(retry.ready, "{:?}", retry.blockers);
+    let created = reopened
+        .materialize_workspace(workspace_id, &retry.effect_digest)
+        .expect("retry after removing the external blocker");
+    assert!(!created.replayed);
+    assert_eq!(created.materialization.worktrees.len(), 1);
+    assert!(workspace.join(".wts/verification-plan.json").is_file());
+    assert!(workspace.join(".wts/review-inbox.json").is_file());
+    assert_eq!(branch(&fixture.api), "main");
+    assert!(git_output(Some(&fixture.api), ["status", "--porcelain"]).is_empty());
+}
+
+fn directory_entry_names(path: &Path) -> Vec<String> {
+    let mut entries = fs::read_dir(path)
+        .expect("read directory")
+        .map(|entry| {
+            entry
+                .expect("directory entry")
+                .file_name()
+                .into_string()
+                .expect("fixture path")
+        })
+        .collect::<Vec<_>>();
+    entries.sort();
+    entries
+}
+
+#[cfg(unix)]
+fn install_materialization_checkout_hook(repository: &Path, body: &str) -> PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+
+    let hook = repository.join(".git/hooks/post-checkout");
+    fs::write(&hook, format!("#!/bin/sh\nset -eu\n{body}")).expect("write fixture checkout hook");
+    fs::set_permissions(&hook, fs::Permissions::from_mode(0o700))
+        .expect("fixture checkout hook permissions");
+    hook
 }
 
 fn write_screenshot_test_run(

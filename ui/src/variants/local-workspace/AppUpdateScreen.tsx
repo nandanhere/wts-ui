@@ -91,7 +91,7 @@ export function useAppUpdate(client: WorkspaceClient): AppUpdateController {
         try {
           const progress = normalizeAppUpdateProgress(event.payload);
           setStatus((current) =>
-            current && current.availableVersion === progress.version
+            current?.state === "downloading" && current.availableVersion === progress.version
               ? {
                   ...current,
                   state: "downloading",
@@ -117,6 +117,7 @@ export function useAppUpdate(client: WorkspaceClient): AppUpdateController {
 
   const install = useCallback(async () => {
     if (operationActive.current) return;
+    const previousStatus = statusRef.current;
     operationActive.current = true;
     setAction("installing");
     setError("");
@@ -130,6 +131,7 @@ export function useAppUpdate(client: WorkspaceClient): AppUpdateController {
       applyStatus(next);
     } catch (cause) {
       if (!mounted.current) return;
+      if (previousStatus) applyStatus(previousStatus);
       setError(
         cause instanceof Error
           ? cause.message
@@ -275,8 +277,7 @@ export function AppUpdateScreen({
             </div>
           )}
         </div>
-        {(status?.state === "available" || status?.state === "ready") &&
-          !effectiveError && (
+        {(status?.state === "available" || status?.state === "ready") && (
           <div
             className={styles.actions}
             data-ui="updates.actions"

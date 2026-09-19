@@ -8,6 +8,7 @@ import {
 } from "../../lib/wtsClient";
 import { fakeWorkspaceClient } from "../../test/workspaceClientFake";
 import { PlanningDocumentsPanel } from "./PlanningDocumentsPanel";
+import { planningViewFor, rememberPlanningView } from "./planningWorkspaceCache";
 
 const mermaidMocks = vi.hoisted(() => ({
   initialize: vi.fn(),
@@ -136,6 +137,308 @@ function planningClient() {
 }
 
 describe("PlanningDocumentsPanel", () => {
+  it("keeps known native previews out of edit mode", async () => {
+    const fake = planningClient();
+    Object.defineProperty(window, "__WTS_NATIVE_PREVIEW__", { configurable: true, value: { schemaVersion: 1, allowedCommands: ["read_workspace_planning_document"] } });
+    try {
+      render(<PlanningDocumentsPanel client={fake.client} workspaceId={workspaceId} workspaceKey="PLATFORM-42" />);
+      await screen.findByRole("article", { name: "PLAN.md preview" });
+      expect(screen.queryByRole("button", { name: "Edit" })).not.toBeInTheDocument();
+      expect(screen.getByText("This preview is read-only. Use the main WTS window to make changes.")).toBeVisible();
+      expect(fake.updateWorkspacePlanningDocument).not.toHaveBeenCalled();
+    } finally { Reflect.deleteProperty(window, "__WTS_NATIVE_PREVIEW__"); }
+  });
+
+  it.each(["preview_read_only", "native_preview_read_only"])("keeps a rejected preview draft copyable without a write retry for %s", async code => {
+    const user = userEvent.setup(); const fake = planningClient();
+    fake.updateWorkspacePlanningDocument.mockRejectedValue(new WorkspaceClientError("Native preview rejected this write.", { code }));
+    render(<PlanningDocumentsPanel client={fake.client} workspaceId={workspaceId} workspaceKey="PLATFORM-42" />);
+    await user.click(await screen.findByRole("button", { name: "Edit" }));
+    const editor = screen.getByRole("textbox", { name: "Edit PLAN.md" });
+    fireEvent.change(editor, { target: { value: "# Keep this preview draft" } });
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    await screen.findByText("This preview is read-only. Use the main WTS window to make changes.");
+    expect(screen.queryByRole("button", { name: "Try save again" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Save" })).not.toBeInTheDocument();
+    expect(editor).toHaveValue("# Keep this preview draft");
+    expect(editor).toHaveAttribute("readonly");
+    fireEvent.keyDown(editor, { key: "s", ctrlKey: true });
+    await user.click(screen.getByRole("button", { name: "Copy draft" }));
+    expect(await navigator.clipboard.readText()).toBe("# Keep this preview draft");
+    expect(fake.updateWorkspacePlanningDocument).toHaveBeenCalledOnce();
+  });
+
+  it("keeps newer feedback text and one POST while the submitted feedback is pending", async () => {
+    const user = userEvent.setup(); const fake = planningClient(); const pending = deferred<WorkspaceReviewThread>(); fake.createWorkspaceReviewThread.mockReturnValue(pending.promise);
+    render(<PlanningDocumentsPanel client={fake.client} workspaceId={workspaceId} workspaceKey="PLATFORM-42" />); await user.click(await screen.findByRole("button", { name: "Source" }));
+    const input = screen.getByRole("textbox", { name: "Feedback for PLAN.md" }); fireEvent.change(input, { target: { value: "First question" } }); await user.click(screen.getByRole("button", { name: "Add feedback" }));
+    fireEvent.change(input, { target: { value: "Keep this newer question" } }); fireEvent.keyDown(input, { key: "Enter", ctrlKey: true }); expect(fake.createWorkspaceReviewThread).toHaveBeenCalledTimes(1);
+    await act(async () => { pending.resolve(reviewThread({ threadId: "first-feedback", body: "First question" })); await pending.promise; });
+    expect(input).toHaveValue("Keep this newer question"); expect(planningViewFor(fake.client, workspaceId)?.feedbackDraft).toBe("Keep this newer question"); expect(screen.getByRole("button", { name: "Add feedback" })).toBeEnabled();
+  });
+
+  it.each(["flat", "fields"])("renders an imported Jira %s description while source, edits, and feedback retain the original file", async (shape) => {
+    const user = userEvent.setup();
+    const fake = planningClient();
+    const description = "Check the retry rule.\n\n- Keep the current limit.\n- Add a regression test.\n\nUse `<Result<T>>` in the example.";
+    const envelope = JSON.stringify(shape === "flat"
+      ? { issue_key: "PLATFORM-42", description }
+      : { key: "PLATFORM-42", fields: { description } });
+    const contents = `# Plan\n\n## Jira context\n\n- Issue: \`PLATFORM-42\`\n- Summary: Retry rule\n- Status: Open\n\n### Imported description\n\n${envelope}\n\n## Objective\n\nKeep this objective.\n`;
+    fake.readWorkspacePlanningDocument.mockResolvedValue(planningDocument("plan", contents));
+    fake.createWorkspaceReviewThread.mockResolvedValue(reviewThread({ threadId: "import-feedback", body: "Check the imported evidence." }));
+    render(<PlanningDocumentsPanel client={fake.client} workspaceId={workspaceId} workspaceKey="PLATFORM-42" />);
+
+    const preview = await screen.findByRole("article", { name: "PLAN.md preview" });
+    expect(within(preview).getByText("Check the retry rule.").tagName).toBe("P");
+    expect(within(preview).getByText("Keep the current limit.").tagName).toBe("LI");
+    expect(within(preview).getByText("<Result<T>>").tagName).toBe("CODE");
+    expect(within(preview).getByText("Keep this objective.")).toBeVisible();
+    expect(preview).not.toHaveTextContent(envelope);
+
+    await user.click(screen.getByRole("button", { name: "Source" }));
+    const source = screen.getByRole("region", { name: "PLAN.md contents" });
+    expect(Array.from(source.querySelectorAll("code"), (line) => line.textContent === "\u00a0" ? "" : line.textContent).join("\n")).toBe(contents);
+    await user.click(within(source).getByRole("button", { name: `Line 11: ${envelope}` }));
+    await user.type(screen.getByRole("textbox", { name: "Feedback for PLAN.md" }), "Check the imported evidence.");
+    await user.click(screen.getByRole("button", { name: "Add feedback" }));
+    await waitFor(() => expect(fake.createWorkspaceReviewThread).toHaveBeenCalledWith(workspaceId, {
+      kind: "planningDocument", documentId: "plan", documentSha256: `sha256:${"a".repeat(64)}`, line: 11,
+    }, "Check the imported evidence.", "user"));
+    await user.click(screen.getByRole("button", { name: "Edit" }));
+    expect(screen.getByRole("textbox", { name: "Edit PLAN.md" })).toHaveValue(contents);
+    expect(fake.updateWorkspacePlanningDocument).not.toHaveBeenCalled();
+  });
+
+  it.each(["planning_document_too_large", "invalid_planning_document"])("opens the workspace for a planning file WTS cannot read: %s", async (code) => {
+    const user = userEvent.setup();
+    const fake = planningClient();
+    fake.readWorkspacePlanningDocument.mockRejectedValue(new WorkspaceClientError("WTS cannot read this file.", { code }));
+    render(<PlanningDocumentsPanel client={fake.client} workspaceId={workspaceId} workspaceKey="PLATFORM-42" />);
+    await user.click(await screen.findByRole("button", { name: "Open workspace in VS Code" }));
+    expect(fake.openWorkspaceInVscode).toHaveBeenCalledWith(workspaceId);
+    expect(screen.getByText("Edit this file in VS Code, then refresh the planning files.")).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Try again" })).not.toBeInTheDocument();
+    expect(fake.readWorkspacePlanningDocument).toHaveBeenCalledOnce();
+  });
+
+  it("refreshes an empty planning list and offers the supported planning workspace flow", async () => {
+    const user = userEvent.setup();
+    const fake = planningClient();
+    fake.listWorkspacePlanningDocuments.mockResolvedValueOnce({ workspaceId, documents: [] });
+    const onCreatePlanningHome = vi.fn();
+    render(<PlanningDocumentsPanel client={fake.client} workspaceId={workspaceId} workspaceKey="PLATFORM-42" onCreatePlanningHome={onCreatePlanningHome} />);
+    await user.click(await screen.findByRole("button", { name: "Create planning workspace" }));
+    expect(onCreatePlanningHome).toHaveBeenCalledOnce();
+    await user.click(screen.getByRole("button", { name: "Refresh planning files" }));
+    expect(await screen.findByRole("article", { name: "PLAN.md preview" })).toBeVisible();
+    expect(fake.listWorkspacePlanningDocuments).toHaveBeenCalledTimes(2);
+  });
+
+  it("refreshes the file list when the selected planning file was removed", async () => {
+    const user = userEvent.setup();
+    const fake = planningClient();
+    fake.readWorkspacePlanningDocument.mockRejectedValueOnce(new WorkspaceClientError("The planning file was removed.", { code: "planning_document_unavailable" }));
+    fake.listWorkspacePlanningDocuments.mockResolvedValueOnce({ workspaceId, documents: [{ documentId: "plan", fileName: "PLAN.md" }] }).mockResolvedValueOnce({ workspaceId, documents: [{ documentId: "readme", fileName: "README.md" }] });
+    render(<PlanningDocumentsPanel client={fake.client} workspaceId={workspaceId} workspaceKey="PLATFORM-42" />);
+    await user.click(await screen.findByRole("button", { name: "Refresh planning files" }));
+    expect(await screen.findByRole("article", { name: "README.md preview" })).toBeVisible();
+    expect(fake.readWorkspacePlanningDocument).toHaveBeenLastCalledWith(workspaceId, "readme");
+  });
+
+  it("shows cached planning content while a return refresh is pending", async () => {
+    const fake = planningClient();
+    const panel = <PlanningDocumentsPanel client={fake.client} workspaceId={workspaceId} workspaceKey="PLATFORM-42" />;
+    const view = render(panel);
+    expect(await screen.findByRole("article", { name: "PLAN.md preview" })).toBeVisible();
+    view.unmount();
+    fake.listWorkspacePlanningDocuments.mockReturnValue(new Promise(() => {}));
+    fake.readWorkspacePlanningDocument.mockReturnValue(new Promise(() => {}));
+    render(panel);
+    expect(screen.getByRole("article", { name: "PLAN.md preview" })).toBeVisible();
+    expect(screen.queryByText("Loading planning files…")).not.toBeInTheDocument();
+    await waitFor(() => expect(fake.listWorkspacePlanningDocuments).toHaveBeenCalledTimes(2));
+  });
+
+  it("keeps an unfinished planning edit when a return refresh has newer contents", async () => {
+    const user = userEvent.setup();
+    const fake = planningClient();
+    const panel = <PlanningDocumentsPanel client={fake.client} workspaceId={workspaceId} workspaceKey="PLATFORM-42" />;
+    const view = render(panel);
+    await user.click(await screen.findByRole("button", { name: "Edit" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Edit PLAN.md" }), { target: { value: "My unfinished plan" } });
+    view.unmount();
+    fake.readWorkspacePlanningDocument.mockResolvedValue(planningDocument("plan", "New external contents", "b"));
+    render(panel);
+    expect(screen.getByRole("textbox", { name: "Edit PLAN.md" })).toHaveValue("My unfinished plan");
+    await waitFor(() => expect(fake.readWorkspacePlanningDocument).toHaveBeenCalledTimes(2));
+    expect(screen.getByRole("textbox", { name: "Edit PLAN.md" })).toHaveValue("My unfinished plan");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    expect(fake.updateWorkspacePlanningDocument).toHaveBeenCalledWith(workspaceId, "plan", `sha256:${"a".repeat(64)}`, "My unfinished plan");
+  });
+
+  it("keeps cached planning content after refresh errors and retries in place", async () => {
+    const user = userEvent.setup();
+    const fake = planningClient();
+    const panel = <PlanningDocumentsPanel client={fake.client} workspaceId={workspaceId} workspaceKey="PLATFORM-42" />;
+    const view = render(panel);
+    await screen.findByRole("article", { name: "PLAN.md preview" });
+    view.unmount();
+    fake.listWorkspacePlanningDocuments.mockRejectedValue(new Error("List unavailable"));
+    fake.readWorkspacePlanningDocument.mockRejectedValueOnce(new Error("File unavailable"));
+    render(panel);
+    expect(screen.getByRole("article", { name: "PLAN.md preview" })).toBeVisible();
+    await screen.findByRole("button", { name: "Retry file list" });
+    await user.click(await screen.findByRole("button", { name: "Retry file" }));
+    await waitFor(() => expect(fake.readWorkspacePlanningDocument).toHaveBeenCalledTimes(3));
+    expect(screen.getByRole("article", { name: "PLAN.md preview" })).toBeVisible();
+  });
+
+  it("isolates cached plans and drafts when the client changes", async () => {
+    const user = userEvent.setup();
+    const first = planningClient();
+    const second = planningClient();
+    second.listWorkspacePlanningDocuments.mockReturnValue(new Promise(() => {}));
+    const view = render(<PlanningDocumentsPanel client={first.client} workspaceId={workspaceId} workspaceKey="PLATFORM-42" />);
+    await user.click(await screen.findByRole("button", { name: "Edit" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Edit PLAN.md" }), { target: { value: "Private first-client draft" } });
+    view.rerender(<PlanningDocumentsPanel client={second.client} workspaceId={workspaceId} workspaceKey="PLATFORM-42" />);
+    expect(screen.queryByRole("textbox", { name: "Edit PLAN.md" })).not.toBeInTheDocument();
+    expect(screen.queryByText("Private first-client draft")).not.toBeInTheDocument();
+    view.rerender(<PlanningDocumentsPanel client={first.client} workspaceId={workspaceId} workspaceKey="PLATFORM-42" />);
+    expect(screen.getByRole("textbox", { name: "Edit PLAN.md" })).toHaveValue("Private first-client draft");
+  });
+
+  it("retains an unfinished edit when the refreshed list no longer contains its file", async () => {
+    const user = userEvent.setup();
+    const fake = planningClient();
+    const panel = <PlanningDocumentsPanel client={fake.client} workspaceId={workspaceId} workspaceKey="PLATFORM-42" />;
+    const first = render(panel);
+    await user.click(await screen.findByRole("button", { name: "Edit" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Edit PLAN.md" }), { target: { value: "Retain this draft" } });
+    first.unmount();
+    fake.listWorkspacePlanningDocuments.mockResolvedValue({ workspaceId, documents: [] });
+    fake.readWorkspacePlanningDocument.mockRejectedValue(new Error("File removed"));
+    render(panel);
+    await screen.findByRole("button", { name: "Retry file" });
+    expect(screen.getByRole("textbox", { name: "Edit PLAN.md" })).toHaveValue("Retain this draft");
+  });
+
+  it("keeps an unfinished feedback draft anchored to its original document revision", async () => {
+    const user = userEvent.setup();
+    const fake = planningClient();
+    const panel = <PlanningDocumentsPanel client={fake.client} workspaceId={workspaceId} workspaceKey="PLATFORM-42" />;
+    const first = render(panel);
+    await user.click(await screen.findByRole("button", { name: "Source" }));
+    await user.click(screen.getByRole("button", { name: "Line 3: - [ ] Confirm the retry rule." }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Feedback for PLAN.md" }), { target: { value: "Check this original line" } });
+    first.unmount();
+    fake.readWorkspacePlanningDocument.mockResolvedValue(planningDocument("plan", "# External revision", "b"));
+    render(panel);
+    await waitFor(() => expect(fake.readWorkspacePlanningDocument).toHaveBeenCalledTimes(2));
+    await user.click(screen.getByRole("button", { name: "Add feedback" }));
+    expect(fake.createWorkspaceReviewThread).toHaveBeenCalledWith(workspaceId, {
+      kind: "planningDocument", documentId: "plan", documentSha256: `sha256:${"a".repeat(64)}`, line: 3,
+    }, "Check this original line", "user");
+  });
+
+  it("retains an unfinished draft after more than 24 other workspaces are visited", async () => {
+    const user = userEvent.setup();
+    const fake = planningClient();
+    fake.listWorkspacePlanningDocuments.mockImplementation(async (id: string) => ({ workspaceId: id, documents: [{ documentId: "plan", fileName: "PLAN.md" }] }));
+    fake.readWorkspacePlanningDocument.mockImplementation(async (id: string) => ({ ...planningDocument("plan", `# ${id}`), workspaceId: id }));
+    fake.listWorkspaceReviewThreads.mockImplementation(async (id: string) => ({ workspaceId: id, threads: [] }));
+    const panel = (id: string) => <PlanningDocumentsPanel client={fake.client} workspaceId={id} workspaceKey={id} />;
+    const view = render(panel(workspaceId));
+    await user.click(await screen.findByRole("button", { name: "Edit" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Edit PLAN.md" }), { target: { value: "Keep this unfinished plan" } });
+    for (let index = 0; index < 25; index += 1) {
+      const id = `visited-${index}`;
+      view.rerender(panel(id));
+      await screen.findByRole("heading", { name: id });
+    }
+    view.rerender(panel(workspaceId));
+    expect(await screen.findByRole("textbox", { name: "Edit PLAN.md" })).toHaveValue("Keep this unfinished plan");
+  });
+
+  it("requires space for a new draft and retains the existing 24 drafts", async () => {
+    const user = userEvent.setup();
+    const fake = planningClient();
+    for (let index = 0; index < 24; index += 1) {
+      rememberPlanningView(fake.client, `draft-${index}`, {
+        selectedId: "plan", document: planningDocument("plan", "Original"), documentView: "source",
+        editing: true, draft: `Draft ${index}`, query: "", filter: "current", feedbackDraft: "", selectedLine: null,
+      });
+    }
+    render(<PlanningDocumentsPanel client={fake.client} workspaceId={workspaceId} workspaceKey="PLATFORM-42" />);
+    await user.click(await screen.findByRole("button", { name: "Edit" }));
+    expect(screen.queryByRole("textbox", { name: "Edit PLAN.md" })).not.toBeInTheDocument();
+    expect(screen.getByText(/WTS has 24 unfinished planning drafts/)).toBeVisible();
+    expect(planningViewFor(fake.client, "draft-0")?.draft).toBe("Draft 0");
+    const previous = planningViewFor(fake.client, "draft-0")!;
+    rememberPlanningView(fake.client, "draft-0", { ...previous, editing: false, draft: previous.document!.contents });
+    await user.click(screen.getByRole("button", { name: "Edit" }));
+    expect(screen.getByRole("textbox", { name: "Edit PLAN.md" })).toBeVisible();
+    expect(planningViewFor(fake.client, "draft-23")?.draft).toBe("Draft 23");
+  });
+
+  it("clears a feedback draft when its write succeeds after the pane closes", async () => {
+    const user = userEvent.setup();
+    const fake = planningClient();
+    const pending = deferred<WorkspaceReviewThread>();
+    fake.createWorkspaceReviewThread.mockReturnValue(pending.promise);
+    const panel = <PlanningDocumentsPanel client={fake.client} workspaceId={workspaceId} workspaceKey="PLATFORM-42" />;
+    const first = render(panel);
+    await user.click(await screen.findByRole("button", { name: "Source" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Feedback for PLAN.md" }), { target: { value: "Publish this once" } });
+    await user.click(screen.getByRole("button", { name: "Add feedback" }));
+    first.unmount();
+    await act(async () => { pending.resolve(reviewThread({ threadId: "new-thread", body: "Publish this once" })); });
+    render(panel);
+    expect(screen.getByRole("textbox", { name: "Feedback for PLAN.md" })).toHaveValue("");
+    expect(fake.createWorkspaceReviewThread).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps late planning responses scoped to their workspace", async () => {
+    const fake = planningClient();
+    const late = deferred<WorkspacePlanningDocument>();
+    fake.listWorkspacePlanningDocuments.mockImplementation(async (id: string) => ({ workspaceId: id, documents: [{ documentId: "plan", fileName: "PLAN.md" }] }));
+    fake.readWorkspacePlanningDocument.mockImplementation((id: string) => id === workspaceId ? late.promise : Promise.resolve({ ...planningDocument("plan", "# Other workspace"), workspaceId: id }));
+    fake.listWorkspaceReviewThreads.mockImplementation(async (id: string) => ({ workspaceId: id, threads: [] }));
+    const view = render(<PlanningDocumentsPanel client={fake.client} workspaceId={workspaceId} workspaceKey="PLATFORM-42" />);
+    await waitFor(() => expect(fake.readWorkspacePlanningDocument).toHaveBeenCalledTimes(1));
+    view.rerender(<PlanningDocumentsPanel client={fake.client} workspaceId="other-workspace" workspaceKey="PLATFORM-99" />);
+    await screen.findByRole("heading", { name: "Other workspace" });
+    await act(async () => { late.resolve(planningDocument("plan", "# First workspace")); });
+    expect(screen.getByRole("heading", { name: "Other workspace" })).toBeVisible();
+    expect(screen.queryByRole("heading", { name: "First workspace" })).not.toBeInTheDocument();
+    view.rerender(<PlanningDocumentsPanel client={fake.client} workspaceId={workspaceId} workspaceKey="PLATFORM-42" />);
+    expect(screen.getByRole("heading", { name: "First workspace" })).toBeVisible();
+  });
+
+  it("keeps a successful save when an older background read finishes later", async () => {
+    const user = userEvent.setup();
+    const fake = planningClient();
+    const panel = <PlanningDocumentsPanel client={fake.client} workspaceId={workspaceId} workspaceKey="PLATFORM-42" />;
+    const first = render(panel);
+    await screen.findByRole("article", { name: "PLAN.md preview" });
+    first.unmount();
+    const refresh = deferred<WorkspacePlanningDocument>();
+    fake.readWorkspacePlanningDocument.mockReturnValueOnce(refresh.promise);
+    fake.updateWorkspacePlanningDocument.mockResolvedValue(planningDocument("plan", "# Saved plan", "b"));
+    const second = render(panel);
+    await user.click(screen.getByRole("button", { name: "Edit" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Edit PLAN.md" }), { target: { value: "# Saved plan" } });
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    await screen.findByRole("heading", { name: "Saved plan" });
+    await act(async () => { refresh.resolve(planningDocument("plan", "# Old plan")); });
+    expect(screen.getByRole("heading", { name: "Saved plan" })).toBeVisible();
+    second.unmount();
+    fake.readWorkspacePlanningDocument.mockReturnValue(new Promise(() => {}));
+    render(panel);
+    expect(screen.getByRole("heading", { name: "Saved plan" })).toBeVisible();
+  });
+
   it("renders Markdown by default and keeps the complete source available", async () => {
     const user = userEvent.setup();
     const fake = planningClient();
@@ -464,6 +767,30 @@ describe("PlanningDocumentsPanel", () => {
       workspaceId,
       "plan",
     );
+  });
+
+  it.each(["stay", "leave", "return before acknowledgement"])("keeps text entered during Save and advances its digest (%s)", async (navigation) => {
+    const fake = planningClient();
+    const pending = deferred<WorkspacePlanningDocument>();
+    fake.updateWorkspacePlanningDocument.mockReturnValueOnce(pending.promise);
+    const panel = <PlanningDocumentsPanel client={fake.client} workspaceId={workspaceId} workspaceKey="PLATFORM-42" />;
+    const view = render(panel);
+    fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Edit PLAN.md" }), { target: { value: "# First saved revision" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(fake.updateWorkspacePlanningDocument).toHaveBeenCalledTimes(1));
+    fireEvent.change(screen.getByRole("textbox", { name: "Edit PLAN.md" }), { target: { value: "# First saved revision\nKeep the newer text." } });
+    if (navigation !== "stay") view.unmount();
+    if (navigation === "return before acknowledgement") {
+      render(panel);
+      expect(screen.getByRole("button", { name: "Saving…" })).toBeDisabled();
+      expect(fake.updateWorkspacePlanningDocument).toHaveBeenCalledTimes(1);
+    }
+    await act(async () => { pending.resolve(planningDocument("plan", "# First saved revision", "b")); });
+    if (navigation === "leave") render(panel);
+    expect(screen.getByRole("textbox", { name: "Edit PLAN.md" })).toHaveValue("# First saved revision\nKeep the newer text.");
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(fake.updateWorkspacePlanningDocument).toHaveBeenLastCalledWith(workspaceId, "plan", `sha256:${"b".repeat(64)}`, "# First saved revision\nKeep the newer text.");
   });
 
   it("saves an edited file with the digest that the user opened", async () => {
@@ -1011,6 +1338,8 @@ describe("PlanningDocumentsPanel", () => {
 
   it("zooms a Mermaid diagram with a trackpad pinch gesture", async () => {
     const fake = planningClient();
+    const diagramRender = deferred<{ svg: string }>();
+    mermaidMocks.render.mockReturnValueOnce(diagramRender.promise);
     fake.readWorkspacePlanningDocument.mockResolvedValue(
       planningDocument(
         "plan",
@@ -1026,10 +1355,18 @@ describe("PlanningDocumentsPanel", () => {
       />,
     );
 
+    await waitFor(() => expect(mermaidMocks.render).toHaveBeenCalledOnce());
+    await act(async () => {
+      diagramRender.resolve({
+        svg: '<svg xmlns="http://www.w3.org/2000/svg"><text>Rendered</text></svg>',
+      });
+      await diagramRender.promise;
+    });
     const image = await screen.findByRole("img", { name: "Mermaid diagram" });
     const canvas = screen.getByRole("region", {
       name: "Mermaid diagram canvas",
     });
+    expect(image.style.transform).toBe("translate(0px, 0px) scale(1)");
 
     fireEvent.wheel(canvas, { ctrlKey: false, deltaX: 5_000, deltaY: -3_000 });
     expect(screen.getByLabelText("Diagram zoom")).toHaveTextContent("100%");

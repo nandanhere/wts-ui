@@ -73,6 +73,12 @@ pub struct RepositoryInspection {
     pub available_branches: Vec<AvailableBranch>,
 }
 
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct RepositoryCloneOptions {
+    pub branch: Option<String>,
+    pub shallow: bool,
+}
+
 impl RepositoryInspection {
     /// A readable, traversal-free directory name unique to this repository.
     pub fn worktree_leaf(&self) -> String {
@@ -146,18 +152,38 @@ pub(crate) fn inspect_repository(trusted_path: &Path) -> Result<RepositoryInspec
 pub(crate) fn clone_repository(
     remote_url: &str,
     target_path: &Path,
+    options: &RepositoryCloneOptions,
 ) -> Result<RepositoryInspection, GitError> {
-    let output = git(
-        None,
-        [
-            OsString::from("clone"),
-            OsString::from("--origin"),
-            OsString::from("origin"),
-            OsString::from("--"),
-            OsString::from(remote_url),
-            target_path.as_os_str().to_owned(),
-        ],
-    )?;
+    if let Some(branch) = options.branch.as_deref() {
+        if branch.len() > 256 || !valid_user_ref(branch) {
+            return Err(GitError::InvalidBranchName);
+        }
+        let validation = git(None, ["check-ref-format", "--branch", branch])?;
+        if !validation.status.success() {
+            return Err(GitError::InvalidBranchName);
+        }
+    }
+    let mut arguments = vec![
+        OsString::from("clone"),
+        OsString::from("--origin"),
+        OsString::from("origin"),
+    ];
+    if options.shallow {
+        arguments.extend([
+            OsString::from("--depth"),
+            OsString::from("1"),
+            OsString::from("--single-branch"),
+        ]);
+    }
+    if let Some(branch) = &options.branch {
+        arguments.extend([OsString::from("--branch"), OsString::from(branch)]);
+    }
+    arguments.extend([
+        OsString::from("--"),
+        OsString::from(remote_url),
+        target_path.as_os_str().to_owned(),
+    ]);
+    let output = git(None, arguments)?;
     if !output.status.success() {
         return Err(output.command_error(GitOperation::CloneRepository));
     }
@@ -341,17 +367,16 @@ fn read_ref_snapshot(root: &Path) -> Result<RefSnapshot, GitError> {
             {
                 return Err(GitError::InvalidRepositoryMetadata);
             }
-            if !upstream.is_empty() {
-                if !upstream.starts_with("refs/")
+            if !upstream.is_empty()
+                && (!upstream.starts_with("refs/")
                     || upstream.bytes().any(|byte| byte.is_ascii_control())
                     || upstream.len() > 1024
                     || snapshot
                         .upstream_full_ref
                         .replace((*upstream).to_owned())
-                        .is_some()
-                {
-                    return Err(GitError::InvalidRepositoryMetadata);
-                }
+                        .is_some())
+            {
+                return Err(GitError::InvalidRepositoryMetadata);
             }
         } else if !head.trim().is_empty() {
             return Err(GitError::InvalidRepositoryMetadata);
@@ -433,6 +458,23 @@ pub(crate) fn resolve_base(
     };
     let requested = requested.to_owned();
     validate_ref_input(&requested)?;
+    if matches!(requested.len(), 40 | 64) && requested.bytes().all(|byte| byte.is_ascii_hexdigit())
+    {
+        let object = git(
+            Some(&repository.worktree_root),
+            ["cat-file", "-t", &requested],
+        )?;
+        if !object.status.success() || object.stdout != b"commit\n" {
+            return Err(GitError::BaseReferenceNotFound);
+        }
+        let commit_oid = requested.to_ascii_lowercase();
+        return Ok(ResolvedBase {
+            requested,
+            name: commit_oid.clone(),
+            full_ref: commit_oid.clone(),
+            commit_oid,
+        });
+    }
 
     let (name, candidates) = if let Some(name) = requested.strip_prefix("refs/heads/") {
         (name.to_owned(), vec![format!("refs/heads/{name}")])
@@ -918,8 +960,8 @@ impl IfEmpty for String {
 #[cfg(test)]
 mod tests {
     use super::{
-        clone_repository, inspect_repository, is_hex_oid, label_from_origin, sanitize_origin_url,
-        slug,
+        RepositoryCloneOptions, clone_repository, inspect_repository, is_hex_oid,
+        label_from_origin, sanitize_origin_url, slug,
     };
     use crate::command::measure_git_commands;
     use std::{fs, path::Path, process::Command};
@@ -1072,8 +1114,12 @@ mod tests {
         run(Some(&source), ["branch", "dev-local"]);
 
         let target = directory.path().join("cloned-api");
-        let inspection = clone_repository(source.to_str().expect("utf8 source path"), &target)
-            .expect("clone repository");
+        let inspection = clone_repository(
+            source.to_str().expect("utf8 source path"),
+            &target,
+            &RepositoryCloneOptions::default(),
+        )
+        .expect("clone repository");
 
         assert_eq!(
             inspection.worktree_root,
@@ -1093,6 +1139,61 @@ mod tests {
                 .iter()
                 .any(|branch| branch.name == "develop")
         );
+    }
+
+    #[test]
+    fn clone_can_limit_history_and_remote_refs_to_one_branch() {
+        let directory = tempfile::tempdir().expect("temporary repository");
+        let source = directory.path().join("large-source");
+        fs::create_dir(&source).expect("source repository directory");
+        run(None, ["init", source.to_str().expect("utf8 path")]);
+        run(Some(&source), ["config", "user.name", "WTS Test"]);
+        run(
+            Some(&source),
+            ["config", "user.email", "wts@example.invalid"],
+        );
+        run(Some(&source), ["config", "commit.gpgSign", "false"]);
+        fs::write(source.join("README.md"), "first\n").expect("fixture file");
+        run(Some(&source), ["add", "README.md"]);
+        run(Some(&source), ["commit", "-m", "first"]);
+        run(Some(&source), ["branch", "-M", "master"]);
+        run(Some(&source), ["branch", "feature/large-history"]);
+        fs::write(source.join("README.md"), "second\n").expect("fixture file");
+        run(Some(&source), ["commit", "-am", "second"]);
+
+        let target = directory.path().join("shallow-master");
+        let inspection = clone_repository(
+            &format!("file://{}", source.display()),
+            &target,
+            &RepositoryCloneOptions {
+                branch: Some("master".to_owned()),
+                shallow: true,
+            },
+        )
+        .expect("clone master");
+
+        assert_eq!(inspection.default_branch.name, "master");
+        let remote_refs = Command::new("git")
+            .current_dir(&target)
+            .args([
+                "for-each-ref",
+                "--format=%(refname:short)",
+                "refs/remotes/origin",
+            ])
+            .output()
+            .expect("list cloned remote refs");
+        assert!(remote_refs.status.success());
+        assert_eq!(
+            String::from_utf8_lossy(&remote_refs.stdout).trim(),
+            "origin/master"
+        );
+        let count = Command::new("git")
+            .current_dir(&target)
+            .args(["rev-list", "--count", "HEAD"])
+            .output()
+            .expect("count shallow history");
+        assert!(count.status.success());
+        assert_eq!(String::from_utf8_lossy(&count.stdout).trim(), "1");
     }
 
     #[test]

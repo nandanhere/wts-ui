@@ -1,9 +1,10 @@
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ActivityWatchStatus } from "../../lib/wtsClient";
 import { fakeWorkspaceClient } from "../../test/workspaceClientFake";
 import { AgentSessionsPanel } from "./AgentSessionsPanel";
+import { loadAgentSessions } from "../../lib/agentSessionDiscovery";
 import {
   activityWatchReviewIntervalId,
   saveActivityWatchReviewHistorySnapshot,
@@ -56,6 +57,114 @@ function savedInterval(
 describe("AgentSessionsPanel", () => {
   beforeEach(() => {
     localStorage.clear();
+  });
+
+  it("reuses the board session read across ten immediate returns to My time", async () => {
+    const fake = fakeWorkspaceClient();
+    await loadAgentSessions(fake.client);
+    for (let cycle = 0; cycle < 10; cycle++) {
+      const panel = render(<AgentSessionsPanel client={fake.client} workspaceLabels={{}} />);
+      await act(async () => {});
+      panel.unmount();
+    }
+    expect(fake.listAgentSessions).toHaveBeenCalledTimes(1);
+  });
+
+  it("checks notification permission after the user changes browser settings", async () => {
+    const user = userEvent.setup();
+    const requestPermission = vi.fn().mockResolvedValue("granted");
+    vi.stubGlobal("Notification", { permission: "denied", requestPermission });
+    try {
+      render(<AgentSessionsPanel client={fakeWorkspaceClient().client} workspaceLabels={{}} />);
+      expect(screen.getByText("Allow notifications in your browser or system settings, then select Check notification permission.")).toBeVisible();
+      await user.click(screen.getByRole("button", { name: "Check notification permission" }));
+      expect(requestPermission).toHaveBeenCalledOnce();
+      expect(screen.getByRole("button", { name: "Notifications on" })).toBeVisible();
+    } finally { vi.unstubAllGlobals(); }
+  });
+
+  it("explains where to read summaries when notifications are unavailable", () => {
+    vi.stubGlobal("Notification", undefined);
+    try {
+      render(<AgentSessionsPanel client={fakeWorkspaceClient().client} workspaceLabels={{}} />);
+      expect(screen.getByRole("button", { name: "Notifications unavailable" })).toBeDisabled();
+      expect(screen.getByText("This app cannot show notifications. Open My time to read completed summaries.")).toBeVisible();
+    } finally { vi.unstubAllGlobals(); }
+  });
+
+  it("explains a stopped ActivityWatch connection and offers its settings", async () => {
+    const fake = fakeWorkspaceClient({ activityWatchStatus: { state: "unavailable", installation: "detected", endpoint: "http://127.0.0.1:5600", capabilities: [], detail: "The local server is stopped." } });
+    const onOpenIntegrations = vi.fn();
+    render(<AgentSessionsPanel client={fake.client} workspaceLabels={{}} onOpenIntegrations={onOpenIntegrations} />);
+    expect(await screen.findByText("Start ActivityWatch, then select Check connection.")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Build today’s review" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "Open integrations" }));
+    expect(onOpenIntegrations).toHaveBeenCalledOnce();
+  });
+
+  it("retries only Jira after a failed refresh and retains reviewed assignments", async () => {
+    const user = userEvent.setup();
+    const cached = savedInterval(Date.now() - 60_000, Date.now(), "Review work");
+    cached.jiraIssues.issues = [{ issueKey: "WTS-42", summary: "Retain assignments", status: "In Progress" }];
+    const sessionId = cached.review.sessions[0]!.id;
+    saveActivityWatchReviewSnapshot({ schemaVersion: 1, dateKey: new Date().toLocaleDateString("en-CA"), builtAtUnixMs: Date.now(), review: cached.review, jiraIssues: cached.jiraIssues, assignments: { [sessionId]: "WTS-42" } });
+    const fake = fakeWorkspaceClient({ activityWatchStatus: { state: "running", installation: "detected", endpoint: "http://127.0.0.1:5600", capabilities: ["dailyReview"], detail: "Ready" }, activityWatchDailyReview: cached.review });
+    fake.listActiveJiraIssues.mockRejectedValueOnce(new Error("Jira connection failed.")).mockResolvedValue(cached.jiraIssues);
+    render(<AgentSessionsPanel client={fake.client} workspaceLabels={{}} />);
+    await screen.findByText("ActivityWatch · Connected");
+    await user.click(screen.getByRole("button", { name: "Refresh" }));
+    await screen.findByText("Jira connection failed.");
+    await user.click(screen.getByRole("button", { name: "Retry Jira tickets" }));
+    await waitFor(() => expect(fake.listActiveJiraIssues).toHaveBeenCalledTimes(2));
+    expect(fake.getActivityWatchDailyReview).toHaveBeenCalledOnce();
+    expect(screen.getByRole("combobox", { name: "Jira ticket for Review work" })).toHaveValue("WTS-42");
+  });
+
+  it("offers the agent brief as selectable text when clipboard access fails", async () => {
+    const user = userEvent.setup();
+    const cached = savedInterval(Date.now() - 60_000, Date.now(), "Copy this reviewed work");
+    saveActivityWatchReviewSnapshot({ schemaVersion: 1, dateKey: new Date().toLocaleDateString("en-CA"), builtAtUnixMs: Date.now(), review: cached.review, jiraIssues: cached.jiraIssues, assignments: {} });
+    const fake = fakeWorkspaceClient();
+    const clipboard = vi.spyOn(navigator.clipboard, "writeText").mockRejectedValue(new Error("Permission denied"));
+    try {
+      render(<AgentSessionsPanel client={fake.client} workspaceLabels={{}} />);
+      await user.click(screen.getByRole("button", { name: "Copy agent brief" }));
+      expect((await screen.findByRole("textbox", { name: "Agent brief to copy" }) as HTMLTextAreaElement).value).toContain("Copy this reviewed work");
+    } finally { clipboard.mockRestore(); }
+  });
+
+  it("shares a slow session read with manual refresh and later polls", async () => {
+    vi.useFakeTimers();
+    try {
+      const fake = fakeWorkspaceClient();
+      let resolvePoll!: (value: Awaited<ReturnType<typeof fake.client.listAgentSessions>>) => void;
+      fake.listAgentSessions
+        .mockResolvedValueOnce({ schemaVersion: 1, sessions: [] })
+        .mockImplementationOnce(() => new Promise((resolve) => { resolvePoll = resolve; }));
+      render(<AgentSessionsPanel client={fake.client} workspaceLabels={{}} />);
+      await act(async () => { await Promise.resolve(); });
+      fireEvent.mouseDown(screen.getByRole("tab", { name: "Agent activity" }), { button: 0, ctrlKey: false });
+      await act(async () => { vi.advanceTimersByTime(5_000); });
+      expect(fake.listAgentSessions).toHaveBeenCalledTimes(2);
+      fireEvent.click(screen.getByRole("button", { name: "Refresh sessions" }));
+      await act(async () => { vi.advanceTimersByTime(15_000); });
+      expect(fake.listAgentSessions).toHaveBeenCalledTimes(2);
+      await act(async () => resolvePoll({ schemaVersion: 1, sessions: [] }));
+      expect(screen.getByText("No agent sessions are visible.")).toBeVisible();
+      await act(async () => { vi.advanceTimersByTime(5_000); });
+      expect(fake.listAgentSessions).toHaveBeenCalledTimes(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("provides a manual refresh for the session list", async () => {
+    const user = userEvent.setup();
+    const fake = fakeWorkspaceClient();
+    render(<AgentSessionsPanel client={fake.client} workspaceLabels={{}} />);
+    await user.click(screen.getByRole("tab", { name: "Agent activity" }));
+    await user.click(await screen.findByRole("button", { name: "Refresh sessions" }));
+    expect(fake.listAgentSessions).toHaveBeenCalledTimes(2);
   });
 
   it("collates transcript-free sessions across workspaces and keeps attention distinct", async () => {

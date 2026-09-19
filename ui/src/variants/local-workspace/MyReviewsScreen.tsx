@@ -38,21 +38,20 @@ export function useGithubReviewInbox(client: WorkspaceClient) {
       requestInFlight = false;
       if (!current) return;
       if (github.status === "fulfilled") setInbox(github.value);
+      else setInbox((previous) => ({
+        schemaVersion: 1, reviews: previous?.reviews ?? [], fetchedAtUnixMs: previous?.fetchedAtUnixMs ?? null,
+        state: previous?.reviews.length ? "stale" : "error",
+        detail: github.reason instanceof Error ? github.reason.message : "WTS could not load GitHub reviews.",
+      }));
       if (gitlab.status === "fulfilled") {
         setGitlabInbox(reconcileGitlabReviewContinuity(gitlab.value));
-      }
-      if (github.status === "rejected" && gitlab.status === "rejected") {
-        const cause = github.reason;
-        setError(
-          cause instanceof Error && cause.message.trim()
-            ? cause.message
-            : "WTS could not load your code reviews.",
-        );
-        setState("error");
-      } else {
-        setError("");
-        setState("ready");
-      }
+      } else setGitlabInbox((previous) => ({
+        schemaVersion: 1, reviews: previous?.reviews ?? [], fetchedAtUnixMs: previous?.fetchedAtUnixMs ?? null,
+        state: previous?.reviews.length ? "stale" : "error",
+        detail: gitlab.reason instanceof Error ? gitlab.reason.message : "WTS could not load GitLab reviews.",
+      }));
+      setError("");
+      setState("ready");
     };
 
     void load(true);
@@ -209,8 +208,8 @@ export function MyReviewsScreen({
       ) : inbox?.state === "auth" && gitlabInbox?.state === "auth" ? (
         <section className={styles.state} role="status">
           <Glyph name="plug" size={22} />
-          <h2>Connect GitHub</h2>
-          <p>{inbox.detail}</p>
+          <h2>Connect GitHub and GitLab</h2>
+          <p>{inbox.detail} {gitlabInbox.detail}</p>
           <button onClick={onOpenIntegrations} type="button">
             Open integrations
           </button>
@@ -218,9 +217,10 @@ export function MyReviewsScreen({
       ) : inbox?.state === "error" && gitlabInbox?.state === "error" ? (
         <section className={styles.state} role="alert">
           <Glyph name="warning" size={22} />
-          <h2>GitHub reviews are unavailable</h2>
-          <p>{inbox.detail}</p>
+          <h2>Review providers are unavailable</h2>
+          <p>{inbox.detail} {gitlabInbox.detail}</p>
           <button onClick={onRefresh} type="button">Try again</button>
+          <button onClick={onOpenIntegrations} type="button">Open integrations</button>
         </section>
       ) : (
         <>
@@ -242,16 +242,17 @@ export function MyReviewsScreen({
               </span>
             </aside>
           )}
-          {(gitlabInbox?.state === "auth" ||
-            gitlabInbox?.state === "error") && (
-            <aside className={styles.notice} data-tone="warning" role="status">
+          {([{ name: "GitHub", inbox }, { name: "GitLab", inbox: gitlabInbox }] as const).map(({ name, inbox: provider }) => (provider?.state === "auth" || provider?.state === "error") && (
+            <aside key={name} className={styles.notice} data-tone="warning" role={provider.state === "error" ? "alert" : "status"}>
               <Glyph name="warning" size={16} />
               <span>
-                <b>GitLab reviews are unavailable.</b>
-                {gitlabInbox.detail}
+                <b>{name} reviews are unavailable.</b>
+                {provider.detail}
               </span>
+              <button onClick={provider.state === "auth" ? onOpenIntegrations : onRefresh} type="button">{provider.state === "auth" ? `Connect ${name}` : `Refresh ${name} reviews`}</button>
+              {provider.state === "error" && <button onClick={onOpenIntegrations} type="button">Open integrations</button>}
             </aside>
-          )}
+          ))}
           {openError && (
             <aside className={styles.notice} data-tone="error" role="alert">
               <Glyph name="warning" size={16} />
@@ -261,8 +262,8 @@ export function MyReviewsScreen({
           {!assignedReviews.length ? (
             <section className={styles.state}>
               <span className={styles.done}><Glyph name="check" size={22} /></span>
-              <h2>No reviews to track</h2>
-              <p>GitHub and GitLab found no review requests or approved merge requests.</p>
+              <h2>{inbox?.state === "fresh" && gitlabInbox?.state === "fresh" ? "No reviews to track" : "Some reviews are unavailable"}</h2>
+              <p>{inbox?.state === "fresh" && gitlabInbox?.state === "fresh" ? "GitHub and GitLab found no review requests or approved merge requests." : "Connect or refresh the provider above to check its reviews."}</p>
             </section>
           ) : (
             <section

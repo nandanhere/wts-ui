@@ -1,6 +1,6 @@
 import * as Dialog from "@radix-ui/react-dialog";
 import * as Tabs from "@radix-ui/react-tabs";
-import { useState, type ReactNode } from "react";
+import { Fragment, useEffect, useRef, useState, type ReactNode } from "react";
 import type {
   IntegrationId,
   IntegrationSnapshot,
@@ -19,6 +19,7 @@ import {
   useWorkspaceCardClickPreference,
 } from "./workspaceCardPreference";
 import styles from "./SetupSheet.module.css";
+import { useDialogFocusReturn } from "../../components/useDialogFocusReturn";
 import { GitlabIntegrationCard } from "./GitlabIntegrationCard";
 import {
   AppUpdateScreen,
@@ -419,7 +420,7 @@ function nextAction(
     (integration.setup === "needsAuth" || integration.setup === "unverified")
   ) {
     if (definition.id === "jiraMcp") {
-      return "Verify the Jira MCP handshake before importing an issue.";
+      return "Select Connect Jira. If Podman is unavailable, WTS can use uv to download the Jira adapter.";
     }
     if (definition.id === "openProject") {
       return "Verify the configured OpenProject API before importing a work package.";
@@ -485,6 +486,15 @@ function IntegrationRow({
     "idle" | "checking" | "ready" | "error"
   >("idle");
   const [adapterMessage, setAdapterMessage] = useState("");
+  const adapterGeneration = useRef(0);
+  useEffect(() => {
+    adapterGeneration.current += 1;
+    setAdapterCheck("idle");
+    setAdapterMessage("");
+    return () => {
+      adapterGeneration.current += 1;
+    };
+  }, [integration, snapshotCheckedAt]);
   const tone = verificationTone(integration, loading);
   const consequences =
     integration?.blockingFor.map((capability) => blockingLabels[capability]) ??
@@ -501,16 +511,19 @@ function IntegrationRow({
       Boolean(onVerifyOpenProject));
 
   const verifyAdapter = async () => {
+    const requestGeneration = adapterGeneration.current;
     setAdapterCheck("checking");
     setAdapterMessage("");
     try {
       if (definition.id === "jiraMcp" && onVerifyJira) {
         const result = await onVerifyJira();
+        if (requestGeneration !== adapterGeneration.current) return;
         setAdapterMessage(
           `${result.serverName} ${result.serverVersion} exposed ${result.issueTool}.`,
         );
       } else if (definition.id === "openProject" && onVerifyOpenProject) {
         const result = await onVerifyOpenProject();
+        if (requestGeneration !== adapterGeneration.current) return;
         setAdapterMessage(
           `${result.instanceName} answered OpenProject ${result.apiVersion} as ${result.authenticatedUser}.`,
         );
@@ -519,6 +532,7 @@ function IntegrationRow({
       }
       setAdapterCheck("ready");
     } catch (error) {
+      if (requestGeneration !== adapterGeneration.current) return;
       setAdapterMessage(
         error instanceof Error
           ? error.message
@@ -584,15 +598,19 @@ function IntegrationRow({
           adapterActionAvailable && (
             <button
               className={styles.adapterVerifyButton}
-              disabled={adapterCheck === "checking"}
+              disabled={adapterCheck === "checking" || adapterCheck === "ready"}
               onClick={() => void verifyAdapter()}
               type="button"
             >
               {adapterCheck === "checking"
                 ? "Connecting…"
                 : adapterCheck === "ready"
-                  ? "Verified"
-                  : "Verify connection"}
+                  ? "Connected"
+                  : adapterCheck === "error"
+                    ? "Try again"
+                    : definition.id === "jiraMcp"
+                      ? "Connect Jira"
+                      : "Verify connection"}
             </button>
           )}
         {adapterMessage && (
@@ -664,6 +682,108 @@ function IntegrationRow({
               "Last check",
             )}
           </time>
+        </div>
+      </details>
+    </li>
+  );
+}
+
+function gitSigningNextAction(
+  signing: SetupSnapshot["gitSigning"],
+  loading: boolean,
+) {
+  if (loading && !signing) return "Wait for the current check to finish.";
+  switch (signing?.diagnosticCode) {
+    case "gitUnavailable":
+      return "Install Git, then run checks again.";
+    case "commitSigningDisabled":
+      return "Enable global Git commit signing, then run checks again.";
+    case "signingKeyNotConfigured":
+      return "Configure a global Git signing key, then run checks again.";
+    case "gpgExecutableMissing":
+      return "Install GPG, then run checks again.";
+    case "privateKeyUnavailable":
+      return "Import the configured private key, then run checks again.";
+    default:
+      return signing?.ready
+        ? "No action needed."
+        : "Run checks to inspect Git signing.";
+  }
+}
+
+function GitSigningRow({
+  signing,
+  loading,
+  snapshotCheckedAt,
+}: {
+  signing: SetupSnapshot["gitSigning"];
+  loading: boolean;
+  snapshotCheckedAt?: number;
+}) {
+  const tone: VerificationTone = signing?.ready
+    ? "verified"
+    : loading && !signing
+      ? "checking"
+      : signing
+        ? "setup"
+        : "unchecked";
+
+  return (
+    <li
+      className={styles.integrationRow}
+      data-ui="environment.git-signing"
+      data-ui-label="Git signing check"
+    >
+      <div className={styles.integrationLead}>
+        <span className={styles.integrationMark} aria-hidden="true">GP</span>
+        <span className={styles.integrationIdentity}>
+          <span><b>GPG commit signing</b></span>
+          <small>Global Git OpenPGP signing readiness</small>
+        </span>
+        <span className={styles.statusBadge} data-tone={tone}>
+          <i />
+          {signing?.ready
+            ? "Ready"
+            : loading && !signing
+              ? "Checking"
+              : signing
+                ? "Needs setup"
+                : "Not checked"}
+        </span>
+      </div>
+      <div className={styles.integrationOutcome}>
+        <span data-clear={signing?.ready || undefined}>
+          <Icon name={signing?.ready ? "check" : "warning"} size={13} />
+          {signing?.detail ?? "Git signing has not been checked."}
+        </span>
+        <small><b>Next:</b> {gitSigningNextAction(signing, loading)}</small>
+      </div>
+      <details className={styles.integrationDetails}>
+        <summary>
+          <span>Verification details</span>
+          <small>{signing?.ready ? "All checks passed" : "Setup is incomplete"}</small>
+        </summary>
+        <dl className={styles.integrationFacts}>
+          <div>
+            <dt>Commit signing</dt>
+            <dd>{signing?.commitSigningEnabled ? "Enabled" : "Disabled"}</dd>
+          </div>
+          <div>
+            <dt>Signing key</dt>
+            <dd>{signing?.signingKeyConfigured ? "Configured" : "Not configured"}</dd>
+          </div>
+          <div>
+            <dt>GPG</dt>
+            <dd>{signing?.gpgAvailable ? "Available" : "Unavailable"}</dd>
+          </div>
+          <div>
+            <dt>Private key</dt>
+            <dd>{signing?.privateKeyAvailable ? "Available" : "Unavailable"}</dd>
+          </div>
+        </dl>
+        <div className={styles.detailsFooter}>
+          <span>{signing?.diagnosticCode ?? "No signing problem found"}</span>
+          <time>{formatCheckedAt(snapshotCheckedAt, "Last check")}</time>
         </div>
       </details>
     </li>
@@ -791,15 +911,23 @@ function IntegrationsPanel({
               />
             )}
             {group.ids.map((id) => (
-              <IntegrationRow
-                definition={integrationDefinitions[id]}
-                integration={integrations.get(id)}
-                key={id}
-                loading={loading}
-                snapshotCheckedAt={snapshot?.checkedAtUnixMs}
-                onVerifyJira={onVerifyJira}
-                onVerifyOpenProject={onVerifyOpenProject}
-              />
+              <Fragment key={id}>
+                <IntegrationRow
+                  definition={integrationDefinitions[id]}
+                  integration={integrations.get(id)}
+                  loading={loading}
+                  snapshotCheckedAt={snapshot?.checkedAtUnixMs}
+                  onVerifyJira={onVerifyJira}
+                  onVerifyOpenProject={onVerifyOpenProject}
+                />
+                {id === "git" && (
+                  <GitSigningRow
+                    loading={loading}
+                    signing={snapshot?.gitSigning}
+                    snapshotCheckedAt={snapshot?.checkedAtUnixMs}
+                  />
+                )}
+              </Fragment>
             ))}
           </ul>
         </section>
@@ -1255,6 +1383,7 @@ export function SetupSheet({
   gitlabWorkspaceId,
   appUpdate,
 }: SetupSheetProps) {
+  const dialogFocusReturn = useDialogFocusReturn();
   const [activeSection, setActiveSection] =
     useState<PreferenceSection>("integrations");
 
@@ -1305,6 +1434,7 @@ export function SetupSheet({
       <Dialog.Portal>
         <Dialog.Overlay className={styles.overlay} />
         <Dialog.Content
+          {...dialogFocusReturn}
           aria-describedby="environment-integrations-description"
           aria-modal="true"
           className={styles.modal}

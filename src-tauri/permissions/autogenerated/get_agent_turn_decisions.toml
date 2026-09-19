@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-get-agent-turn-decisions"
+description = "Enables the get_agent_turn_decisions command without any pre-configured scope."
+commands.allow = ["get_agent_turn_decisions"]
+
+[[permission]]
+identifier = "deny-get-agent-turn-decisions"
+description = "Denies the get_agent_turn_decisions command without any pre-configured scope."
+commands.deny = ["get_agent_turn_decisions"]

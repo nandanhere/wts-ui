@@ -5,6 +5,7 @@ import {
   useState,
 } from "react";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
+import { WorkspaceClientError } from "../../lib/wtsClient";
 import type {
   JiraCreateProposal,
   WorkspaceClient,
@@ -24,6 +25,7 @@ export interface WorkspaceWorkItemsPanelProps {
   workspaceKey: string;
   deliveryLabel?: string;
   onNotice?: (message: string, kind?: "info" | "error") => void;
+  onOpenIntegrations?: () => void;
 }
 
 function messageFor(error: unknown, fallback: string) {
@@ -122,6 +124,7 @@ export function WorkspaceWorkItemsPanel({
   workspaceKey,
   deliveryLabel,
   onNotice,
+  onOpenIntegrations,
 }: WorkspaceWorkItemsPanelProps) {
   const [loadState, setLoadState] = useState<LoadState>("loading");
   const [loadError, setLoadError] = useState("");
@@ -134,6 +137,7 @@ export function WorkspaceWorkItemsPanel({
   const [previewError, setPreviewError] = useState("");
   const [linkState, setLinkState] = useState<ActionState>("idle");
   const [linkError, setLinkError] = useState("");
+  const [linkErrorCode, setLinkErrorCode] = useState("");
   const [unlinkingId, setUnlinkingId] = useState<string | null>(null);
   const [unlinkChecked, setUnlinkChecked] = useState(false);
   const [unlinkState, setUnlinkState] = useState<ActionState>("idle");
@@ -143,6 +147,7 @@ export function WorkspaceWorkItemsPanel({
   const [proposalState, setProposalState] = useState<ActionState>("idle");
   const [proposalError, setProposalError] = useState("");
   const [openError, setOpenError] = useState("");
+  const [openErrorSource, setOpenErrorSource] = useState<"linked" | "preview">("linked");
   const inputRef = useRef<HTMLInputElement>(null);
   const listGeneration = useRef(0);
   const proposalGeneration = useRef(0);
@@ -176,6 +181,7 @@ export function WorkspaceWorkItemsPanel({
     setPreviewError("");
     setLinkState("idle");
     setLinkError("");
+    setLinkErrorCode("");
     setUnlinkingId(null);
     setUnlinkChecked(false);
     setUnlinkState("idle");
@@ -222,6 +228,10 @@ export function WorkspaceWorkItemsPanel({
     setPreviewState("working");
     setPreviewError("");
     setPreview(null);
+    setLinkError("");
+    setLinkErrorCode("");
+    setLinkState("idle");
+    linkIdempotencyKey.current = null;
     try {
       const result = await client.previewWorkspaceJiraLink(workspaceId, issueKey, role);
       if (
@@ -271,6 +281,7 @@ export function WorkspaceWorkItemsPanel({
     } catch (error) {
       if (workspaceRequestGeneration !== workspaceGeneration.current) return;
       setLinkError(messageFor(error, "WTS could not link this Jira issue."));
+      setLinkErrorCode(error instanceof WorkspaceClientError ? error.code : "");
       setLinkState("error");
     }
   };
@@ -321,10 +332,12 @@ export function WorkspaceWorkItemsPanel({
 
   const copyProposal = async () => {
     if (!proposal) return;
+    setProposalError("");
     try {
       await navigator.clipboard.writeText(`${proposal.summary}\n\n${proposal.description}`);
       onNotice?.("Jira draft copied");
     } catch {
+      setProposalError("Clipboard access failed. Select and copy the summary and description below.");
       onNotice?.("The Jira proposal was not copied", "error");
     }
   };
@@ -332,6 +345,7 @@ export function WorkspaceWorkItemsPanel({
   const openLinkedJira = async (link: WorkspaceWorkItemLink) => {
     const workspaceRequestGeneration = workspaceGeneration.current;
     setOpenError("");
+    setOpenErrorSource("linked");
     try {
       await client.openWorkspaceWorkItem(workspaceId, link.linkId, link.revision);
       if (workspaceRequestGeneration !== workspaceGeneration.current) return;
@@ -344,6 +358,7 @@ export function WorkspaceWorkItemsPanel({
   const openPreviewJira = async (item: WorkspaceWorkItemLinkPreview) => {
     const workspaceRequestGeneration = workspaceGeneration.current;
     setOpenError("");
+    setOpenErrorSource("preview");
     try {
       await client.openWorkspaceJiraPreview(
         workspaceId,
@@ -489,7 +504,7 @@ export function WorkspaceWorkItemsPanel({
                     />
                     I understand that this removes only the link.
                   </label>
-                  {unlinkError ? <p role="alert">{unlinkError}</p> : null}
+                  {unlinkError ? <div role="alert"><p>{unlinkError}</p><button onClick={() => { setUnlinkingId(null); setUnlinkChecked(false); void reloadLinks(); }} type="button">Refresh linked issues</button></div> : null}
                   <div className={styles.actionRow}>
                     <button
                       className={styles.dangerButton}
@@ -518,7 +533,13 @@ export function WorkspaceWorkItemsPanel({
       ) : hasNoLinkedItems ? (
         <p className={styles.empty}>No Jira issue is linked to this workspace.</p>
       ) : null}
-      {openError ? <p className={styles.errorText} role="alert">{openError}</p> : null}
+      {openError ? <div className={styles.errorText} role="alert">
+        <p>{openError}</p>
+        <button type="button" onClick={() => { setOpenError(""); if (openErrorSource === "preview") void requestPreview(); else void reloadLinks(); }}>
+          {openErrorSource === "preview" ? "Refresh Jira preview" : "Refresh linked issues"}
+        </button>
+        {onOpenIntegrations && <button type="button" onClick={onOpenIntegrations}>Check Jira connection</button>}
+      </div> : null}
 
       {adding ? (
         <div
@@ -587,7 +608,7 @@ export function WorkspaceWorkItemsPanel({
           >
             {previewState === "working" ? "Loading preview…" : "Preview Jira issue"}
           </button>
-          {previewError ? <p className={styles.errorText} role="alert">{previewError}</p> : null}
+          {previewError ? <div className={styles.errorText} role="alert"><p>{previewError}</p>{onOpenIntegrations && <button onClick={onOpenIntegrations} type="button">Check Jira connection</button>}</div> : null}
 
           {preview ? (
             <article
@@ -620,12 +641,15 @@ export function WorkspaceWorkItemsPanel({
               {preview.snapshot.summary ? <h5>{preview.snapshot.summary}</h5> : null}
               {preview.snapshot.status ? <p className={styles.status}>{preview.snapshot.status}</p> : null}
               <pre>{preview.snapshot.content}</pre>
-              {linkError ? <p className={styles.errorText} role="alert">{linkError}</p> : null}
+              {linkError ? <div className={styles.errorText} role="alert"><p>{linkError}</p>
+                {linkErrorCode === "stale_work_item_link_preview" || linkErrorCode === "work_item_link_idempotency_conflict" ? <button onClick={() => void requestPreview()} type="button">Refresh Jira preview</button> : <button onClick={() => void reloadLinks()} type="button">Refresh linked issues</button>}
+                {onOpenIntegrations && <button onClick={onOpenIntegrations} type="button">Check Jira connection</button>}
+              </div> : null}
               <div className={styles.actionRow}>
                 <button
                   className={styles.primaryButton}
                   type="button"
-                  disabled={linkState === "working"}
+                  disabled={linkState === "working" || ["stale_work_item_link_preview", "work_item_link_idempotency_conflict", "work_item_link_exists", "primary_work_item_link_exists"].includes(linkErrorCode)}
                   onClick={() => void confirmLink()}
                 >
                   {linkState === "working" ? "Linking…" : "Link Jira issue"}

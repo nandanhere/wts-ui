@@ -241,6 +241,20 @@ files. WTS passes the keys to a managed agent as local context. A later Jira
 import can use the workspace repository set as recommendation evidence. WTS
 does not add or remove a repository from this observation.
 
+Plans and Kanban also reads subfolders within the planning home. The file list
+shows a folder tree and searches complete relative paths. Files can share a
+name in separate folders. For example, `payments/PLAN.md` and
+`refunds/PLAN.md` remain separate documents.
+
+Relative Markdown links open known planning files in the same viewer. For
+example, `[Board](../../kanban/payments/KANBAN.md)` opens that board from
+`plans/payments/PLAN.md`. WTS retains unsaved edits and feedback before you
+open another file.
+
+WTS reads Markdown, text, CSV, and Mermaid files through eight folder levels.
+The scan checks at most 4,096 entries and includes up to 100 files beyond the
+starter files. Each file can contain up to 256 KiB. WTS skips symbolic links.
+
 ### Review service and port proposals
 
 The **Services** step is a read-only analysis followed by an explicit

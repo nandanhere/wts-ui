@@ -1,3 +1,7 @@
+import { planningDocumentDisplayPath, resolvePlanningDocumentLink } from "./planningDocumentPaths";
+import { isNativePreviewReadOnlyCode, nativePreviewAllowsCommand, NATIVE_PREVIEW_READ_ONLY_MESSAGE } from "../../lib/nativePreview";
+import { RecoveryCopyButton } from "./RecoveryCopyButton";
+import { observePlanningSave, planningCacheFor, planningDocumentCacheKey, planningViewFor, publishPlanningSave, rememberPlanningView, type PlanningView } from "./planningWorkspaceCache";
 import {
   isValidElement,
   memo,
@@ -23,6 +27,7 @@ import ReactMarkdown, {
   type Components,
 } from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { remarkImportedJiraDescription } from "./remarkImportedJiraDescription";
 import { useTheme } from "../../theme";
 import {
   type FixedWorkspacePlanningDocumentId,
@@ -232,6 +237,34 @@ function documentLabel(
       document.documentId as FixedWorkspacePlanningDocumentId
     ] ?? displayFileName(document.fileName)
   );
+}
+
+function documentPath(document: Pick<WorkspacePlanningDocumentDescriptor, "documentId" | "fileName">) {
+  return DOCUMENT_LABELS[document.documentId as FixedWorkspacePlanningDocumentId] ?? planningDocumentDisplayPath(document.fileName);
+}
+
+function parentFolders(document: WorkspacePlanningDocumentDescriptor) {
+  const parts = documentPath(document).split("/");
+  return parts.slice(0, -1).map((_, index) => parts.slice(0, index + 1).join("/"));
+}
+
+interface PlanningFolder {
+  path: string;
+  name: string;
+  files: WorkspacePlanningDocumentDescriptor[];
+  folders: Map<string, PlanningFolder>;
+}
+function planningFolders(documents: WorkspacePlanningDocumentDescriptor[]): PlanningFolder {
+  const root: PlanningFolder = { path: "", name: "", files: [], folders: new Map() };
+  for (const document of documents) {
+    let folder = root;
+    for (const path of parentFolders(document)) {
+      if (!folder.folders.has(path)) folder.folders.set(path, { path, name: path.split("/").at(-1)!, files: [], folders: new Map() });
+      folder = folder.folders.get(path)!;
+    }
+    folder.files.push(document);
+  }
+  return root;
 }
 
 function documentDescription(document: WorkspacePlanningDocumentDescriptor) {
@@ -533,11 +566,28 @@ const planningMarkdownComponents: Components = {
 
 interface PlanningPreviewProps {
   document: WorkspacePlanningDocument;
+  descriptor: WorkspacePlanningDocumentDescriptor;
+  documents: WorkspacePlanningDocumentDescriptor[];
+  onOpenDocument: (documentId: WorkspacePlanningDocumentId) => boolean;
 }
 
 const PlanningPreview = memo(function PlanningPreview({
-  document,
+  document, descriptor, documents, onOpenDocument,
 }: PlanningPreviewProps) {
+  const components = useMemo<Components>(() => ({ ...planningMarkdownComponents,
+    a: ({ children, href }) => {
+      const target = href ? resolvePlanningDocumentLink(documents, descriptor, href) : undefined;
+      if (target) return (
+        <button className={styles.documentLink} onClick={() => onOpenDocument(target.documentId)} type="button">
+          {children}
+        </button>
+      );
+      const safeHref = href ? safeMarkdownUrl(href) : undefined;
+      if (safeHref?.startsWith("#")) return <a href={safeHref}>{children}</a>;
+      return safeHref && /^https?:/i.test(safeHref)
+        ? <a href={safeHref} rel="noreferrer" target="_blank">{children}</a> : <span>{children}</span>;
+    },
+  }), [descriptor, documents, onOpenDocument]);
   const label = documentLabel(document);
   if (/\.(?:mmd|mermaid)$/i.test(document.fileName)) {
     return (
@@ -570,8 +620,8 @@ const PlanningPreview = memo(function PlanningPreview({
       data-history-swipe-block
     >
       <ReactMarkdown
-        components={planningMarkdownComponents}
-        remarkPlugins={[remarkGfm]}
+        components={components}
+        remarkPlugins={[remarkGfm, remarkImportedJiraDescription]}
         skipHtml
         urlTransform={safeMarkdownUrl}
       >
@@ -794,49 +844,74 @@ export interface PlanningDocumentsPanelProps {
   onCreatePlanningHome?: () => void;
 }
 
-export function PlanningDocumentsPanel({
+export function PlanningDocumentsPanel(props: PlanningDocumentsPanelProps) {
+  const cache = planningCacheFor(props.client);
+  return <PlanningDocumentsPanelContent key={`${cache.id}:${props.workspaceId}`} {...props} />;
+}
+
+function PlanningDocumentsPanelContent({
   client,
   workspaceId,
   workspaceKey,
   onNotice,
   onCreatePlanningHome,
 }: PlanningDocumentsPanelProps) {
+  const cache = planningCacheFor(client);
+  const [initialView] = useState(() => planningViewFor(client, workspaceId));
+  const initialDocuments = cache.lists.get(workspaceId) ??
+    (initialView?.document && (initialView.editing || initialView.feedbackDraft.trim())
+      ? [{ documentId: initialView.document.documentId, fileName: initialView.document.fileName }]
+      : undefined);
+  const hasRetainedDraft = Boolean(initialView?.editing || initialView?.feedbackDraft.trim());
+  const initialSelectedId = hasRetainedDraft || initialDocuments?.some((item) => item.documentId === initialView?.selectedId)
+    ? initialView?.selectedId ?? null
+    : initialDocuments?.[0]?.documentId ?? null;
+  const initialDocument = hasRetainedDraft ? initialView?.document ?? null
+    : initialSelectedId ? cache.documents.get(planningDocumentCacheKey(workspaceId, initialSelectedId)) ?? null : null;
   const [documents, setDocuments] = useState<
     WorkspacePlanningDocumentDescriptor[]
-  >([]);
-  const [listState, setListState] = useState<RequestState>("loading");
+  >(initialDocuments ?? []);
+  const [listState, setListState] = useState<RequestState>(initialDocuments ? "ready" : "loading");
   const [listError, setListError] = useState("");
   const [listErrorCode, setListErrorCode] = useState("");
   const [listRevision, setListRevision] = useState(0);
-  const [documentQuery, setDocumentQuery] = useState("");
+  const [documentQuery, setDocumentQuery] = useState(initialView?.query ?? "");
   const [documentFilter, setDocumentFilter] =
-    useState<DocumentFilter>("current");
+    useState<DocumentFilter>(initialView?.filter ?? "current");
   const [oldDocumentIds, setOldDocumentIds] = useState(() =>
     oldDocumentIdsForWorkspace(workspaceId),
   );
+  const [collapsedFolders, setCollapsedFolders] = useState(() => new Set(initialView?.collapsedFolders ?? []));
   const [selectedDocumentIds, setSelectedDocumentIds] = useState<
     Set<WorkspacePlanningDocumentId>
   >(new Set());
   const [selectedId, setSelectedId] =
-    useState<WorkspacePlanningDocumentId | null>(null);
+    useState<WorkspacePlanningDocumentId | null>(initialSelectedId);
   const [document, setDocument] =
-    useState<WorkspacePlanningDocument | null>(null);
-  const [documentState, setDocumentState] = useState<RequestState>("loading");
+    useState<WorkspacePlanningDocument | null>(initialDocument);
+  const [documentState, setDocumentState] = useState<RequestState>(initialDocument ? "ready" : "loading");
   const [documentError, setDocumentError] = useState("");
+  const [documentErrorCode, setDocumentErrorCode] = useState("");
+  const [editorOpenState, setEditorOpenState] = useState<"idle" | "opening" | "error">("idle");
+  const [editorOpenError, setEditorOpenError] = useState("");
+  const editorOpenGeneration = useRef(0);
+  useEffect(() => () => { editorOpenGeneration.current += 1; }, []);
   const [documentRevision, setDocumentRevision] = useState(0);
-  const [documentView, setDocumentView] = useState<DocumentView>("preview");
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState("");
+  const [documentView, setDocumentView] = useState<DocumentView>(initialView?.documentView ?? "preview");
+  const [editing, setEditing] = useState(initialView?.editing ?? false);
+  const [draft, setDraft] = useState(initialView?.editing ? initialView.draft : initialDocument?.contents ?? "");
   const [saveState, setSaveState] = useState<SaveState>("idle");
   const [saveError, setSaveError] = useState("");
+  const [saveErrorCode, setSaveErrorCode] = useState("");
+  const previewReadOnly = !nativePreviewAllowsCommand("update_workspace_planning_document") || isNativePreviewReadOnlyCode(saveErrorCode);
   const [selectionMessage, setSelectionMessage] = useState("");
-  const [threads, setThreads] = useState<WorkspaceReviewThread[]>([]);
+  const [threads, setThreads] = useState<WorkspaceReviewThread[]>(cache.threads.get(workspaceId) ?? []);
   const [feedbackState, setFeedbackState] =
-    useState<RequestState>("loading");
+    useState<RequestState>(cache.threads.has(workspaceId) ? "ready" : "loading");
   const [feedbackError, setFeedbackError] = useState("");
   const [feedbackRevision, setFeedbackRevision] = useState(0);
-  const [selectedLine, setSelectedLine] = useState<number | null>(null);
-  const [feedbackDraft, setFeedbackDraft] = useState("");
+  const [selectedLine, setSelectedLine] = useState<number | null>(initialView?.selectedLine ?? null);
+  const [feedbackDraft, setFeedbackDraft] = useState(initialView?.feedbackDraft ?? "");
   const [createState, setCreateState] =
     useState<FeedbackCreateState>("idle");
   const [createError, setCreateError] = useState("");
@@ -847,12 +922,14 @@ export function PlanningDocumentsPanel({
   const documentRequestRef = useRef(0);
   const feedbackRequestRef = useRef(0);
   const feedbackContextRef = useRef(0);
+  const feedbackCreatePendingRef = useRef(false);
+  const [feedbackCreatePending, setFeedbackCreatePending] = useState(false);
   const documentButtonsRef = useRef(
     new Map<WorkspacePlanningDocumentId, HTMLButtonElement>(),
   );
 
   const dirty = Boolean(document && draft !== document.contents);
-  const visibleDocuments = useMemo(() => {
+  const filteredDocuments = useMemo(() => {
     const query = documentQuery.trim().toLocaleLowerCase();
     return documents.filter((item) => {
       const old = oldDocumentIds.has(item.documentId);
@@ -860,11 +937,24 @@ export function PlanningDocumentsPanel({
       if (documentFilter === "old" && !old) return false;
       return (
         !query ||
-        documentLabel(item).toLocaleLowerCase().includes(query) ||
+        documentPath(item).toLocaleLowerCase().includes(query) ||
         documentDescription(item).toLocaleLowerCase().includes(query)
       );
     });
   }, [documentFilter, documentQuery, documents, oldDocumentIds]);
+  const folderTree = useMemo(() => planningFolders(filteredDocuments), [filteredDocuments]);
+  const searchExpanded = Boolean(documentQuery.trim());
+  const visibleDocuments = useMemo(() => {
+    const visible: WorkspacePlanningDocumentDescriptor[] = [];
+    const visit = (folder: PlanningFolder) => {
+      visible.push(...folder.files);
+      for (const child of folder.folders.values()) {
+        if (searchExpanded || !collapsedFolders.has(child.path)) visit(child);
+      }
+    };
+    visit(folderTree);
+    return visible;
+  }, [folderTree, collapsedFolders, searchExpanded]);
   const selectedDocuments = useMemo(
     () => documents.filter((item) => selectedDocumentIds.has(item.documentId)),
     [documents, selectedDocumentIds],
@@ -887,140 +977,162 @@ export function PlanningDocumentsPanel({
     (item) => !oldDocumentIds.has(item.documentId),
   );
 
+  const editStateRef = useRef({ editing, document, draft, feedbackDraft });
+  editStateRef.current = { editing, document, draft, feedbackDraft };
+
+  const currentView: PlanningView = {
+    selectedId, document, documentView, editing, draft,
+    query: documentQuery, filter: documentFilter, feedbackDraft, selectedLine, collapsedFolders: [...collapsedFolders],
+  };
+  const retainDraft = (next: Partial<PlanningView>): boolean => {
+    if (rememberPlanningView(client, workspaceId, { ...currentView, ...next })) return true;
+    setSelectionMessage("WTS has 24 unfinished planning drafts. Save or clear one before you edit another workspace.");
+    return false;
+  };
+
   useEffect(() => {
+    rememberPlanningView(client, workspaceId, currentView);
+  });
+
+  useEffect(() => () => {
+    documentRequestRef.current += 1;
     feedbackRequestRef.current += 1;
     feedbackContextRef.current += 1;
-    setThreads([]);
-    setFeedbackState("loading");
-    setFeedbackError("");
-    setSelectedLine(null);
-    setFeedbackDraft("");
-    setCreateState("idle");
-    setCreateError("");
-    setResolvingThreadId(null);
-    setResolveError("");
-  }, [client, workspaceId]);
+  }, []);
+
+  useEffect(() => {
+    if (!selectedId) return;
+    return observePlanningSave(client, workspaceId, selectedId, (event) => {
+      if (event.state === "saving") {
+        setSaveState("saving");
+        setSaveError("");
+      } else if (event.state === "saved") {
+        const current = editStateRef.current;
+        if (current.document?.documentId !== event.document.documentId || current.document.sha256 !== event.previousSha256) {
+          setSaveState("idle");
+          return;
+        }
+        const hasNewerDraft = current.editing && current.draft !== event.submittedContents;
+        setDocument(event.document);
+        if (!hasNewerDraft) {
+          setDraft(event.document.contents);
+          setEditing(false);
+          setDocumentView("preview");
+        }
+        setSaveState("idle");
+        setSelectedLine(null);
+        feedbackContextRef.current += 1;
+        setFeedbackRevision((revision) => revision + 1);
+        onNotice?.(`${documentLabel(event.document)} saved`);
+      } else {
+        setSaveErrorCode(event.error instanceof WorkspaceClientError ? event.error.code : "");
+        const isConflict = event.error instanceof WorkspaceClientError && event.error.code === "planning_document_conflict";
+        setSaveState(isConflict ? "conflict" : "error");
+        setSaveError(isConflict
+          ? "This file changed after you opened it. Reload the latest version before you edit it again."
+          : errorMessage(event.error, "The planning file could not be saved."));
+        onNotice?.("The planning file was not saved", "error");
+      }
+    });
+  }, [client, onNotice, selectedId, workspaceId]);
 
   useEffect(() => {
     let current = true;
-    documentRequestRef.current += 1;
-    setDocuments([]);
-    setSelectedId(null);
-    setDocument(null);
-    setDocumentView("preview");
-    setEditing(false);
-    setDraft("");
-    setSaveState("idle");
-    setListState("loading");
+    setListState(cache.lists.has(workspaceId) || editStateRef.current.editing || editStateRef.current.feedbackDraft.trim() ? "ready" : "loading");
     setListError("");
     setListErrorCode("");
-    setDocumentQuery("");
-    setDocumentFilter("current");
-    setSelectedDocumentIds(new Set());
-    const storedOldDocumentIds = oldDocumentIdsForWorkspace(workspaceId);
-    setOldDocumentIds(storedOldDocumentIds);
-
-    void client
-      .listWorkspacePlanningDocuments(workspaceId)
-      .then((result) => {
-        if (!current) return;
-        if (result.workspaceId !== workspaceId) {
-          throw new Error("WTS returned planning files for another workspace.");
+    void cache.lists.load(workspaceId, async () => {
+      const result = await client.listWorkspacePlanningDocuments(workspaceId);
+      if (result.workspaceId !== workspaceId) {
+        throw new Error("WTS returned planning files for another workspace.");
+      }
+      const nextDocuments = sortedDocuments(result.documents);
+      for (const previous of cache.lists.get(workspaceId) ?? []) {
+        if (!nextDocuments.some((item) => item.documentId === previous.documentId)) {
+          cache.documents.delete(planningDocumentCacheKey(workspaceId, previous.documentId));
         }
-        const nextDocuments = sortedDocuments(result.documents);
-        setDocuments(nextDocuments);
-        setSelectedId(
-          nextDocuments.find(
-            (item) => !storedOldDocumentIds.has(item.documentId),
-          )?.documentId ?? nextDocuments[0]?.documentId ?? null,
-        );
-        setListState("ready");
-      })
-      .catch((error) => {
-        if (!current) return;
-        setListErrorCode(
-          error instanceof WorkspaceClientError ? error.code : "",
-        );
-        setListError(
-          errorMessage(error, "The planning files could not be loaded."),
-        );
-        setListState("error");
+      }
+      return nextDocuments;
+    }).then((nextDocuments) => {
+      if (!current) return;
+      setDocuments(nextDocuments);
+      setSelectedId((selected) => {
+        if (nextDocuments.some((item) => item.documentId === selected)) return selected;
+        // Keep an unfinished edit if its file was removed outside WTS.
+        const edit = editStateRef.current;
+        if ((edit.editing || edit.feedbackDraft.trim()) && edit.document?.documentId === selected) return selected;
+        return nextDocuments.find((item) => !oldDocumentIdsForWorkspace(workspaceId).has(item.documentId))?.documentId
+          ?? nextDocuments[0]?.documentId ?? null;
       });
-
-    return () => {
-      current = false;
-    };
-  }, [client, listRevision, workspaceId]);
+      setListState("ready");
+    }).catch((error: unknown) => {
+      if (!current) return;
+      setListErrorCode(error instanceof WorkspaceClientError ? error.code : "");
+      setListError(errorMessage(error, "The planning files could not be loaded."));
+      setListState(cache.lists.has(workspaceId) || editStateRef.current.editing || editStateRef.current.feedbackDraft.trim() ? "ready" : "error");
+    });
+    return () => { current = false; };
+  }, [cache, client, listRevision, workspaceId]);
 
   useEffect(() => {
     if (!selectedId || listState !== "ready") return;
     const requestId = ++documentRequestRef.current;
-    setDocument(null);
-    setDocumentState("loading");
+    const key = planningDocumentCacheKey(workspaceId, selectedId);
+    const edit = editStateRef.current;
+    const retainedEdit = (edit.editing || Boolean(edit.feedbackDraft.trim())) && edit.document?.documentId === selectedId;
+    const cachedDocument = retainedEdit ? edit.document : cache.documents.get(key) ?? null;
+    setDocument(cachedDocument);
+    setDocumentState(cachedDocument ? "ready" : "loading");
     setDocumentError("");
-    setDocumentView("preview");
-    setEditing(false);
-    setDraft("");
-    setSaveState("idle");
-    setSaveError("");
-    setSelectedLine(null);
-    setCreateState("idle");
-    setCreateError("");
-    setResolveError("");
-    feedbackContextRef.current += 1;
-
-    void client
-      .readWorkspacePlanningDocument(workspaceId, selectedId)
-      .then((result) => {
-        if (requestId !== documentRequestRef.current) return;
-        if (
-          result.workspaceId !== workspaceId ||
-          result.documentId !== selectedId
-        ) {
-          throw new Error("WTS returned another planning file.");
-        }
+    setDocumentErrorCode("");
+    if (!retainedEdit) {
+      setEditing(false);
+      setDraft(cachedDocument?.contents ?? "");
+      setSaveState("idle");
+      setSaveError("");
+    }
+    void cache.documents.load(key, async () => {
+      const result = await client.readWorkspacePlanningDocument(workspaceId, selectedId);
+      if (result.workspaceId !== workspaceId || result.documentId !== selectedId) {
+        throw new Error("WTS returned another planning file.");
+      }
+      return result;
+    }).then((result) => {
+      if (requestId !== documentRequestRef.current) return;
+      // An edit keeps its original digest until a save or explicit reload.
+      if (!editStateRef.current.editing && !editStateRef.current.feedbackDraft.trim()) {
         setDocument(result);
         setDraft(result.contents);
-        setDocumentState("ready");
-      })
-      .catch((error) => {
-        if (requestId !== documentRequestRef.current) return;
-        setDocumentError(
-          errorMessage(error, "The planning file could not be loaded."),
-        );
-        setDocumentState("error");
-      });
-  }, [client, documentRevision, listState, selectedId, workspaceId]);
+      }
+      setDocumentState("ready");
+    }).catch((error: unknown) => {
+      if (requestId !== documentRequestRef.current) return;
+      setDocumentError(errorMessage(error, "The planning file could not be loaded."));
+      setDocumentErrorCode(error instanceof WorkspaceClientError ? error.code : "");
+      setDocumentState(cachedDocument ? "ready" : "error");
+    });
+    return () => { if (documentRequestRef.current === requestId) documentRequestRef.current += 1; };
+  }, [cache, client, documentRevision, listState, selectedId, workspaceId]);
 
   useEffect(() => {
     const requestId = ++feedbackRequestRef.current;
-    setFeedbackState("loading");
+    setFeedbackState(cache.threads.has(workspaceId) ? "ready" : "loading");
     setFeedbackError("");
-
-    void client
-      .listWorkspaceReviewThreads(workspaceId)
-      .then((result) => {
-        if (requestId !== feedbackRequestRef.current) return;
-        if (result.workspaceId !== workspaceId) {
-          throw new Error("WTS returned feedback for another workspace.");
-        }
-        setThreads(sortedThreads(result.threads));
-        setFeedbackState("ready");
-      })
-      .catch((error) => {
-        if (requestId !== feedbackRequestRef.current) return;
-        setFeedbackError(
-          errorMessage(error, "The feedback could not be loaded."),
-        );
-        setFeedbackState("error");
-      });
-
-    return () => {
-      if (feedbackRequestRef.current === requestId) {
-        feedbackRequestRef.current += 1;
-      }
-    };
-  }, [client, feedbackRevision, workspaceId]);
+    void cache.threads.load(workspaceId, async () => {
+      const result = await client.listWorkspaceReviewThreads(workspaceId);
+      if (result.workspaceId !== workspaceId) throw new Error("WTS returned feedback for another workspace.");
+      return sortedThreads(result.threads);
+    }).then((result) => {
+      if (requestId !== feedbackRequestRef.current) return;
+      setThreads(result);
+      setFeedbackState("ready");
+    }).catch((error: unknown) => {
+      if (requestId !== feedbackRequestRef.current) return;
+      setFeedbackError(errorMessage(error, "The feedback could not be loaded."));
+      setFeedbackState(cache.threads.has(workspaceId) ? "ready" : "error");
+    });
+    return () => { if (feedbackRequestRef.current === requestId) feedbackRequestRef.current += 1; };
+  }, [cache, client, feedbackRevision, workspaceId]);
 
   const chooseDocument = useCallback(
     (documentId: WorkspacePlanningDocumentId) => {
@@ -1045,10 +1157,28 @@ export function PlanningDocumentsPanel({
       setResolveError("");
       feedbackContextRef.current += 1;
       setSelectedId(documentId);
+      const target = documents.find(item => item.documentId === documentId);
+      if (target) setCollapsedFolders(current => {
+        const next = new Set(current); parentFolders(target).forEach(path => next.delete(path)); return next;
+      });
       return true;
     },
-    [dirty, editing, feedbackDraft, selectedId],
+    [dirty, documents, editing, feedbackDraft, selectedId],
   );
+
+  const openLinkedDocument = useCallback((documentId: WorkspacePlanningDocumentId) => {
+    if (!chooseDocument(documentId)) return false;
+    if (!filteredDocuments.some(item => item.documentId === documentId)) {
+      setDocumentQuery("");
+      const old = oldDocumentIds.has(documentId);
+      if ((documentFilter === "current" && old) || (documentFilter === "old" && !old)) setDocumentFilter("all");
+    }
+    const target = documents.find(item => item.documentId === documentId);
+    if (target) setCollapsedFolders(current => {
+      const next = new Set(current); parentFolders(target).forEach(path => next.delete(path)); return next;
+    });
+    return true;
+  }, [chooseDocument, documents, filteredDocuments, oldDocumentIds, documentFilter]);
 
   const handleDocumentKeyDown = (
     event: ReactKeyboardEvent<HTMLButtonElement>,
@@ -1161,6 +1291,8 @@ export function PlanningDocumentsPanel({
   };
 
   const reloadDocument = () => {
+    setEditing(false);
+    setDocumentView("preview");
     setSelectionMessage("");
     setSelectedLine(null);
     feedbackContextRef.current += 1;
@@ -1169,7 +1301,11 @@ export function PlanningDocumentsPanel({
   };
 
   const cancelEdit = () => {
-    setDraft(document?.contents ?? "");
+    const latest = selectedId
+      ? cache.documents.get(planningDocumentCacheKey(workspaceId, selectedId)) ?? document
+      : document;
+    setDocument(latest);
+    setDraft(latest?.contents ?? "");
     setEditing(false);
     setDocumentView("preview");
     setSaveState("idle");
@@ -1178,10 +1314,9 @@ export function PlanningDocumentsPanel({
   };
 
   const saveDocument = useCallback(async () => {
-    if (!document || saveState === "saving" || !dirty) return;
-    const requestId = documentRequestRef.current;
-    setSaveState("saving");
-    setSaveError("");
+    if (previewReadOnly || !nativePreviewAllowsCommand("update_workspace_planning_document")) return;
+    if (!document || saveState === "saving" || !dirty || cache.saves.has(planningDocumentCacheKey(workspaceId, document.documentId))) return;
+    publishPlanningSave(client, workspaceId, document.documentId, { state: "saving" });
     try {
       const saved = await client.updateWorkspacePlanningDocument(
         workspaceId,
@@ -1189,36 +1324,27 @@ export function PlanningDocumentsPanel({
         document.sha256,
         draft,
       );
-      if (requestId !== documentRequestRef.current) return;
       if (
         saved.workspaceId !== workspaceId ||
         saved.documentId !== document.documentId
       ) {
         throw new Error("WTS returned another planning file.");
       }
-      setDocument(saved);
-      setDraft(saved.contents);
-      setEditing(false);
-      setDocumentView("preview");
-      setSaveState("idle");
-      setSelectedLine(null);
-      feedbackContextRef.current += 1;
-      setFeedbackRevision((revision) => revision + 1);
-      onNotice?.(`${documentLabel(saved)} saved`);
+      cache.documents.set(planningDocumentCacheKey(workspaceId, saved.documentId), saved);
+      const savedView = planningViewFor(client, workspaceId);
+      if (savedView?.selectedId === saved.documentId && savedView.document?.sha256 === document.sha256) {
+        const hasNewerDraft = savedView.editing && savedView.draft !== draft;
+        rememberPlanningView(client, workspaceId, { ...savedView, document: saved,
+          draft: hasNewerDraft ? savedView.draft : saved.contents,
+          editing: hasNewerDraft, documentView: hasNewerDraft ? savedView.documentView : "preview" });
+      }
+      publishPlanningSave(client, workspaceId, document.documentId, {
+        state: "saved", document: saved, previousSha256: document.sha256, submittedContents: draft,
+      });
     } catch (error) {
-      if (requestId !== documentRequestRef.current) return;
-      const isConflict =
-        error instanceof WorkspaceClientError &&
-        error.code === "planning_document_conflict";
-      setSaveState(isConflict ? "conflict" : "error");
-      setSaveError(
-        isConflict
-          ? "This file changed after you opened it. Reload the latest version before you edit it again."
-          : errorMessage(error, "The planning file could not be saved."),
-      );
-      onNotice?.("The planning file was not saved", "error");
+      publishPlanningSave(client, workspaceId, document.documentId, { state: "error", error });
     }
-  }, [client, dirty, document, draft, onNotice, saveState, workspaceId]);
+  }, [cache, client, dirty, document, draft, previewReadOnly, saveState, workspaceId]);
 
   const documentThreads = useMemo(() => {
     if (!document) return [];
@@ -1261,10 +1387,12 @@ export function PlanningDocumentsPanel({
   }, []);
 
   const createFeedback = useCallback(async () => {
-    const body = feedbackDraft.trim();
+    const submittedDraft = feedbackDraft;
+    const body = submittedDraft.trim();
     if (
       !document ||
       !body ||
+      feedbackCreatePendingRef.current ||
       createState === "saving" ||
       feedbackState !== "ready"
     ) {
@@ -1272,6 +1400,8 @@ export function PlanningDocumentsPanel({
     }
     const contextId = feedbackContextRef.current;
     const documentId = document.documentId;
+    feedbackCreatePendingRef.current = true;
+    setFeedbackCreatePending(true);
     setCreateState("saving");
     setCreateError("");
     try {
@@ -1286,7 +1416,6 @@ export function PlanningDocumentsPanel({
         body,
         "user",
       );
-      if (contextId !== feedbackContextRef.current) return;
       if (
         created.workspaceId !== workspaceId ||
         created.target.kind !== "planningDocument" ||
@@ -1294,13 +1423,15 @@ export function PlanningDocumentsPanel({
       ) {
         throw new Error("WTS returned feedback for another planning file.");
       }
-      setThreads((current) =>
-        sortedThreads([
-          created,
-          ...current.filter((thread) => thread.threadId !== created.threadId),
-        ]),
-      );
-      setFeedbackDraft("");
+      const nextThreads = sortedThreads([created, ...(cache.threads.get(workspaceId) ?? []).filter((thread) => thread.threadId !== created.threadId)]);
+      cache.threads.set(workspaceId, nextThreads);
+      const savedView = planningViewFor(client, workspaceId);
+      if (savedView?.selectedId === documentId && savedView.feedbackDraft === submittedDraft) {
+        rememberPlanningView(client, workspaceId, { ...savedView, feedbackDraft: "" });
+      }
+      if (contextId !== feedbackContextRef.current) return;
+      setThreads(nextThreads);
+      setFeedbackDraft(current => current === submittedDraft ? "" : current);
       setCreateState("idle");
       onNotice?.("Feedback added");
     } catch (error) {
@@ -1308,6 +1439,9 @@ export function PlanningDocumentsPanel({
       setCreateState("error");
       setCreateError(errorMessage(error, "The feedback could not be added."));
       onNotice?.("The feedback was not added", "error");
+    } finally {
+      feedbackCreatePendingRef.current = false;
+      setFeedbackCreatePending(false);
     }
   }, [
     client,
@@ -1332,20 +1466,16 @@ export function PlanningDocumentsPanel({
           thread.threadId,
           thread.revision,
         );
-        if (contextId !== feedbackContextRef.current) return;
         if (
           resolved.workspaceId !== workspaceId ||
           resolved.threadId !== thread.threadId
         ) {
           throw new Error("WTS returned another feedback thread.");
         }
-        setThreads((current) =>
-          sortedThreads(
-            current.map((item) =>
-              item.threadId === resolved.threadId ? resolved : item,
-            ),
-          ),
-        );
+        const nextThreads = sortedThreads((cache.threads.get(workspaceId) ?? []).map((item) => item.threadId === resolved.threadId ? resolved : item));
+        cache.threads.set(workspaceId, nextThreads);
+        if (contextId !== feedbackContextRef.current) return;
+        setThreads(nextThreads);
         setResolvingThreadId(null);
         onNotice?.("Feedback resolved");
       } catch (error) {
@@ -1369,9 +1499,34 @@ export function PlanningDocumentsPanel({
     (item) => item.documentId === selectedId,
   );
   const selectedLabel = selectedDescriptor
-    ? documentLabel(selectedDescriptor)
-    : "Planning file";
+    ? documentPath(selectedDescriptor)
+    : document ? documentLabel(document) : "Planning file";
   const selectedIsOld = selectedId ? oldDocumentIds.has(selectedId) : false;
+  const documentNeedsEditor = ["planning_document_too_large", "invalid_planning_document"].includes(documentErrorCode);
+  const openPlanningWorkspace = async () => {
+    if (editorOpenState === "opening") return;
+    const generation = editorOpenGeneration.current;
+    setEditorOpenState("opening");
+    setEditorOpenError("");
+    try {
+      const result = await client.openWorkspaceInVscode(workspaceId);
+      if (!result.accepted || result.workspaceId !== workspaceId) throw new Error("VS Code did not open this workspace.");
+      if (generation === editorOpenGeneration.current) setEditorOpenState("idle");
+    } catch (cause) {
+      if (generation !== editorOpenGeneration.current) return;
+      setEditorOpenState("error");
+      setEditorOpenError(errorMessage(cause, "VS Code did not open this workspace."));
+    }
+  };
+  const documentRecovery = documentNeedsEditor ? <>
+    <p>Edit this file in VS Code, then refresh the planning files.</p>
+    <Button className={styles.secondaryButton} isDisabled={editorOpenState === "opening"} onPress={() => void openPlanningWorkspace()}>Open workspace in VS Code</Button>
+    <Button className={styles.secondaryButton} onPress={() => { setListRevision((revision) => revision + 1); setDocumentRevision((revision) => revision + 1); }}>Refresh planning files</Button>
+    {editorOpenError && <p role="alert">{editorOpenError} Open VS Code manually, then open this workspace.</p>}
+  </> : <Button className={styles.secondaryButton} onPress={documentErrorCode === "planning_document_unavailable" ? () => setListRevision((revision) => revision + 1) : () => setDocumentRevision((revision) => revision + 1)}>
+    <Glyph name="refresh" size={15} />
+    {documentErrorCode === "planning_document_unavailable" ? "Refresh planning files" : documentState === "ready" ? "Retry file" : "Try again"}
+  </Button>;
 
   if (listState === "loading") {
     return (
@@ -1416,17 +1571,88 @@ export function PlanningDocumentsPanel({
     );
   }
 
-  if (documents.length === 0) {
+  if (documents.length === 0 && !editing && !feedbackDraft.trim()) {
     return (
       <section aria-label="Plans and Kanban" className={styles.state}>
         <span className={styles.stateIcon} aria-hidden="true">
           <Glyph name="file" />
         </span>
         <strong>No planning files</strong>
-        <p>This workspace does not use WTS planning files.</p>
+        <p>No planning files are available in this workspace. Refresh the list after you add a file.</p>
+        <Button onPress={() => setListRevision((revision) => revision + 1)}>Refresh planning files</Button>
+        {onCreatePlanningHome && <Button onPress={onCreatePlanningHome}>Create planning workspace</Button>}
       </section>
     );
   }
+
+  const renderFolder = (folder: PlanningFolder, depth = 0): ReactNode => <>
+    {folder.files.map(item => {
+      const selected = item.documentId === selectedId;
+      const old = oldDocumentIds.has(item.documentId);
+      return (
+        <div
+          className={styles.documentRow}
+          data-checked={
+            selectedDocumentIds.has(item.documentId) || undefined
+          }
+          key={item.documentId}
+          style={{ paddingInlineStart: depth * 12 }}
+        >
+          <SelectionCheckbox
+            checked={selectedDocumentIds.has(item.documentId)}
+            label={`Select ${documentPath(item)}`}
+            onChange={(checked) =>
+              setDocumentSelected(item.documentId, checked)
+            }
+          />
+          <button
+            aria-description={documentDescription(item)}
+            aria-label={documentPath(item)}
+            title={documentPath(item)}
+            aria-current={selected ? "page" : undefined}
+            className={styles.documentButton}
+            data-old={old || undefined}
+            data-selected={selected || undefined}
+            onClick={() => chooseDocument(item.documentId)}
+            onKeyDown={(event) =>
+              handleDocumentKeyDown(event, item.documentId)
+            }
+            ref={(element) => {
+              if (element) {
+                documentButtonsRef.current.set(item.documentId, element);
+              } else {
+                documentButtonsRef.current.delete(item.documentId);
+              }
+            }}
+            tabIndex={selected || (!visibleDocuments.some(file => file.documentId === selectedId) && item.documentId === visibleDocuments[0]?.documentId) ? 0 : -1}
+            type="button"
+          >
+            <span className={styles.documentIcon} aria-hidden="true">
+              <Glyph name="file" size={14} />
+            </span>
+            <b>{documentLabel(item)}</b>
+            {old && <small>Old</small>}
+          </button>
+        </div>
+      );
+
+    })}
+    {[...folder.folders.values()].map(child => {
+      const expanded = searchExpanded || !collapsedFolders.has(child.path);
+      return <div key={child.path} role="group" aria-label={`${child.path} folder`}>
+        {searchExpanded ? <div className={styles.folderLabel} style={{ paddingInlineStart: 25 + depth * 12 }}>
+          <Glyph name="folder" size={14} /><span>{child.name}</span>
+        </div> : <button type="button" className={styles.folderButton} style={{ paddingInlineStart: 8 + depth * 12 }}
+          aria-expanded={expanded} aria-label={`${expanded ? "Collapse" : "Expand"} ${child.path} folder`}
+          onClick={() => setCollapsedFolders(current => {
+            const next = new Set(current); if (expanded) next.add(child.path); else next.delete(child.path); return next;
+          })}>
+          <Glyph name="chevron" size={12} /><Glyph name="folder" size={14} /><span>{child.name}</span>
+        </button>}
+        {expanded && renderFolder(child, depth + 1)}
+      </div>;
+    })}
+  </>;
 
   return (
     <section
@@ -1537,53 +1763,7 @@ export function PlanningDocumentsPanel({
           </div>
         )}
         <nav aria-label="Planning files" className={styles.documentList}>
-          {visibleDocuments.map((item) => {
-            const selected = item.documentId === selectedId;
-            const old = oldDocumentIds.has(item.documentId);
-            return (
-              <div
-                className={styles.documentRow}
-                data-checked={
-                  selectedDocumentIds.has(item.documentId) || undefined
-                }
-                key={item.documentId}
-              >
-                <SelectionCheckbox
-                  checked={selectedDocumentIds.has(item.documentId)}
-                  label={`Select ${documentLabel(item)}`}
-                  onChange={(checked) =>
-                    setDocumentSelected(item.documentId, checked)
-                  }
-                />
-                <button
-                  aria-description={documentDescription(item)}
-                  aria-current={selected ? "page" : undefined}
-                  className={styles.documentButton}
-                  data-old={old || undefined}
-                  data-selected={selected || undefined}
-                  onClick={() => chooseDocument(item.documentId)}
-                  onKeyDown={(event) =>
-                    handleDocumentKeyDown(event, item.documentId)
-                  }
-                  ref={(element) => {
-                    if (element) {
-                      documentButtonsRef.current.set(item.documentId, element);
-                    } else {
-                      documentButtonsRef.current.delete(item.documentId);
-                    }
-                  }}
-                  tabIndex={selected ? 0 : -1}
-                  type="button"
-                >
-                  <span className={styles.documentIcon} aria-hidden="true">
-                    <Glyph name="file" size={14} />
-                  </span>
-                  <b>{documentLabel(item)}</b>
-                  {old && <small>Old</small>}
-                </button>
-              </div>
-            );
-          })}
+          {renderFolder(folderTree)}
           {visibleDocuments.length === 0 && (
             <p className={styles.noFiles}>No files match this view.</p>
           )}
@@ -1655,16 +1835,17 @@ export function PlanningDocumentsPanel({
                   >
                     <Glyph name="refresh" size={15} />
                   </Button>
-                  <Button
+                  {!previewReadOnly && <Button
                     className={styles.primaryButton}
                     onPress={() => {
+                      if (!nativePreviewAllowsCommand("update_workspace_planning_document") || !retainDraft({ editing: true })) return;
                       setEditing(true);
                       setDocumentView("source");
                       setSelectionMessage("");
                     }}
                   >
                     Edit
-                  </Button>
+                  </Button>}
                 </>
               ) : (
                 <>
@@ -1675,18 +1856,37 @@ export function PlanningDocumentsPanel({
                   >
                     Cancel
                   </Button>
-                  <Button
+                  {!previewReadOnly && <Button
                     className={styles.primaryButton}
                     isDisabled={!dirty || saveState === "saving"}
                     onPress={() => void saveDocument()}
                   >
                     {saveState === "saving" ? "Saving…" : "Save"}
-                  </Button>
+                  </Button>}
                 </>
               )}
             </div>
           )}
         </header>
+
+        {listError && listState === "ready" && (
+          <div className={styles.notice} role="alert">
+            <span>{listError} WTS shows the last loaded files.</span>
+            <Button onPress={() => setListRevision((revision) => revision + 1)}>Retry file list</Button>
+          </div>
+        )}
+        {documentError && documentState === "ready" && (
+          <div className={styles.notice} role="alert">
+            <span>{documentError} WTS shows the last loaded content.</span>
+            {documentRecovery}
+          </div>
+        )}
+        {feedbackError && feedbackState === "ready" && (
+          <div className={styles.notice} role="alert">
+            <span>{feedbackError} WTS shows the last loaded feedback.</span>
+            <Button onPress={reloadFeedback}>Retry feedback</Button>
+          </div>
+        )}
 
         {selectionMessage && (
           <div className={styles.notice} role="status">
@@ -1709,15 +1909,16 @@ export function PlanningDocumentsPanel({
             </span>
             <strong>This file could not be opened</strong>
             <p role="alert">{documentError}</p>
-            <Button className={styles.secondaryButton} onPress={reloadDocument}>
-              <Glyph name="refresh" size={15} />
-              Try again
-            </Button>
+            {documentRecovery}
           </div>
         )}
 
         {documentState === "ready" && document && (
           <div className={styles.documentBody}>
+            {previewReadOnly && <div className={styles.notice} role={saveState === "error" ? "alert" : "status"}>
+              <p>{NATIVE_PREVIEW_READ_ONLY_MESSAGE}</p>
+              {editing && dirty && <RecoveryCopyButton label="Copy draft" text={draft} />}
+            </div>}
             {saveState === "conflict" && (
               <div className={styles.saveError} data-conflict role="alert">
                 <span aria-hidden="true"><Glyph name="warning" size={16} /></span>
@@ -1730,7 +1931,7 @@ export function PlanningDocumentsPanel({
                 </Button>
               </div>
             )}
-            {saveState === "error" && (
+            {saveState === "error" && !previewReadOnly && (
               <div className={styles.saveError} role="alert">
                 <span aria-hidden="true"><Glyph name="warning" size={16} /></span>
                 <div>
@@ -1756,10 +1957,12 @@ export function PlanningDocumentsPanel({
                   <div className={styles.editorShell}>
                     <textarea
                       aria-label={`Edit ${selectedLabel}`}
+                      readOnly={previewReadOnly}
                       autoFocus
                       className={styles.editor}
                       data-history-swipe-block
                       onChange={(event) => {
+                        if (previewReadOnly || !retainDraft({ draft: event.currentTarget.value })) return;
                         setDraft(event.currentTarget.value);
                         if (saveState !== "saving") {
                           setSaveState("idle");
@@ -1785,7 +1988,7 @@ export function PlanningDocumentsPanel({
                   </div>
                 ) : (
                   documentView === "preview" ? (
-                    <PlanningPreview document={document} />
+                    <PlanningPreview document={document} descriptor={selectedDescriptor ?? document} documents={documents} onOpenDocument={openLinkedDocument} />
                   ) : (
                     <PlanningSource
                       document={document}
@@ -1837,8 +2040,9 @@ export function PlanningDocumentsPanel({
                     aria-label={`Feedback for ${selectedLabel}`}
                     disabled={editing || feedbackState !== "ready"}
                     onChange={(event) => {
+                      if (!retainDraft({ feedbackDraft: event.currentTarget.value })) return;
                       setFeedbackDraft(event.currentTarget.value);
-                      setCreateState("idle");
+                      if (!feedbackCreatePendingRef.current) setCreateState("idle");
                       setCreateError("");
                     }}
                     onKeyDown={(event) => {
@@ -1868,11 +2072,12 @@ export function PlanningDocumentsPanel({
                         editing ||
                         feedbackState !== "ready" ||
                         !feedbackDraft.trim() ||
+                        feedbackCreatePending ||
                         createState === "saving"
                       }
                       onPress={() => void createFeedback()}
                     >
-                      {createState === "saving" ? "Adding…" : "Add feedback"}
+                      {feedbackCreatePending ? "Adding…" : "Add feedback"}
                     </Button>
                   </div>
                   {createState === "error" && (

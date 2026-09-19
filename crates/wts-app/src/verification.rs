@@ -37,6 +37,15 @@ pub(crate) fn execute_check_with_cancellation(
     workspace: &Path,
     cancellation: &AtomicBool,
 ) -> CheckExecution {
+    execute_check_with_cancellation_and_leases(check, workspace, cancellation, &[])
+}
+
+pub(crate) fn execute_check_with_cancellation_and_leases(
+    check: &VerificationCheck,
+    workspace: &Path,
+    cancellation: &AtomicBool,
+    leases: &[std::sync::Arc<std::fs::File>],
+) -> CheckExecution {
     let started = Instant::now();
     if cancellation.load(Ordering::Acquire) {
         return cancelled(started);
@@ -86,6 +95,9 @@ pub(crate) fn execute_check_with_cancellation(
         command.env("CI", "1");
     }
     configure_process_group(&mut command);
+    for lease in leases {
+        crate::adapter::inherit_process_lease(&mut command, Some(lease));
+    }
 
     let mut child = match command.spawn() {
         Ok(child) => child,
@@ -140,6 +152,10 @@ pub(crate) fn execute_check_with_cancellation(
         }
     };
 
+    if !leases.is_empty() {
+        // A finished check must not leave a child that still holds the workspace lease.
+        let _ = terminate_process_group(&mut child, true);
+    }
     let remaining = timeout.saturating_sub(started.elapsed());
     let stdout = receive_reader(stdout_reader, remaining);
     let stderr = receive_reader(stderr_reader, remaining);

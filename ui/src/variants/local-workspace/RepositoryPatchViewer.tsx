@@ -4,9 +4,11 @@ import {
   useRef,
   useState,
   type CSSProperties,
+  type ReactNode,
   type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent as ReactPointerEvent,
 } from "react";
+import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import {
   parsePatchFiles,
   type CodeViewItem,
@@ -26,6 +28,7 @@ import type {
   WorkspaceRepositoryReviewGraph,
 } from "../../lib/wtsClient";
 import { CodeReviewFeedbackPanel } from "./CodeReviewFeedbackPanel";
+import { openAgentFeedback } from "../../lib/agentFeedbackEvents";
 import { Glyph } from "./Glyph";
 import styles from "./RepositoryPatchViewer.module.css";
 
@@ -41,6 +44,27 @@ const CONTEXT_RAIL_DEFAULT = 320;
 const CONTEXT_RAIL_MIN = 240;
 const CONTEXT_RAIL_MAX = 480;
 const RESIZE_STEP = 24;
+const WTS_DIFF_SURFACE_CSS = `:host {
+  --diffs-bg: var(--wts-surface);
+  --diffs-fg: var(--wts-ink);
+  --diffs-bg-buffer-override: var(--wts-surface-subtle);
+  --diffs-bg-context-override: var(--wts-surface);
+  --diffs-bg-context-gutter-override: var(--wts-surface-subtle);
+  --diffs-fg-number-override: var(--wts-muted);
+  --diffs-font-family: var(--wts-font-mono);
+}`;
+const fileDiffVersions = new WeakMap<FileDiffMetadata, number>();
+const fileDiffCachePrefix = `wts-${crypto.randomUUID()}`;
+let nextFileDiffVersion = 1;
+
+function fileDiffVersion(fileDiff: FileDiffMetadata): number {
+  const existing = fileDiffVersions.get(fileDiff);
+  if (existing !== undefined) return existing;
+  const version = nextFileDiffVersion++;
+  fileDiff.cacheKey = `${fileDiffCachePrefix}-${version}`;
+  fileDiffVersions.set(fileDiff, version);
+  return version;
+}
 
 interface ReviewLayoutWidths {
   files: number;
@@ -91,6 +115,8 @@ export interface PatchReviewFeedbackIdentity {
     repositoryId: string;
     iid: number;
     discussions: GitlabReviewDiscussion[];
+    expectedPosition?: NonNullable<GitlabReviewDiscussion["position"]>;
+    scopeId?: string;
   };
 }
 
@@ -458,6 +484,10 @@ export function RepositoryPatchViewer({
   graphReady = false,
   reviewGraph,
   lineCommentProvider,
+  singleFile = false,
+  singleFileActions,
+  disableFullFile = false,
+  calloutPrefix,
 }: {
   feedback?: PatchReviewFeedbackIdentity;
   patch: string;
@@ -465,7 +495,14 @@ export function RepositoryPatchViewer({
   graphReady?: boolean;
   reviewGraph?: WorkspaceRepositoryReviewGraph;
   lineCommentProvider?: "GitLab";
+  singleFile?: boolean;
+  singleFileActions?: ReactNode;
+  disableFullFile?: boolean;
+  calloutPrefix?: { id: string; label: string };
 }) {
+  const calloutId = (name: string) => `${calloutPrefix?.id ?? "changes"}.${name}`;
+  const calloutLabel = (label: string) => calloutPrefix ? `${calloutPrefix.label}: ${label}` : label;
+  const domId = (id: string) => calloutPrefix ? `${calloutPrefix.id}.${id}` : id;
   const gitlabLineComments = Boolean(
     feedback?.gitlabReview && lineCommentProvider,
   );
@@ -493,7 +530,7 @@ export function RepositoryPatchViewer({
   const [selectedFileId, setSelectedFileId] = useState(initialSelectedFileId);
   const [diffStyle, setDiffStyle] = useState<DiffStyle>("unified");
   const [wrapLines, setWrapLines] = useState(false);
-  const [contextOpen, setContextOpen] = useState(gitlabLineComments);
+  const [contextOpen, setContextOpen] = useState(gitlabLineComments && !singleFile);
   const [contextMode, setContextMode] = useState<ContextMode>(
     gitlabLineComments ? "feedback" : "tests",
   );
@@ -546,7 +583,7 @@ export function RepositoryPatchViewer({
   useEffect(() => {
     setFileFilter(initialFileFilter);
     setSelectedFileId(initialSelectedFileId);
-    setContextOpen(gitlabLineComments);
+    setContextOpen(gitlabLineComments && !singleFile);
     setContextMode(gitlabLineComments ? "feedback" : "tests");
     setReferenceSymbol("");
     setSearchQuery("");
@@ -559,7 +596,7 @@ export function RepositoryPatchViewer({
         : new Set<string>(),
     );
     scrollContainerRef.current?.scrollTo?.({ behavior: "auto", top: 0 });
-  }, [gitlabLineComments, initialFileFilter, initialSelectedFileId, summary]);
+  }, [gitlabLineComments, initialFileFilter, initialSelectedFileId, singleFile, summary]);
 
   useEffect(() => {
     saveReviewLayoutWidths(layoutWidths);
@@ -647,6 +684,8 @@ export function RepositoryPatchViewer({
       if (!(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== "f") {
         return;
       }
+      const dialog = event.target instanceof Element ? event.target.closest('[role="dialog"]') : null;
+      if (dialog && !dialog.contains(viewerRef.current)) return;
       event.preventDefault();
       searchInputRef.current?.focus();
       searchInputRef.current?.select();
@@ -899,10 +938,11 @@ export function RepositoryPatchViewer({
         return;
       }
       const target = event.target;
+      const targetDialog = target instanceof Element ? target.closest("[role='dialog']") : null;
       if (
         target instanceof HTMLElement &&
         (target.matches("input, textarea, select, [contenteditable='true']") ||
-          target.closest("[role='dialog']"))
+          (targetDialog && targetDialog !== viewerRef.current?.closest("[role='dialog']")))
       ) {
         return;
       }
@@ -923,15 +963,17 @@ export function RepositoryPatchViewer({
     () => ({
       diffIndicators: "bars" as const,
       diffStyle,
+      disableFileHeader: true,
       enableGutterUtility: Boolean(lineCommentProvider),
       enableLineSelection: true,
       hunkSeparators: "line-info" as const,
-      layout: { paddingTop: 10, paddingBottom: 24, gap: 10 },
+      layout: { paddingTop: singleFile ? 0 : 10, paddingBottom: singleFile ? 0 : 24, gap: singleFile ? 0 : 10 },
       lineDiffType: "word-alt" as const,
       lineHoverHighlight: "line" as const,
       overflow: wrapLines ? ("wrap" as const) : ("scroll" as const),
-      stickyHeaders: true,
+      stickyHeaders: false,
       themeType: theme,
+      unsafeCSS: WTS_DIFF_SURFACE_CSS,
       onTokenEnter: (token, event) => {
         if (/^[A-Za-z_$][\w$]*$/.test(token.tokenText)) {
           token.tokenElement.title = `${navigator.platform.includes("Mac") ? "Command" : "Control"}-click to find changed references`;
@@ -951,7 +993,22 @@ export function RepositoryPatchViewer({
         setContextMode(action.contextMode);
       },
     }),
-    [diffStyle, lineCommentProvider, theme, wrapLines],
+    [diffStyle, lineCommentProvider, singleFile, theme, wrapLines],
+  );
+
+  const contextToggle = (
+    <button
+      aria-controls={domId("repository-review-context")}
+      aria-expanded={singleFile ? undefined : contextOpen}
+      aria-label={contextOpen ? "Hide review context" : "Show review context"}
+      className={singleFile ? styles.menuItem : styles.contextToggle}
+      data-ui={calloutId("context-toggle")}
+      data-ui-label={calloutLabel("Review context toggle")}
+      onClick={() => setContextOpen((current) => !current)}
+      type="button"
+    >
+      {singleFile ? contextOpen ? "Hide review context" : "Show review context" : "Context"}
+    </button>
   );
 
   if (summary.files.length === 0) {
@@ -966,10 +1023,11 @@ export function RepositoryPatchViewer({
   return (
     <div
       className={styles.viewer}
+      data-single-file={singleFile || undefined}
       data-context-open={contextOpen || undefined}
       data-line-comments={lineCommentProvider || undefined}
-      data-ui="changes.viewer"
-      data-ui-label="Code changes viewer"
+      data-ui={calloutId("viewer")}
+      data-ui-label={calloutLabel("Code changes viewer")}
       ref={viewerRef}
       style={
         {
@@ -981,8 +1039,8 @@ export function RepositoryPatchViewer({
       <aside
         className={styles.fileRail}
         aria-label="Changed files"
-        data-ui="changes.files"
-        data-ui-label="Changed files"
+        data-ui={calloutId("files")}
+        data-ui-label={calloutLabel("Changed files")}
       >
         <header>
           <span>{summary.files.length} changed</span>
@@ -1056,8 +1114,8 @@ export function RepositoryPatchViewer({
         aria-valuemin={FILE_RAIL_MIN}
         aria-valuenow={layoutWidths.files}
         className={`${styles.resizeHandle} ${styles.filesResizeHandle}`}
-        data-ui="changes.files-resizer"
-        data-ui-label="Changed files resize handle"
+        data-ui={calloutId("files-resizer")}
+        data-ui-label={calloutLabel("Changed files resize handle")}
         onDoubleClick={() => setBoundedLayoutWidth("files", FILE_RAIL_DEFAULT)}
         onKeyDown={(event) => resizePanelWithKeyboard("files", event)}
         onPointerDown={(event) => startPanelResize("files", event)}
@@ -1069,13 +1127,13 @@ export function RepositoryPatchViewer({
       <section
         className={styles.reviewPane}
         aria-label="Code changes"
-        data-ui="changes.diff"
-        data-ui-label="Code diff"
+        data-ui={calloutId("diff")}
+        data-ui-label={calloutLabel("Code diff")}
       >
         <div
           className={styles.toolbar}
-          data-ui="changes.toolbar"
-          data-ui-label="Code review toolbar"
+          data-ui={calloutId("toolbar")}
+          data-ui-label={calloutLabel("Code review toolbar")}
         >
           <div
             className={styles.changeNavigator}
@@ -1141,25 +1199,15 @@ export function RepositoryPatchViewer({
               <kbd>⌘F</kbd>
             )}
           </label>
+          {!singleFile && <>
           <span
             className={styles.contextLegend}
             title="Lines without a plus or minus are not part of the change"
           >
             <i aria-hidden="true" /> Unchanged context
           </span>
-          <button
-            aria-controls="repository-review-context"
-            aria-expanded={contextOpen}
-            aria-label={contextOpen ? "Hide review context" : "Show review context"}
-            className={styles.contextToggle}
-            data-ui="changes.context-toggle"
-            data-ui-label="Review context toggle"
-            onClick={() => setContextOpen((current) => !current)}
-            type="button"
-          >
-            Context
-          </button>
-          {feedback && selectedFile && (
+          {contextToggle}
+          {feedback && selectedFile && !disableFullFile && (
             <label className={styles.fullFileToggle}>
               <input
                 checked={Boolean(selectedFullFileState?.enabled)}
@@ -1178,6 +1226,7 @@ export function RepositoryPatchViewer({
               Collapse
             </button>
           </div>
+          </>}
           <div className={styles.segmented} aria-label="Diff layout">
             <button
               aria-pressed={diffStyle === "unified"}
@@ -1203,12 +1252,41 @@ export function RepositoryPatchViewer({
           >
             Wrap
           </button>
+          {singleFile && (
+            <DropdownMenu.Root>
+              <DropdownMenu.Trigger asChild>
+                <button aria-label="Diff options" className={styles.optionsTrigger} type="button">
+                  <Glyph name="more" size={16} />
+                </button>
+              </DropdownMenu.Trigger>
+              <DropdownMenu.Portal>
+                <DropdownMenu.Content align="end" className={styles.menuContent} sideOffset={6}>
+                  <DropdownMenu.Item asChild>{contextToggle}</DropdownMenu.Item>
+                  {feedback && selectedFile && !disableFullFile && (
+                    <DropdownMenu.CheckboxItem
+                      checked={Boolean(selectedFullFileState?.enabled)}
+                      className={styles.menuItem}
+                      disabled={selectedFullFileState?.status === "loading"}
+                      onCheckedChange={toggleFullFile}
+                    >
+                      Full file
+                      <DropdownMenu.ItemIndicator><Glyph name="check" size={14} /></DropdownMenu.ItemIndicator>
+                    </DropdownMenu.CheckboxItem>
+                  )}
+                  <DropdownMenu.Item className={styles.menuItem} onSelect={handleExpandAll}>Expand file</DropdownMenu.Item>
+                  <DropdownMenu.Item className={styles.menuItem} onSelect={handleCollapseAll}>Collapse file</DropdownMenu.Item>
+                  <DropdownMenu.Separator className={styles.menuSeparator} />
+                  <p className={styles.menuHint}>Lines without + or − are unchanged.</p>
+                </DropdownMenu.Content>
+              </DropdownMenu.Portal>
+            </DropdownMenu.Root>
+          )}
         </div>
         <div
           className={styles.codeView}
           data-history-swipe-block
-          data-ui="changes.code"
-          data-ui-label="Changed code"
+          data-ui={calloutId("code")}
+          data-ui-label={calloutLabel("Changed code")}
         >
           {selectedFullFileState?.status === "loading" && (
             <div className={styles.fullFileStatus} role="status">
@@ -1250,15 +1328,16 @@ export function RepositoryPatchViewer({
                       changeTargets[activeChangeIndex]?.fileId === file.id ||
                       undefined
                     }
-                    id={`file-block-${file.id}`}
+                    id={domId(`file-block-${file.id}`)}
                     key={file.id}
                     ref={(element) => {
                       if (element) fileBlockRefs.current.set(file.id, element);
                       else fileBlockRefs.current.delete(file.id);
                     }}
                   >
+                    <div className={styles.fileHeading}>
                     <button
-                      aria-controls={`diff-body-${file.id}`}
+                      aria-controls={domId(`diff-body-${file.id}`)}
                       aria-expanded={isExpanded}
                       className={styles.fileHeader}
                       onClick={() => toggleFileExpanded(file.id)}
@@ -1306,14 +1385,16 @@ export function RepositoryPatchViewer({
                         <i>-{file.deletions}</i>
                       </span>
                     </button>
+                    {singleFile && singleFileActions && <div className={styles.fileActions}>{singleFileActions}</div>}
+                    </div>
                     {isExpanded && (
-                      <div className={styles.diffBody} id={`diff-body-${file.id}`}>
+                      <div className={styles.diffBody} id={domId(`diff-body-${file.id}`)}>
                         <CodeView
                           ref={(handle) => {
                             if (handle) viewRefs.current.set(file.id, handle);
                             else viewRefs.current.delete(file.id);
                           }}
-                          items={[{ id: file.id, type: "diff", fileDiff: file.fileDiff }]}
+                          items={[{ id: file.id, type: "diff", fileDiff: file.fileDiff, version: fileDiffVersion(file.fileDiff) }]}
                           renderGutterUtility={(getHoveredLine, item) => {
                             const line = getHoveredLine();
                             if (
@@ -1386,8 +1467,8 @@ export function RepositoryPatchViewer({
             aria-valuemin={CONTEXT_RAIL_MIN}
             aria-valuenow={layoutWidths.context}
             className={`${styles.resizeHandle} ${styles.contextResizeHandle}`}
-            data-ui="changes.context-resizer"
-            data-ui-label="Review feedback resize handle"
+            data-ui={calloutId("context-resizer")}
+            data-ui-label={calloutLabel("Review feedback resize handle")}
             onDoubleClick={() =>
               setBoundedLayoutWidth("context", CONTEXT_RAIL_DEFAULT)
             }
@@ -1401,14 +1482,14 @@ export function RepositoryPatchViewer({
           <aside
             className={styles.contextRail}
             aria-label="Review context"
-            data-ui="changes.context"
-            data-ui-label="Review context"
-            id="repository-review-context"
+            data-ui={calloutId("context")}
+            data-ui-label={calloutLabel("Review context")}
+            id={domId("repository-review-context")}
           >
           <div
             className={styles.contextTabs}
-            data-ui="changes.context-tabs"
-            data-ui-label="Review context tabs"
+            data-ui={calloutId("context-tabs")}
+            data-ui-label={calloutLabel("Review context tabs")}
           >
             <button
               aria-pressed={contextMode === "tests"}
@@ -1449,6 +1530,7 @@ export function RepositoryPatchViewer({
               selectedTarget={selectedFeedbackTarget}
               workspaceId={feedback.workspaceId}
               gitlabReview={feedback.gitlabReview}
+              onAskAgentToFix={openAgentFeedback}
             />
           ) : contextMode === "tests" ? (
             <div className={styles.contextBody}>

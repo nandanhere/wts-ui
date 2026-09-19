@@ -1,4 +1,5 @@
 import { render, screen } from "@testing-library/react";
+import * as Dialog from "@radix-ui/react-dialog";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { describe, expect, it } from "vitest";
@@ -60,6 +61,28 @@ describe("SelectMenu", () => {
 
     expect(trigger).toHaveTextContent("Closed");
     expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+  });
+
+  it("selects an option with the pointer inside a modal dialog", async () => {
+    const user = userEvent.setup();
+    render(
+      <Dialog.Root open>
+        <Dialog.Portal>
+          <Dialog.Content aria-describedby={undefined}>
+            <Dialog.Title>Status settings</Dialog.Title>
+            <Example />
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>,
+    );
+
+    const trigger = screen.getByRole("combobox", { name: "Merge request status" });
+    await user.click(trigger);
+    await user.click(screen.getByRole("option", { name: "Closed" }));
+
+    expect(trigger).toHaveTextContent("Closed");
+    expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "Status settings" })).toBeVisible();
   });
 
   it("filters while the user types and selects with one click", async () => {

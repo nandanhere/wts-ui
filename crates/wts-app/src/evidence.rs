@@ -63,6 +63,16 @@ pub struct WorkspaceEvidence {
     pub agent_runs: Vec<AgentRunSummary>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkspaceVerificationSummary {
+    pub schema_version: u32,
+    pub workspace_id: Uuid,
+    pub verification_plan: WorkspaceVerificationPlan,
+    pub verification_result: WorkspaceVerificationResult,
+    pub verification_history: Vec<WorkspaceVerificationResult>,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum AgentReportStatus {
@@ -351,18 +361,13 @@ pub struct EvidenceRepository {
     pub worktree_display_path: String,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum WorkspaceGraphEvidenceStatus {
+    #[default]
     NotStarted,
     Ready,
     Failed,
-}
-
-impl Default for WorkspaceGraphEvidenceStatus {
-    fn default() -> Self {
-        Self::NotStarted
-    }
 }
 
 impl From<GraphWorkspaceStatus> for WorkspaceGraphEvidenceStatus {
@@ -633,6 +638,7 @@ struct StoredAgentRun {
 }
 
 impl EvidenceStore {
+    #[cfg(test)]
     pub(crate) fn create(workspace: &Path) -> Result<Self, EvidenceStoreError> {
         let store = Self::new(workspace)?;
         match store.root.symlink_metadata() {
@@ -685,25 +691,51 @@ impl EvidenceStore {
         })
     }
 
-    pub(crate) fn write_initial(
-        &self,
+    pub(crate) fn initial_directories() -> [PathBuf; 3] {
+        let root = Path::new(EVIDENCE_DIRECTORY);
+        [
+            root.to_owned(),
+            root.join(AGENT_RUNS_DIRECTORY),
+            root.join(LOGS_DIRECTORY),
+        ]
+    }
+
+    pub(crate) fn initial_file_names() -> [&'static str; 6] {
+        [
+            CONTEXT_FILE,
+            GRAPH_MANIFEST_FILE,
+            VERIFICATION_PLAN_FILE,
+            VERIFICATION_RESULT_FILE,
+            VERIFICATION_HISTORY_FILE,
+            AGENT_REPORT_FILE,
+        ]
+    }
+
+    pub(crate) fn initial_files(
         context: &WorkspaceEvidenceContext,
         graph: &WorkspaceGraphManifest,
         plan: &WorkspaceVerificationPlan,
         result: &WorkspaceVerificationResult,
-    ) -> Result<(), EvidenceStoreError> {
-        self.write(CONTEXT_FILE, context)?;
-        self.write(GRAPH_MANIFEST_FILE, graph)?;
-        self.write(VERIFICATION_PLAN_FILE, plan)?;
-        self.write(VERIFICATION_RESULT_FILE, result)?;
-        self.write(
-            VERIFICATION_HISTORY_FILE,
-            &Vec::<WorkspaceVerificationResult>::new(),
-        )?;
-        self.write(
-            AGENT_REPORT_FILE,
-            &AgentReportDocument::empty(context.workspace_id),
-        )
+    ) -> Result<Vec<(&'static str, Vec<u8>)>, EvidenceStoreError> {
+        fn encode(value: &impl Serialize) -> Result<Vec<u8>, EvidenceStoreError> {
+            let bytes =
+                serde_json::to_vec_pretty(value).map_err(|_| EvidenceStoreError::Invalid)?;
+            if bytes.len() > MAX_EVIDENCE_FILE_BYTES {
+                return Err(EvidenceStoreError::Invalid);
+            }
+            Ok(bytes)
+        }
+        Ok(Self::initial_file_names()
+            .into_iter()
+            .zip([
+                encode(context)?,
+                encode(graph)?,
+                encode(plan)?,
+                encode(result)?,
+                encode(&Vec::<WorkspaceVerificationResult>::new())?,
+                encode(&AgentReportDocument::empty(context.workspace_id))?,
+            ])
+            .collect())
     }
 
     pub(crate) fn write_graph(
@@ -784,6 +816,26 @@ impl EvidenceStore {
         atomic_replace_json(&runs, &leaf, run)?;
         self.retain_agent_runs(Some(run.run_id), retention)
             .map(|_| ())
+    }
+
+    pub(crate) fn read_verification_summary(
+        workspace: &Path,
+    ) -> Result<(WorkspaceEvidenceContext, WorkspaceVerificationSummary), EvidenceStoreError> {
+        let store = Self::new(workspace)?;
+        let metadata = workspace.symlink_metadata().map_err(|_| EvidenceStoreError::Unavailable)?;
+        if !metadata.is_dir() || metadata.file_type().is_symlink() {
+            return Err(EvidenceStoreError::Invalid);
+        }
+        store.validate_root()?;
+        let context: WorkspaceEvidenceContext = read_json(&store.root, CONTEXT_FILE)?;
+        let summary = WorkspaceVerificationSummary {
+            schema_version: WORKSPACE_EVIDENCE_SCHEMA_VERSION,
+            workspace_id: context.workspace_id,
+            verification_plan: read_json(&store.root, VERIFICATION_PLAN_FILE)?,
+            verification_result: read_json(&store.root, VERIFICATION_RESULT_FILE)?,
+            verification_history: store.read_verification_history()?,
+        };
+        Ok((context, summary))
     }
 
     pub(crate) fn read(&self) -> Result<WorkspaceEvidence, EvidenceStoreError> {
@@ -947,8 +999,10 @@ impl EvidenceStore {
     fn read_verification_history(
         &self,
     ) -> Result<Vec<WorkspaceVerificationResult>, EvidenceStoreError> {
-        if !self.root.join(VERIFICATION_HISTORY_FILE).exists() {
-            return Ok(Vec::new());
+        match self.root.join(VERIFICATION_HISTORY_FILE).symlink_metadata() {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(_) => return Err(EvidenceStoreError::Unavailable),
+            Ok(_) => {}
         }
         let history =
             read_json::<Vec<WorkspaceVerificationResult>>(&self.root, VERIFICATION_HISTORY_FILE)?;
@@ -2253,13 +2307,12 @@ fn atomic_replace_bytes(
     maximum_bytes: usize,
 ) -> Result<(), EvidenceStoreError> {
     let path = fixed_child(parent, leaf)?;
-    if let Ok(metadata) = path.symlink_metadata() {
-        if metadata.file_type().is_symlink()
+    if let Ok(metadata) = path.symlink_metadata()
+        && (metadata.file_type().is_symlink()
             || !metadata.is_file()
-            || metadata.len() as usize > maximum_bytes
-        {
-            return Err(EvidenceStoreError::Invalid);
-        }
+            || metadata.len() as usize > maximum_bytes)
+    {
+        return Err(EvidenceStoreError::Invalid);
     }
     if bytes.len() > maximum_bytes {
         return Err(EvidenceStoreError::Invalid);
@@ -2381,7 +2434,7 @@ mod tests {
             schema_version: WORKSPACE_EVIDENCE_SCHEMA_VERSION,
             workspace_id: Uuid::from_u128(1),
             plan_revision: sequence,
-            status: if sequence % 2 == 0 {
+            status: if sequence.is_multiple_of(2) {
                 VerificationStatus::Passed
             } else {
                 VerificationStatus::Failed

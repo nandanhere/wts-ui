@@ -51,6 +51,7 @@ const providerNames: Record<AgentProvider, string> = {
   codex: "Codex",
   openCode: "OpenCode",
   hermes: "Hermes",
+  copilot: "Copilot",
 };
 
 const providerMarks: Record<AgentProvider | "vscode", string> = {
@@ -58,12 +59,14 @@ const providerMarks: Record<AgentProvider | "vscode", string> = {
   openCode: "OC",
   hermes: "HM",
   vscode: "VS",
+  copilot: "CP",
 };
 
 const providerCommands: Record<AgentProvider, string> = {
   codex: "codex --sandbox workspace-write --ask-for-approval on-request",
   openCode: "opencode .",
   hermes: "hermes chat --tui",
+  copilot: "copilot",
 };
 
 const terminalNames: Record<TerminalProvider, string> = {

@@ -1,11 +1,22 @@
+import { useWorkspaceAttention } from "./useWorkspaceAttention";
+import { openAgentFeedbackResult } from "../../lib/agentFeedbackEvents";
+import { loadAgentSessions } from "../../lib/agentSessionDiscovery";
+import { returnToFeedbackSelection } from "../../lib/agentFeedbackNavigation";
+import { getWorkspaceAttentionStore, type WorkspaceAttentionItem } from "./workspaceAttention";
+import { ConnectedWorkspaceAttentionCard, ConnectedBoardAttentionStatus } from "./WorkspaceAttentionCard";
+import { nativePreviewAllowsCommand, NATIVE_PREVIEW_READ_ONLY_MESSAGE } from "../../lib/nativePreview";
+import { highlightFeedbackSelection, resolveFeedbackSelectionOrigin, RETURN_FEEDBACK_SELECTION_EVENT, type FeedbackSelectionReturn } from "../../lib/agentFeedbackNavigation";
+import { loadWorkspaceGitlabMergeRequests, invalidateWorkspaceGitlabMergeRequests } from "./gitlabMergeRequestDiscovery";
+import { invalidateRepositoryReview } from "./repositoryReviewCache";
+import { WorkspaceMemoryCache } from "./workspaceMemoryCache";
+import { clearPlanningWorkspaceCache } from "./planningWorkspaceCache";
 import {
   lazy,
   Suspense,
   type FormEvent,
-  type KeyboardEvent as ReactKeyboardEvent,
-  type ReactNode,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -32,50 +43,29 @@ import {
   type DragStartEvent,
 } from "@dnd-kit/core";
 import { snapCenterToCursor } from "@dnd-kit/modifiers";
+import { Button, Checkbox, Input, Label, SearchField } from "react-aria-components";
 import {
-  Button,
-  Checkbox,
-  Input,
-  Label,
-  Radio,
-  RadioGroup,
-  SearchField,
-} from "react-aria-components";
-import {
-  CODE_WORKSPACE_FILE_MAX_BYTES,
   defaultWorkspaceClient,
   type AgentProvider,
   type AgentRunResult,
   type AgentSessionList,
-  type CodeWorkspaceDiagnosticMatchReason,
-  type CodeWorkspaceDiagnosticResolutionBasis,
-  type CodeWorkspaceFileImportResult,
-  type CodeWorkspaceFolderDiagnostic,
+  type CloneRepositoryRequest,
   type CloneRepositoryResult,
-  type CreateWorkspaceRequest,
   type GraphIndexResult,
   type GitlabMergeRequest,
   type GitlabMergeRequestInbox,
   type GitlabReview,
   type GitlabReviewTarget,
-  type JiraIssueImport,
   type MaterializedWorktree,
-  type OpenProjectWorkPackageImport,
   type RemoveWorkspaceResult,
   type WorkspaceRemovalPreflight,
   type RepositoryCatalog,
   type RepositorySummary,
-  type RuntimeAnalysisConfidence,
-  type RuntimeAnalysisRequest,
-  type RuntimeAnalysisResult,
-  type RuntimePlanSelection,
-  type RuntimePortPolicy,
   type SetupSnapshot,
   type TerminalProvider,
   type WorkspaceAgentEvidence,
   type WorkspaceGraphManifest,
   type WorkspaceMaterialization,
-  type WorkspacePlanningSelection,
   type WorkspacePreflight,
   type WorkspaceRepositoryAlignmentPreflight,
   type WorkspaceRepositoryAlignmentResult,
@@ -87,24 +77,23 @@ import {
   type WorkspaceChangeRequestDraft,
   WorkspaceClientError,
   type WorkspaceCliLaunchResult,
-  type WorkspaceIntent,
   type WorkspaceProvider,
-  type WorkspaceWorkflowState,
   type WorkspaceView,
 } from "../../lib/wtsClient";
 import { useTheme } from "../../theme";
 import { useVisiblePolling } from "../../lib/useVisiblePolling";
+import { useWorkspaceGitlabDiscussions } from "./gitlabDiscussions";
 import { SelectMenu } from "../../components/SelectMenu";
 import { SetupSheet } from "./SetupSheet";
-import { VerificationPanel } from "./VerificationPanel";
+import { VerificationPanel, type VerificationAttentionSelection } from "./VerificationPanel";
 import { AgentSessionsPanel } from "./AgentSessionsPanel";
 import { TimeReviewScheduler } from "./TimeReviewScheduler";
 import { AgentStatePrototype } from "./AgentStatePrototype";
 import { WorkspaceWorkItemsPanel } from "./WorkspaceWorkItemsPanel";
 import { OpenWorkspaceLauncher } from "./OpenWorkspaceLauncher";
 import { Glyph } from "./Glyph";
-import { GuideDialog, HowToGuide } from "./GuideDialog";
-import { ToastStack, ToastItem, type NoticeToast } from "./ToastStack";
+import { HowToGuide } from "./GuideDialog";
+import { ToastStack, type NoticeToast } from "./ToastStack";
 import {
   AssignedReviewCard,
   DraggableWorkspaceCard,
@@ -120,6 +109,7 @@ import {
   WorkspaceLaneDropTarget,
 } from "./WorkspaceBoardDnd";
 import { WorkspaceRemovalDialog } from "./WorkspaceRemovalDialog";
+import { RecoveryCopyButton } from "./RecoveryCopyButton";
 import { canAssertDestructiveWorkspaceRemoval } from "./workspaceRemoval";
 import { WorkspaceChangeRequestDialog } from "./WorkspaceChangeRequestDialog";
 import { CommandPalette } from "./CommandPalette";
@@ -155,6 +145,28 @@ import {
   workspaceCompletionIsRecent,
 } from "./workspaceAutomation";
 import styles from "./LocalWorkspace.module.css";
+import { type Lane, type Provider, type Workspace } from "./workspaceTypes";
+import {
+  type RepositoryCloneHandle,
+  type DeferredWorkspaceCreation,
+  repositoryEvidenceKey,
+  type RepositoryForgeTarget,
+  repositoryForgeTarget,
+  forgeDisplayName,
+  newIdempotencyKey,
+  providerToRequest,
+  providerMarks,
+  type ReviewWorkspaceSeed,
+  type DeferredCloneRequest,
+} from "./workspaceCreation";
+import { InfoTooltip } from "./InfoTooltip";
+import { NewWorkspaceDialog } from "./NewWorkspaceDialog";
+export type { Lane, Workspace } from "./workspaceTypes";
+export type { InfoTooltipProps } from "./InfoTooltip";
+export { InfoTooltip } from "./InfoTooltip";
+export type { IssueRepositoryUpstream } from "./workspaceCreation";
+export { repositoryUpstreamsFromIssueContent } from "./workspaceCreation";
+export type { NoticeToast };
 
 const RepositoryReviewScreen = lazy(() =>
   import("./RepositoryReviewScreen").then((module) => ({
@@ -167,8 +179,6 @@ const PlanningDocumentsPanel = lazy(() =>
     default: module.PlanningDocumentsPanel,
   })),
 );
-
-export type Lane = "planned" | "active" | "attention" | "suspended";
 const WORKSPACE_LANE_STORAGE_KEY = "wts.workspace-lanes.v1";
 const WORKSPACE_LANE_ORDER: Lane[] = [
   "planned",
@@ -303,16 +313,55 @@ export function resolveWorkspaceDropTarget(
     ? { type: "move", lane }
     : null;
 }
-type Provider = "Codex" | "OpenCode" | "Hermes" | "VS Code";
 type WorkbenchTab = "overview" | "planning" | "changes" | "verification";
-type CreateStep =
-  "source" | "evidence" | "services" | "manifest" | "saving" | "saved";
-type SourceMode = "issue" | "workspace" | "codeWorkspace" | "set";
-type IssueProvider = "jira" | "openProject";
-type CodeWorkspaceRepositoryAddMode = "existing" | "clone";
 type Filter = "all" | Lane;
 type RegistryState = "loading" | "ready" | "error";
 type DeepLinkState = "idle" | "loading" | "ready" | "error";
+
+interface RepositoryCloneRecord extends RepositoryCloneHandle {
+  status: "cloning" | "ready" | "error";
+  result?: CloneRepositoryResult;
+  error?: string;
+}
+
+function workspaceCreationLane(task: DeferredWorkspaceCreation): Lane {
+  if (task.status === "ready") return "planned";
+  if (task.status === "error") return "attention";
+  return "active";
+}
+
+function WorkspaceCreationTaskCard({
+  task,
+  onContinue,
+}: {
+  task: DeferredWorkspaceCreation;
+  onContinue: () => void;
+}) {
+  const ready = task.status === "ready";
+  const failed = task.status === "error";
+  return (
+    <article
+      className={styles.workspaceCreationTaskCard}
+      data-status={task.status}
+      data-ui={`spaces.creation.${task.id}`}
+      data-ui-label={`Workspace creation ${task.repositoryLabel}`}
+    >
+      <header>
+        <span><Glyph name={failed ? "warning" : ready ? "check" : "refresh"} size={14} /></span>
+        <strong>{task.repositoryLabel}</strong>
+        <small>{failed ? "Needs review" : ready ? "Ready" : "Git clone"}</small>
+      </header>
+      <h3>{task.title}</h3>
+      <p>{task.message}</p>
+      <footer>
+        <span>Workspace setup</span>
+        <button disabled={task.status === "cloning"} onClick={onContinue} type="button">
+          {failed ? "Review clone" : ready ? "Continue setup" : "Clone is active"}
+        </button>
+      </footer>
+    </article>
+  );
+}
 type WorkspaceActionState =
   | "idle"
   | "checking"
@@ -328,40 +377,8 @@ type WorkspaceCommandState =
   | "reindexing"
   | "syncing"
   | "aligning"
+  | "recoveringSetup"
   | "removing";
-
-export interface Workspace {
-  id: string;
-  intent: WorkspaceIntent;
-  key: string;
-  kind: "Jira" | "OpenProject" | "Repositories";
-  title: string;
-  lane: Lane;
-  workflowState: WorkspaceWorkflowState;
-  workflowRevision: number;
-  workflowUpdatedAtUnixMs: number;
-  workflowPersisted: boolean;
-  workflowPlacementMode?: "automatic" | "pinned";
-  workflowPlacementRank?: number;
-  lifecycleState: WorkspaceView["lifecycle"]["materializationState"];
-  knownWorktreeCount: number;
-  observedAtUnixMs: number | null;
-  provider: Provider;
-  repos: number;
-  repositoryPlans: Array<{
-    repositoryId?: string;
-    label: string;
-    baseRef: string;
-    worktreeLeaf: string;
-  }>;
-  runtime?: RuntimePlanSelection;
-  planning?: WorkspacePlanningSelection;
-  observedWorkItems: NonNullable<WorkspaceView["observedWorkItems"]>;
-  path: string;
-  updated: string;
-  updatedAtUnixMs: number;
-  summary: string;
-}
 
 export interface WorkspaceAgentSnapshot {
   workspaceId: string;
@@ -376,778 +393,44 @@ export interface WorkspaceAgentSnapshot {
   observedLocally: boolean;
 }
 
-interface RepoEvidence {
-  key: string;
-  id: string;
-  repositoryId?: string;
-  reason: string;
-  confidence: number;
-  included: boolean;
-  base: string;
-}
-
-interface RuntimePortDraft {
-  portId: string;
-  preferredPort: string;
-  policy: RuntimePortPolicy;
-}
-
-interface RuntimeServiceDraft {
-  included: boolean;
-  ports: RuntimePortDraft[];
-}
-
 const workspaceMaterializationCaches = new WeakMap<
   WorkspaceClient,
-  Map<string, WorkspaceMaterialization | null>
+  WorkspaceMemoryCache<WorkspaceMaterialization | null>
 >();
 
 function materializationCacheFor(
   client: WorkspaceClient,
-): Map<string, WorkspaceMaterialization | null> {
+): WorkspaceMemoryCache<WorkspaceMaterialization | null> {
   const existing = workspaceMaterializationCaches.get(client);
   if (existing) return existing;
-  const created = new Map<string, WorkspaceMaterialization | null>();
+  const created = new WorkspaceMemoryCache<WorkspaceMaterialization | null>();
   workspaceMaterializationCaches.set(client, created);
   return created;
 }
 
-function readTextFile(file: File): Promise<string> {
-  if (typeof file.text === "function") return file.text();
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.addEventListener("load", () => {
-      if (typeof reader.result === "string") {
-        resolve(reader.result);
-      } else {
-        reject(new Error("The selected file could not be read as text."));
-      }
-    });
-    reader.addEventListener("error", () => {
-      reject(reader.error ?? new Error("The selected file could not be read."));
-    });
-    reader.readAsText(file);
-  });
-}
+const workspaceNavigationCaches = new WeakMap<WorkspaceClient, WorkspaceMemoryCache<{
+  tab: WorkbenchTab;
+  repositoryId: string;
+}>>();
 
-const codeWorkspaceDiagnosticReasonLabels: Record<
-  CodeWorkspaceDiagnosticMatchReason,
-  string
-> = {
-  matchedExactPath: "Matched the exact absolute repository path",
-  matchedRelativePathSuffix:
-    "Matched the relative folder path to a discovered checkout",
-  matchedPathBasename:
-    "Matched the final folder name to a discovered checkout folder or repository label",
-  matchedExplicitName:
-    "Matched the VS Code folder name to a discovered repository label",
-  noCatalogMatch:
-    "No discovered checkout folder or repository label matched this folder",
-  ambiguousExactPath:
-    "Multiple discovered repositories share this absolute path",
-  ambiguousRelativePathSuffix:
-    "Multiple discovered checkouts matched the relative folder path",
-  ambiguousPathBasename:
-    "Multiple discovered checkouts or repository labels matched the final folder name",
-  ambiguousExplicitName:
-    "Multiple discovered repository labels matched the VS Code folder name",
-  unsupportedFolder: "This folder entry cannot be matched safely",
-};
+const workspaceScrollCaches = new WeakMap<WorkspaceClient, WorkspaceMemoryCache<{ top: number; left: number }>>();
 
-const codeWorkspaceDiagnosticBasisLabels: Record<
-  CodeWorkspaceDiagnosticResolutionBasis,
-  string
-> = {
-  absolutePath: "Absolute path",
-  relativePathSuffix: "Relative path suffix",
-  pathBasename: "Final folder name",
-  explicitName: "VS Code name",
-};
-
-export interface InfoTooltipProps {
-  content?: ReactNode;
-  children: ReactNode;
-  side?: "top" | "right" | "bottom" | "left";
-  align?: "start" | "center" | "end";
-}
-
-export function InfoTooltip({
-  content,
-  children,
-  side = "top",
-  align = "center",
-}: InfoTooltipProps) {
-  if (!content) {
-    return <>{children}</>;
+function scrollCacheFor(client: WorkspaceClient) {
+  let cache = workspaceScrollCaches.get(client);
+  if (!cache) {
+    cache = new WorkspaceMemoryCache<{ top: number; left: number }>(96);
+    workspaceScrollCaches.set(client, cache);
   }
-
-  return (
-    <Tooltip.Provider
-      delayDuration={0}
-      skipDelayDuration={0}
-      disableHoverableContent
-    >
-      <Tooltip.Root>
-        <Tooltip.Trigger asChild>{children}</Tooltip.Trigger>
-        <Tooltip.Portal>
-          <Tooltip.Content
-            className={styles.infoTooltipContent}
-            side={side}
-            align={align}
-            sideOffset={4}
-          >
-            {content}
-            <Tooltip.Arrow className={styles.infoTooltipArrow} />
-          </Tooltip.Content>
-        </Tooltip.Portal>
-      </Tooltip.Root>
-    </Tooltip.Provider>
-  );
+  return cache;
 }
 
-const interactiveDevLogging =
-  import.meta.env.DEV && import.meta.env.MODE !== "test";
-
-const unsupportedUriDiagnosticValue = "<unsupported-uri>";
-const unsupportedDiagnosticValue = "<unsupported-value>";
-const missingDiagnosticPathValue = "<missing-path>";
-const uriSchemePattern = /^[a-z][a-z0-9+.-]*:/i;
-const windowsAbsolutePathPattern = /^[a-z]:[\\/]/i;
-
-function isUriShapedDiagnosticValue(value: unknown) {
-  if (typeof value !== "string") return false;
-  const candidate = value.trim();
-  return (
-    !windowsAbsolutePathPattern.test(candidate) &&
-    uriSchemePattern.test(candidate)
-  );
-}
-
-function sanitizedFolderDiagnosticName(name: unknown, rawPathIsUri: boolean) {
-  if (rawPathIsUri || isUriShapedDiagnosticValue(name)) {
-    return unsupportedUriDiagnosticValue;
+function navigationCacheFor(client: WorkspaceClient) {
+  let cache = workspaceNavigationCaches.get(client);
+  if (!cache) {
+    cache = new WorkspaceMemoryCache<{ tab: WorkbenchTab; repositoryId: string }>();
+    workspaceNavigationCaches.set(client, cache);
   }
-  return typeof name === "string" && name.trim()
-    ? name
-    : unsupportedDiagnosticValue;
-}
-
-function sanitizedFolderDiagnosticPath(rawPath: unknown) {
-  if (typeof rawPath !== "string") return unsupportedDiagnosticValue;
-  if (!rawPath.trim()) return missingDiagnosticPathValue;
-  return isUriShapedDiagnosticValue(rawPath)
-    ? unsupportedUriDiagnosticValue
-    : rawPath;
-}
-
-function sanitizedMatchAttemptValue(
-  rawPath: unknown,
-  folderName: unknown,
-  value: unknown,
-) {
-  return isUriShapedDiagnosticValue(rawPath) ||
-    isUriShapedDiagnosticValue(folderName) ||
-    isUriShapedDiagnosticValue(value)
-    ? unsupportedUriDiagnosticValue
-    : typeof value === "string"
-      ? value
-      : unsupportedDiagnosticValue;
-}
-
-function codeWorkspaceFolderStatusLabel(
-  status: CodeWorkspaceFolderDiagnostic["status"],
-) {
-  switch (status) {
-    case "matched":
-      return "Matched";
-    case "missing":
-      return "No match";
-    case "ambiguous":
-      return "Ambiguous";
-    case "unsupported":
-      return "Unsupported";
-  }
-}
-
-function codeWorkspaceDiagnosticsPayload(
-  imported: CodeWorkspaceFileImportResult,
-) {
-  const folderDiagnostics = new Map<number, CodeWorkspaceFolderDiagnostic>(
-    imported.diagnostics?.folders.map((folder) => [folder.folderIndex, folder]),
-  );
-  return {
-    schemaVersion: 1,
-    event: "codeWorkspaceImport",
-    fileName: imported.fileName,
-    importId: imported.importId,
-    result: {
-      folderCount: imported.folders.length,
-      matchedRepositoryCount: imported.repositories.length,
-      warningCodes: imported.warnings.map((warning) => warning.code),
-    },
-    catalog: imported.diagnostics
-      ? {
-          repositoryRootDisplayPath:
-            imported.diagnostics.catalog.repositoryRootDisplayPath,
-          repositoryCount: imported.diagnostics.catalog.repositoryCount,
-          skippedEntries: imported.diagnostics.catalog.skippedEntries,
-          repositories: imported.diagnostics.catalog.repositories.map(
-            (repository) => ({
-              label: repository.label,
-              displayPath: repository.displayPath,
-            }),
-          ),
-          repositoriesTruncated:
-            imported.diagnostics.catalog.repositoriesTruncated,
-        }
-      : null,
-    folders: imported.folders.map((folder, folderIndex) => {
-      const diagnostic = folderDiagnostics.get(folderIndex);
-      const rawPathIsUri = isUriShapedDiagnosticValue(folder.rawPath);
-      const folderNameIsUri = isUriShapedDiagnosticValue(folder.name);
-      return {
-        folderIndex,
-        name: sanitizedFolderDiagnosticName(folder.name, rawPathIsUri),
-        path: sanitizedFolderDiagnosticPath(folder.rawPath),
-        status: folder.status,
-        repository:
-          !rawPathIsUri &&
-          !folderNameIsUri &&
-          folder.repositoryLabel &&
-          folder.repositoryDisplayPath
-            ? {
-                ...(folder.repositoryId === undefined
-                  ? {}
-                  : { repositoryId: folder.repositoryId }),
-                label: folder.repositoryLabel,
-                displayPath: folder.repositoryDisplayPath,
-                baseRef: folder.baseRef,
-              }
-            : null,
-        resolution: diagnostic
-          ? {
-              reason: diagnostic.reason,
-              resolutionBasis: diagnostic.resolutionBasis,
-              attempts: diagnostic.attempts.map((attempt) => ({
-                basis: attempt.basis,
-                value: sanitizedMatchAttemptValue(
-                  folder.rawPath,
-                  folder.name,
-                  attempt.value,
-                ),
-                candidateCount: attempt.candidateCount,
-              })),
-              candidates:
-                rawPathIsUri || folderNameIsUri
-                  ? []
-                  : diagnostic.candidates.map((candidate) => ({
-                      label: candidate.label,
-                      displayPath: candidate.displayPath,
-                    })),
-              candidatesTruncated: diagnostic.candidatesTruncated,
-              duplicateRepository: diagnostic.duplicateRepository,
-            }
-          : null,
-      };
-    }),
-  };
-}
-
-function logCodeWorkspaceImportCompletion(
-  imported: CodeWorkspaceFileImportResult,
-) {
-  if (!imported.diagnostics && !interactiveDevLogging) return;
-  console.debug(
-    "[WTS] VS Code workspace import completed",
-    codeWorkspaceDiagnosticsPayload(imported),
-  );
-}
-
-function logCodeWorkspaceImportFailure(fileName: string, error: unknown) {
-  if (!interactiveDevLogging) return;
-  const clientError = error instanceof WorkspaceClientError ? error : undefined;
-  console.debug("[WTS] VS Code workspace import failed", {
-    schemaVersion: 1,
-    event: "codeWorkspaceImportFailed",
-    fileName,
-    error: {
-      name: error instanceof Error ? error.name : "UnknownError",
-      message:
-        error instanceof Error
-          ? error.message
-          : "The VS Code workspace file could not be imported.",
-      code: clientError?.code,
-      status: clientError?.status,
-      retryable: clientError?.retryable,
-    },
-  });
-}
-
-function issueKeyFrom(value: string) {
-  const match = value.toUpperCase().match(/[A-Z][A-Z0-9]+-\d+/);
-  return (
-    match?.[0] ??
-    value
-      .trim()
-      .toUpperCase()
-      .replace(/[^A-Z0-9-]/g, "")
-  );
-}
-
-function openProjectReferenceFrom(value: string) {
-  const reference = value.trim();
-  const direct = reference.match(/^#?([1-9][0-9]{0,14})$/);
-  const fromUrl = reference.match(
-    /(?:^|\/)work_packages\/([1-9][0-9]{0,14})(?:[/?#]|$)/i,
-  );
-  const numericReference = direct?.[1] ?? fromUrl?.[1];
-  if (numericReference) return numericReference;
-
-  const semanticReference = reference.toUpperCase();
-  return /^[A-Z0-9][A-Z0-9._-]{0,127}$/.test(semanticReference) &&
-    !/^0+$/.test(semanticReference)
-    ? semanticReference
-    : null;
-}
-
-function openProjectImportMatchesReference(
-  imported: OpenProjectWorkPackageImport,
-  reference: string,
-) {
-  return /^[1-9][0-9]{0,14}$/.test(reference)
-    ? imported.workPackageId === Number(reference)
-    : imported.displayId.trim().toUpperCase() === reference.toUpperCase();
-}
-
-function importedIssueContent(content: string, title: string) {
-  let readable = content;
-  try {
-    const parsed = JSON.parse(content) as unknown;
-    const record =
-      parsed !== null && typeof parsed === "object"
-        ? (parsed as Record<string, unknown>)
-        : null;
-    const fields =
-      record?.fields !== null && typeof record?.fields === "object"
-        ? (record.fields as Record<string, unknown>)
-        : null;
-    const description = fields?.description ?? record?.description;
-    if (typeof description === "string") {
-      readable = description;
-    } else if (description !== undefined) {
-      const text: string[] = [];
-      const pending: unknown[] = [description];
-      while (pending.length > 0 && text.length < 200) {
-        const value = pending.pop();
-        if (value === null || value === undefined) continue;
-        if (typeof value === "string") {
-          text.push(value);
-        } else if (Array.isArray(value)) {
-          pending.push(...value.slice().reverse());
-        } else if (typeof value === "object") {
-          const object = value as Record<string, unknown>;
-          if (typeof object.text === "string") text.push(object.text);
-          if (Array.isArray(object.content)) {
-            pending.push(...object.content.slice().reverse());
-          }
-        }
-      }
-      if (text.length > 0) readable = text.join(" ");
-    }
-  } catch {
-    // OpenProject content and some Jira MCP implementations return plain text.
-  }
-  readable = readable.replace(/\s+/g, " ").trim();
-  if (readable.toLowerCase().startsWith(title.trim().toLowerCase())) {
-    readable = readable.slice(title.trim().length).trim();
-  }
-  if (!readable) return "No description was provided by the issue tracker.";
-  return readable.length > 1_200
-    ? `${readable.slice(0, 1_197).trimEnd()}…`
-    : readable;
-}
-
-function workspaceIntentMatches(left: WorkspaceIntent, right: WorkspaceIntent) {
-  if (left.type !== right.type) return false;
-  if (left.type === "jira" && right.type === "jira") {
-    return left.issueKey === right.issueKey;
-  }
-  if (left.type === "openProject" && right.type === "openProject") {
-    return (
-      left.workPackageId === right.workPackageId &&
-      left.displayId === right.displayId
-    );
-  }
-  return (
-    left.type === "repositorySet" &&
-    right.type === "repositorySet" &&
-    left.label === right.label
-  );
-}
-
-function repositoryNamesFrom(value: string) {
-  const seen = new Set<string>();
-  return value
-    .split(/[\n,]+/)
-    .map((name) => name.trim())
-    .filter((name) => {
-      if (!name) return false;
-      const normalized = name.toLowerCase();
-      if (seen.has(normalized)) return false;
-      seen.add(normalized);
-      return true;
-    });
-}
-
-function repositoryLeafFromRemoteUrl(value: string) {
-  const remote = value.trim();
-  if (
-    !remote ||
-    remote.length > 2_048 ||
-    /\s|[\u0000-\u001f\u007f\\%?#]/.test(remote) ||
-    remote.startsWith("--")
-  ) {
-    return null;
-  }
-
-  let path = "";
-  try {
-    const parsed = new URL(remote);
-    if (!["https:", "ssh:"].includes(parsed.protocol)) return null;
-    if (
-      !parsed.hostname ||
-      parsed.password ||
-      (parsed.protocol === "https:" && parsed.username)
-    ) {
-      return null;
-    }
-    path = parsed.pathname;
-  } catch {
-    const scpRemote = remote.match(
-      /^(?:[A-Za-z0-9._-]+@)?[A-Za-z0-9.-]+:([A-Za-z0-9._/-]+)$/,
-    );
-    if (!scpRemote) return null;
-    path = scpRemote[1];
-  }
-
-  const leaf = path
-    .replace(/\/+$/, "")
-    .split("/")
-    .at(-1)
-    ?.replace(/\.git$/i, "");
-  return leaf && /^[A-Za-z0-9][A-Za-z0-9._-]{0,119}$/.test(leaf) ? leaf : null;
-}
-
-export interface IssueRepositoryUpstream {
-  label: string;
-  remoteUrl: string;
-}
-
-function isIssueGitRemoteUrl(remoteUrl: string) {
-  try {
-    const parsed = new URL(remoteUrl);
-    if (!['https:', 'ssh:'].includes(parsed.protocol)) return false;
-
-    // An issue page is context, not a Git clone target.
-    if (/\/browse\//i.test(parsed.pathname)) return false;
-    return (
-      /\.git$/i.test(parsed.pathname) ||
-      /(?:^|\.)(github\.com|gitlab\.com|bitbucket\.org)$/i.test(
-        parsed.hostname,
-      )
-    );
-  } catch {
-    return /^(?:[A-Za-z0-9._-]+@)?[A-Za-z0-9.-]+:[A-Za-z0-9._/+-]+(?:\.git)?$/i.test(
-      remoteUrl,
-    );
-  }
-}
-
-export function repositoryUpstreamsFromIssueContent(
-  content: string,
-): IssueRepositoryUpstream[] {
-  const candidates =
-    content.match(
-      /(?:https|ssh):\/\/[^\s<>"'`]+|(?:[A-Za-z0-9._-]+@)[A-Za-z0-9.-]+:[A-Za-z0-9._/+\-]+/g,
-    ) ?? [];
-  const upstreams = new Map<string, IssueRepositoryUpstream>();
-
-  for (const candidate of candidates) {
-    const remoteUrl = candidate.replace(/[),.;\]}]+$/, "");
-    if (!isIssueGitRemoteUrl(remoteUrl)) continue;
-    const label = repositoryLeafFromRemoteUrl(remoteUrl);
-    if (!label) continue;
-    upstreams.set(label.toLocaleLowerCase(), { label, remoteUrl });
-  }
-
-  return Array.from(upstreams.values());
-}
-
-function joinDisplayPath(root: string, leaf: string) {
-  if (!root) return leaf;
-  const separator = root.includes("\\") && !root.includes("/") ? "\\" : "/";
-  return `${root.replace(/[\\/]+$/, "")}${separator}${leaf}`;
-}
-
-function repositoryEvidenceKey(
-  repositoryId: string | undefined,
-  label: string,
-) {
-  return repositoryId ?? label.trim().toLowerCase();
-}
-
-function moveCompositeFocus(
-  root: HTMLElement,
-  event: Pick<ReactKeyboardEvent<HTMLElement>, "key" | "target" | "preventDefault" | "stopPropagation">,
-  selector: string,
-  columns: number,
-  activate = false,
-) {
-  const key = event.key;
-  if (
-    !["ArrowDown", "ArrowUp", "ArrowLeft", "ArrowRight", "Home", "End"].includes(
-      key,
-    )
-  ) {
-    return;
-  }
-
-  const items = Array.from(
-    root.querySelectorAll<HTMLElement>(selector),
-  ).filter((item) => !item.matches(":disabled, [aria-disabled='true']"));
-  const focusedItem = event.target instanceof HTMLElement
-    ? event.target.closest<HTMLElement>(selector)
-    : null;
-  const currentIndex = focusedItem ? items.indexOf(focusedItem) : -1;
-  if (currentIndex < 0 || items.length === 0) return;
-
-  const rowStart = Math.floor(currentIndex / columns) * columns;
-  const rowEnd = Math.min(rowStart + columns - 1, items.length - 1);
-  let nextIndex = currentIndex;
-  if (key === "Home") nextIndex = 0;
-  else if (key === "End") nextIndex = items.length - 1;
-  else if (key === "ArrowLeft") nextIndex = Math.max(rowStart, currentIndex - 1);
-  else if (key === "ArrowRight") nextIndex = Math.min(rowEnd, currentIndex + 1);
-  else if (key === "ArrowUp") nextIndex = Math.max(0, currentIndex - columns);
-  else if (key === "ArrowDown") {
-    nextIndex = Math.min(items.length - 1, currentIndex + columns);
-  }
-
-  if (nextIndex === currentIndex) return;
-  event.preventDefault();
-  const next = items[nextIndex]!;
-  next.focus();
-  if (activate) next.click();
-}
-
-function catalogRepositoryFor(
-  repositoryId: string | undefined,
-  label: string,
-  repositoryCatalog: RepositoryCatalog | undefined,
-): RepositorySummary | undefined {
-  const repositories = repositoryCatalog?.repositories ?? [];
-  if (repositoryId) {
-    return repositories.find((repository) => repository.id === repositoryId);
-  }
-
-  const labelMatches = repositories.filter(
-    (repository) =>
-      repository.label.localeCompare(label, undefined, {
-        sensitivity: "accent",
-      }) === 0,
-  );
-  if (labelMatches.length === 1) return labelMatches[0];
-  if (labelMatches.length > 1) return undefined;
-
-  const checkoutMatches = repositories.filter(
-    (repository) =>
-      repository.checkoutLeaf.localeCompare(label, undefined, {
-        sensitivity: "accent",
-      }) === 0,
-  );
-  return checkoutMatches.length === 1 ? checkoutMatches[0] : undefined;
-}
-
-function remoteMatchesRepositoryLabel(
-  label: string,
-  repository: RepositorySummary,
-) {
-  const normalize = (value: string) =>
-    value.toLocaleLowerCase().replace(/[^a-z0-9]+/g, "");
-  const target = normalize(label);
-  if (!target) return false;
-
-  return [repository.label, repository.checkoutLeaf, repository.originUrl]
-    .filter((value): value is string => Boolean(value))
-    .map(normalize)
-    .some((value) => value.includes(target) || target.includes(value));
-}
-
-const runtimeConfidenceLabels: Record<RuntimeAnalysisConfidence, string> = {
-  declared: "Declared",
-  corroborated: "Corroborated",
-  inferred: "Inferred",
-  suggested: "Suggested",
-};
-
-function runtimeAnalysisPreparationFor(
-  repositories: RepoEvidence[],
-  repositoryCatalog: RepositoryCatalog | undefined,
-): {
-  request: RuntimeAnalysisRequest | null;
-  fingerprint: string;
-  unresolvedLabels: string[];
-} {
-  const prepared = repositories.map((repository) => {
-    const catalogRepository = catalogRepositoryFor(
-      repository.repositoryId,
-      repository.id,
-      repositoryCatalog,
-    );
-    return {
-      repositoryId: repository.repositoryId ?? catalogRepository?.id,
-      label: repository.id.trim(),
-      baseRef: repository.base.trim(),
-    };
-  });
-  const resolvedIdCounts = new Map<string, number>();
-  for (const repository of prepared) {
-    if (!repository.repositoryId) continue;
-    resolvedIdCounts.set(
-      repository.repositoryId,
-      (resolvedIdCounts.get(repository.repositoryId) ?? 0) + 1,
-    );
-  }
-  const unresolvedLabels = prepared
-    .filter(
-      (repository) =>
-        !repository.repositoryId ||
-        resolvedIdCounts.get(repository.repositoryId) !== 1,
-    )
-    .map((repository) => repository.label);
-  const fingerprint = JSON.stringify(
-    prepared
-      .map((repository) => ({
-        repositoryId: repository.repositoryId ?? "",
-        label: repository.label,
-        baseRef: repository.baseRef,
-      }))
-      .sort(
-        (left, right) =>
-          left.repositoryId.localeCompare(right.repositoryId) ||
-          left.label.localeCompare(right.label) ||
-          left.baseRef.localeCompare(right.baseRef),
-      ),
-  );
-
-  return {
-    request:
-      unresolvedLabels.length === 0
-        ? {
-            repositories: prepared.map((repository) => ({
-              repositoryId: repository.repositoryId!,
-              label: repository.label,
-              baseRef: repository.baseRef,
-            })),
-          }
-        : null,
-    fingerprint,
-    unresolvedLabels,
-  };
-}
-
-function runtimeDraftsFromAnalysis(
-  analysis: RuntimeAnalysisResult,
-): Map<string, RuntimeServiceDraft> {
-  return new Map(
-    analysis.services.map((service) => [
-      service.candidateId,
-      {
-        included: service.includedByDefault,
-        ports: service.ports.map((port) => ({
-          portId: port.portId,
-          preferredPort:
-            port.preferredPort === undefined ? "" : String(port.preferredPort),
-          policy: port.policy,
-        })),
-      },
-    ]),
-  );
-}
-
-function validRuntimePort(value: string) {
-  if (!/^[0-9]+$/.test(value)) return null;
-  const port = Number(value);
-  return Number.isSafeInteger(port) && port >= 1_024 && port <= 65_535
-    ? port
-    : null;
-}
-
-function runtimePortErrorId(candidateId: string, portId: string) {
-  return `runtime-port-error-${candidateId}-${portId}`.replace(
-    /[^a-zA-Z0-9_-]/g,
-    "-",
-  );
-}
-
-type RepositoryForgeTarget = {
-  forge: "github" | "gitlab";
-  host: string;
-};
-
-function repositoryForgeTarget(
-  originUrl: string | undefined,
-): RepositoryForgeTarget | null {
-  if (!originUrl) return null;
-  const value = originUrl.trim();
-  if (!value || /[?#\u0000-\u001f\u007f]/.test(value)) return null;
-
-  let host = "";
-  let repositoryPath = "";
-  const scheme = value.match(/^([a-z][a-z0-9+.-]*):\/\//i);
-  if (scheme) {
-    if (!["https", "ssh"].includes(scheme[1]!.toLowerCase())) {
-      return null;
-    }
-    try {
-      const parsed = new URL(value);
-      if (parsed.username || parsed.password || parsed.port) return null;
-      host = parsed.hostname.toLowerCase();
-      repositoryPath = parsed.pathname.replace(/^\/+|\/+$/g, "");
-    } catch {
-      return null;
-    }
-  } else {
-    const scp = value.match(/^(?:[^@/:\\]+@)?([^/:\\]+):(.+)$/);
-    if (!scp) return null;
-    host = scp[1]!.toLowerCase();
-    repositoryPath = scp[2]!.replace(/^\/+|\/+$/g, "");
-  }
-
-  if (
-    !host ||
-    !host.includes(".") ||
-    !repositoryPath ||
-    repositoryPath.includes("\\") ||
-    repositoryPath
-      .split("/")
-      .some((segment) => !segment || segment === "." || segment === "..")
-  ) {
-    return null;
-  }
-
-  const firstLabel = host.split(".")[0];
-  if (host === "github.com" || firstLabel === "github") {
-    return { forge: "github", host };
-  }
-  if (host === "gitlab.com" || firstLabel === "gitlab") {
-    return { forge: "gitlab", host };
-  }
-  return null;
-}
-
-function forgeDisplayName(forge: RepositoryForgeTarget["forge"]) {
-  return forge === "github" ? "GitHub" : "GitLab";
+  return cache;
 }
 
 function repositoryCatalogIdentity(repository: RepositorySummary): string {
@@ -1167,38 +450,12 @@ function repositoryCatalogIdentity(repository: RepositorySummary): string {
   return project.includes("/") ? project : repository.checkoutLeaf;
 }
 
-function newIdempotencyKey() {
-  const crypto = globalThis.crypto;
-  if (crypto?.randomUUID) return crypto.randomUUID();
-
-  const bytes = new Uint8Array(16);
-  if (crypto?.getRandomValues) {
-    crypto.getRandomValues(bytes);
-  } else {
-    for (let index = 0; index < bytes.length; index += 1) {
-      bytes[index] = Math.floor(Math.random() * 256);
-    }
-  }
-  bytes[6] = (bytes[6]! & 0x0f) | 0x40;
-  bytes[8] = (bytes[8]! & 0x3f) | 0x80;
-  const hex = Array.from(bytes, (byte) =>
-    byte.toString(16).padStart(2, "0"),
-  ).join("");
-  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
-}
-
 const providerFromView: Record<WorkspaceProvider, Provider> = {
   codex: "Codex",
   openCode: "OpenCode",
   hermes: "Hermes",
   vsCode: "VS Code",
-};
-
-const providerToRequest: Record<Provider, WorkspaceProvider> = {
-  Codex: "codex",
-  OpenCode: "openCode",
-  Hermes: "hermes",
-  "VS Code": "vsCode",
+  copilot: "Copilot",
 };
 
 function preferredAgentProvider(provider: Provider): AgentProvider | null {
@@ -1209,6 +466,8 @@ function preferredAgentProvider(provider: Provider): AgentProvider | null {
       return "openCode";
     case "Hermes":
       return "hermes";
+    case "Copilot":
+      return "copilot";
     case "VS Code":
       return null;
   }
@@ -1590,41 +849,6 @@ const laneDetails: Record<
   },
 };
 
-const providers: Array<{
-  id: Provider;
-  description: string;
-  capability: string;
-}> = [
-  {
-    id: "Codex",
-    description: "Interactive Codex CLI rooted at the generated workspace.",
-    capability: "Terminal CLI",
-  },
-  {
-    id: "OpenCode",
-    description:
-      "A terminal-native coding agent inside the selected worktrees.",
-    capability: "Terminal session",
-  },
-  {
-    id: "Hermes",
-    description: "Interactive Hermes CLI rooted at the generated workspace.",
-    capability: "Terminal CLI",
-  },
-  {
-    id: "VS Code",
-    description: "Open the workspace directly without an autonomous agent.",
-    capability: "Editor only",
-  },
-];
-
-const providerMarks: Record<Provider, string> = {
-  Codex: "CX",
-  OpenCode: "OC",
-  Hermes: "HM",
-  "VS Code": "VS",
-};
-
 export function StateDot({ state }: { state: Lane }) {
   return (
     <span className={styles.stateDot} data-state={state} aria-hidden="true" />
@@ -1715,5070 +939,6 @@ function horizontalScrollConsumesSwipe(
     element = element.parentElement;
   }
   return false;
-}
-
-function CodeWorkspaceDiagnosticsPanel({
-  imported,
-  copyState,
-  onCopy,
-}: {
-  imported: CodeWorkspaceFileImportResult;
-  copyState: "idle" | "copied" | "error";
-  onCopy: () => void;
-}) {
-  const diagnostics = imported.diagnostics;
-  if (!diagnostics) return null;
-
-  return (
-    <details
-      className={styles.importDiagnostics}
-      data-ui="workspace-import.diagnostics"
-      data-ui-label="Import diagnostics"
-    >
-      <summary>
-        <span className={styles.importDiagnosticsChevron}>
-          <Glyph name="chevron" size={14} />
-        </span>
-        <span>
-          <b>Developer diagnostics</b>
-          <small>Trace trusted-root discovery and folder matching</small>
-        </span>
-        <span className={styles.importDiagnosticsBadge}>DEBUG DATA</span>
-      </summary>
-
-      <div className={styles.importDiagnosticsBody}>
-        <p className={styles.importDiagnosticsBoundary}>
-          WTS searches a bounded set of nested folders under the configured
-          trusted source roots. Absolute paths can match exactly. Because the
-          browser does not reveal the selected file’s parent directory, relative
-          paths remain non-authoritative lookup hints: WTS first compares their
-          safe path suffix inside the trusted catalog, then tries the final
-          folder name and optional VS Code name. A workspace file never grants
-          filesystem authority outside those roots.
-        </p>
-
-        <dl className={styles.importDiagnosticsFacts}>
-          <div>
-            <dt>Import ID</dt>
-            <dd>
-              <code>{imported.importId}</code>
-            </dd>
-          </div>
-          <div>
-            <dt>Discovery mode</dt>
-            <dd>Nested repositories · bounded scan</dd>
-          </div>
-          <div className={styles.importDiagnosticsRootFact}>
-            <dt>Primary trusted source root</dt>
-            <dd>
-              <code>{diagnostics.catalog.repositoryRootDisplayPath}</code>
-            </dd>
-          </div>
-          <div>
-            <dt>Repositories found</dt>
-            <dd>
-              {diagnostics.catalog.repositoryCount}{" "}
-              {diagnostics.catalog.repositoryCount === 1
-                ? "repository"
-                : "repositories"}
-            </dd>
-          </div>
-          <div>
-            <dt>Entries skipped</dt>
-            <dd>
-              {diagnostics.catalog.skippedEntries} during bounded discovery
-            </dd>
-          </div>
-        </dl>
-
-        <section
-          aria-labelledby="code-workspace-catalog-sample-title"
-          className={styles.importDiagnosticsSection}
-        >
-          <header>
-            <h4 id="code-workspace-catalog-sample-title">
-              Discovered local sources
-            </h4>
-            <small>
-              {diagnostics.catalog.repositories.length} shown
-              {diagnostics.catalog.repositoriesTruncated ? " · truncated" : ""}
-            </small>
-          </header>
-          {diagnostics.catalog.repositories.length > 0 ? (
-            <ul className={styles.importDiagnosticsRepositories}>
-              {diagnostics.catalog.repositories.map((repository, index) => (
-                <li
-                  key={`${repository.label}-${repository.displayPath}-${index}`}
-                >
-                  <b>{repository.label}</b>
-                  <code>{repository.displayPath}</code>
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <p className={styles.importDiagnosticsEmpty}>
-              No Git repositories were discovered under the configured trusted
-              source roots within this bounded scan.
-            </p>
-          )}
-        </section>
-
-        <section
-          aria-labelledby="code-workspace-folder-diagnostics-title"
-          className={styles.importDiagnosticsSection}
-        >
-          <header>
-            <h4 id="code-workspace-folder-diagnostics-title">
-              Folder resolution
-            </h4>
-            <small>{diagnostics.folders.length} inspected</small>
-          </header>
-          <div className={styles.importDiagnosticsFolders}>
-            {diagnostics.folders.map((diagnostic) => {
-              const folder = imported.folders[diagnostic.folderIndex];
-              return (
-                <article
-                  data-status={diagnostic.status}
-                  key={`${diagnostic.folderIndex}-${diagnostic.reason}`}
-                >
-                  <header>
-                    <span>
-                      <b>
-                        {folder?.name ?? `Folder ${diagnostic.folderIndex + 1}`}
-                      </b>
-                      <code>{folder?.rawPath || "No path supplied"}</code>
-                    </span>
-                    <em>{codeWorkspaceFolderStatusLabel(diagnostic.status)}</em>
-                  </header>
-                  <p>
-                    {codeWorkspaceDiagnosticReasonLabels[diagnostic.reason]}
-                    <code>{diagnostic.reason}</code>
-                  </p>
-                  {diagnostic.attempts.length > 0 && (
-                    <ol
-                      aria-label={`Matching attempts for ${
-                        folder?.name ?? "folder"
-                      }`}
-                    >
-                      {diagnostic.attempts.map((attempt, attemptIndex) => (
-                        <li
-                          key={`${attempt.basis}-${attempt.value}-${attemptIndex}`}
-                        >
-                          <span>
-                            {codeWorkspaceDiagnosticBasisLabels[attempt.basis]}
-                          </span>
-                          <code>{attempt.value || "empty value"}</code>
-                          <small>
-                            {attempt.candidateCount}{" "}
-                            {attempt.candidateCount === 1
-                              ? "candidate"
-                              : "candidates"}
-                          </small>
-                        </li>
-                      ))}
-                    </ol>
-                  )}
-                  {diagnostic.candidates.length > 0 && (
-                    <div className={styles.importDiagnosticsCandidates}>
-                      <b>
-                        Decisive candidates
-                        {diagnostic.candidatesTruncated ? " (truncated)" : ""}
-                      </b>
-                      <ul>
-                        {diagnostic.candidates.map((candidate, index) => (
-                          <li
-                            key={`${candidate.label}-${candidate.displayPath}-${index}`}
-                          >
-                            <span>{candidate.label}</span>
-                            <code>{candidate.displayPath}</code>
-                          </li>
-                        ))}
-                      </ul>
-                    </div>
-                  )}
-                  {diagnostic.duplicateRepository && (
-                    <small className={styles.importDiagnosticsDuplicate}>
-                      This match duplicated a repository selected by an earlier
-                      folder.
-                    </small>
-                  )}
-                </article>
-              );
-            })}
-          </div>
-        </section>
-
-        <footer className={styles.importDiagnosticsFooter}>
-          <p>
-            The copy includes local paths and repository labels. It excludes
-            workspace-file contents, settings, tasks, extensions, and session
-            credentials.
-          </p>
-          <button
-            className={styles.importDiagnosticsCopy}
-            onClick={onCopy}
-            type="button"
-          >
-            <Glyph name={copyState === "copied" ? "check" : "copy"} size={14} />
-            {copyState === "copied" ? "Diagnostics copied" : "Copy diagnostics"}
-          </button>
-          {copyState !== "idle" && (
-            <span
-              aria-live={copyState === "error" ? "assertive" : "polite"}
-              className={styles.importDiagnosticsCopyStatus}
-              role={copyState === "error" ? "alert" : "status"}
-            >
-              {copyState === "error"
-                ? "Clipboard unavailable. Copy from this panel instead."
-                : "Copied—review local paths before sharing."}
-            </span>
-          )}
-        </footer>
-      </div>
-    </details>
-  );
-}
-
-interface ReviewWorkspaceSeed {
-  preparation: CloneRepositoryResult;
-  review: GitlabReview;
-}
-
-function NewWorkspaceDialog({
-  open,
-  onOpenChange,
-  onComplete,
-  client,
-  workspaces,
-  workspaceRootDisplayPath,
-  repositoryCatalog,
-  initialTemplateWorkspaceId,
-  initialRepositoryBaseOverrides,
-  initialReviewWorkspace,
-  initialPlanningEnabled,
-}: {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  onComplete: (workspace: WorkspaceView) => void;
-  client: WorkspaceClient;
-  workspaces: Workspace[];
-  workspaceRootDisplayPath: string;
-  repositoryCatalog?: RepositoryCatalog;
-  initialTemplateWorkspaceId?: string;
-  initialRepositoryBaseOverrides?: Record<string, string>;
-  initialReviewWorkspace?: ReviewWorkspaceSeed;
-  initialPlanningEnabled?: boolean;
-}) {
-  const isRevisionMode = Boolean(initialTemplateWorkspaceId);
-  const [step, setStep] = useState<CreateStep>("source");
-  const [furthestReviewStepNumber, setFurthestReviewStepNumber] = useState(1);
-  const [sourceMode, setSourceMode] = useState<SourceMode>("issue");
-  const [issueProvider, setIssueProvider] = useState<IssueProvider>("jira");
-  const [sourceValue, setSourceValue] = useState("");
-  const [templateWorkspaceId, setTemplateWorkspaceId] = useState("");
-  const [revisionTitle, setRevisionTitle] = useState("");
-  const [issueRepositories, setIssueRepositories] = useState("");
-  const [jiraImport, setJiraImport] = useState<JiraIssueImport | null>(null);
-  const [openProjectImport, setOpenProjectImport] =
-    useState<OpenProjectWorkPackageImport | null>(null);
-  const [sourceImportState, setSourceImportState] = useState<
-    "idle" | "loading" | "ready" | "error"
-  >("idle");
-  const [sourceImportMessage, setSourceImportMessage] = useState("");
-  const [codeWorkspaceImport, setCodeWorkspaceImport] =
-    useState<CodeWorkspaceFileImportResult | null>(null);
-  const [codeWorkspaceImportState, setCodeWorkspaceImportState] = useState<
-    "idle" | "loading" | "ready" | "error"
-  >("idle");
-  const [codeWorkspaceImportMessage, setCodeWorkspaceImportMessage] =
-    useState("");
-  const [codeWorkspaceTitle, setCodeWorkspaceTitle] = useState("");
-  const [codeWorkspaceAddedRepositoryIds, setCodeWorkspaceAddedRepositoryIds] =
-    useState<string[]>([]);
-  const [codeWorkspaceRepositoryToAdd, setCodeWorkspaceRepositoryToAdd] =
-    useState("");
-  const [codeWorkspaceRepositoryAddMode, setCodeWorkspaceRepositoryAddMode] =
-    useState<CodeWorkspaceRepositoryAddMode>("existing");
-  const [codeWorkspaceCloneUrl, setCodeWorkspaceCloneUrl] = useState("");
-  const [codeWorkspaceCloneState, setCodeWorkspaceCloneState] = useState<
-    "idle" | "loading" | "ready" | "error"
-  >("idle");
-  const [codeWorkspaceCloneMessage, setCodeWorkspaceCloneMessage] =
-    useState("");
-  const [issueRepositoryCloneKey, setIssueRepositoryCloneKey] = useState("");
-  const [issueRepositoryCloneNotice, setIssueRepositoryCloneNotice] = useState<{
-    kind: "success" | "error";
-    message: string;
-  } | null>(null);
-  const [issueRepositoryLocalMatches, setIssueRepositoryLocalMatches] =
-    useState<Record<string, string>>({});
-  const [issueRepositoryShowAllRemotes, setIssueRepositoryShowAllRemotes] =
-    useState<Record<string, boolean>>({});
-  const [codeWorkspaceClonedRepositories, setCodeWorkspaceClonedRepositories] =
-    useState<RepositorySummary[]>([]);
-  const [refreshedRepositories, setRefreshedRepositories] = useState<
-    RepositorySummary[]
-  >([]);
-  const [refreshingRepositoryId, setRefreshingRepositoryId] = useState("");
-  const [codeWorkspaceCloneRoot, setCodeWorkspaceCloneRoot] = useState("");
-  const [codeWorkspaceExportState, setCodeWorkspaceExportState] = useState<
-    "idle" | "downloaded" | "error"
-  >("idle");
-  const [
-    codeWorkspaceDiagnosticsCopyState,
-    setCodeWorkspaceDiagnosticsCopyState,
-  ] = useState<"idle" | "copied" | "error">("idle");
-  const [repos, setRepos] = useState<RepoEvidence[]>([]);
-  const [openingRepositoryBaseKey, setOpeningRepositoryBaseKey] = useState("");
-  const [repositoryBaseNotice, setRepositoryBaseNotice] = useState<{
-    kind: "opening" | "success" | "error";
-    message: string;
-  } | null>(null);
-  const [runtimeAnalysis, setRuntimeAnalysis] =
-    useState<RuntimeAnalysisResult | null>(null);
-  const [runtimeAnalysisState, setRuntimeAnalysisState] = useState<
-    "idle" | "loading" | "ready" | "error"
-  >("idle");
-  const [runtimeAnalysisError, setRuntimeAnalysisError] = useState("");
-  const [runtimeAnalysisElapsedSeconds, setRuntimeAnalysisElapsedSeconds] =
-    useState(0);
-  const [runtimeAnalysisFingerprint, setRuntimeAnalysisFingerprint] =
-    useState("");
-  const [runtimeServiceDrafts, setRuntimeServiceDrafts] = useState<
-    Map<string, RuntimeServiceDraft>
-  >(new Map());
-  const [provider, setProvider] = useState<Provider>("Codex");
-  const [planningEnabled, setPlanningEnabled] = useState(false);
-  const [planningFolder, setPlanningFolder] =
-    useState<WorkspacePlanningSelection["folder"]>("plansAndKanban");
-  const [planningFormat, setPlanningFormat] =
-    useState<WorkspacePlanningSelection["format"]>("kanban");
-  const [saveError, setSaveError] = useState("");
-  const [saveWarning, setSaveWarning] = useState("");
-  const [savedWorkspace, setSavedWorkspace] = useState<WorkspaceView | null>(
-    null,
-  );
-  const stepHeadingRef = useRef<HTMLHeadingElement>(null);
-  const previousStepRef = useRef<CreateStep>("source");
-  const idempotencyKeyRef = useRef("");
-  const idempotencyRequestRef = useRef("");
-  const dialogSessionGenerationRef = useRef(0);
-  const sourceImportGenerationRef = useRef(0);
-  const codeWorkspaceImportIdRef = useRef<string | null>(null);
-  const repositoryCloneGenerationRef = useRef(0);
-  const repositoryEditRevisionRef = useRef(0);
-  const repositoryBaseOpenGenerationRef = useRef(0);
-  const runtimeAnalysisGenerationRef = useRef(0);
-  const runtimeAnalysisCacheRef = useRef(
-    new Map<string, RuntimeAnalysisResult>(),
-  );
-  const reviewedSourceRepositoriesFingerprintRef = useRef("");
-  const currentRuntimeFingerprintRef = useRef("");
-  const saveGenerationRef = useRef(0);
-  const activeSaveRef = useRef(false);
-  const currentClientRef = useRef(client);
-  const autoSuggestedRepositoriesRef = useRef<string | null>(null);
-
-  useEffect(() => {
-    dialogSessionGenerationRef.current += 1;
-    sourceImportGenerationRef.current += 1;
-    repositoryCloneGenerationRef.current += 1;
-    saveGenerationRef.current += 1;
-    repositoryEditRevisionRef.current = 0;
-    repositoryBaseOpenGenerationRef.current += 1;
-    runtimeAnalysisGenerationRef.current += 1;
-    runtimeAnalysisCacheRef.current.clear();
-    reviewedSourceRepositoriesFingerprintRef.current = "";
-    currentRuntimeFingerprintRef.current = "";
-    activeSaveRef.current = false;
-    autoSuggestedRepositoriesRef.current = null;
-
-    if (!open) {
-      setStep("source");
-      setFurthestReviewStepNumber(1);
-      setSourceMode("issue");
-      setIssueProvider("jira");
-      setSourceValue("");
-      setTemplateWorkspaceId("");
-      setRevisionTitle("");
-      setIssueRepositories("");
-      setJiraImport(null);
-      setOpenProjectImport(null);
-      setSourceImportState("idle");
-      setSourceImportMessage("");
-      setCodeWorkspaceImport(null);
-      codeWorkspaceImportIdRef.current = null;
-      setCodeWorkspaceImportState("idle");
-      setCodeWorkspaceImportMessage("");
-      setCodeWorkspaceTitle("");
-      setCodeWorkspaceAddedRepositoryIds([]);
-      setCodeWorkspaceRepositoryToAdd("");
-      setCodeWorkspaceRepositoryAddMode("existing");
-      setCodeWorkspaceCloneUrl("");
-      setCodeWorkspaceCloneState("idle");
-      setCodeWorkspaceCloneMessage("");
-      setIssueRepositoryCloneKey("");
-      setIssueRepositoryCloneNotice(null);
-      setIssueRepositoryLocalMatches({});
-      setIssueRepositoryShowAllRemotes({});
-      setCodeWorkspaceClonedRepositories([]);
-      setRefreshedRepositories([]);
-      setRefreshingRepositoryId("");
-      setCodeWorkspaceCloneRoot("");
-      setCodeWorkspaceExportState("idle");
-      setCodeWorkspaceDiagnosticsCopyState("idle");
-      setRepos([]);
-      setOpeningRepositoryBaseKey("");
-      setRepositoryBaseNotice(null);
-      setRuntimeAnalysis(null);
-      setRuntimeAnalysisState("idle");
-      setRuntimeAnalysisError("");
-      setRuntimeAnalysisElapsedSeconds(0);
-      setRuntimeAnalysisFingerprint("");
-      setRuntimeServiceDrafts(new Map());
-      setProvider("Codex");
-      setPlanningEnabled(false);
-      setPlanningFolder("plansAndKanban");
-      setPlanningFormat("kanban");
-      setSaveError("");
-      setSaveWarning("");
-      setSavedWorkspace(null);
-      idempotencyKeyRef.current = "";
-      idempotencyRequestRef.current = "";
-    }
-
-    return () => {
-      dialogSessionGenerationRef.current += 1;
-      sourceImportGenerationRef.current += 1;
-      repositoryCloneGenerationRef.current += 1;
-      codeWorkspaceImportIdRef.current = null;
-      repositoryBaseOpenGenerationRef.current += 1;
-      runtimeAnalysisGenerationRef.current += 1;
-      saveGenerationRef.current += 1;
-      activeSaveRef.current = false;
-    };
-  }, [open]);
-
-  useEffect(() => {
-    if (currentClientRef.current === client) return;
-
-    currentClientRef.current = client;
-    sourceImportGenerationRef.current += 1;
-    repositoryCloneGenerationRef.current += 1;
-    repositoryBaseOpenGenerationRef.current += 1;
-    runtimeAnalysisGenerationRef.current += 1;
-    runtimeAnalysisCacheRef.current.clear();
-    currentRuntimeFingerprintRef.current = "";
-    saveGenerationRef.current += 1;
-    activeSaveRef.current = false;
-    setOpeningRepositoryBaseKey("");
-    setRepositoryBaseNotice(null);
-    setRuntimeAnalysis(null);
-    setRuntimeAnalysisState("idle");
-    setRuntimeAnalysisError("");
-    setRuntimeAnalysisFingerprint("");
-    setRuntimeServiceDrafts(new Map());
-    if (sourceImportState === "loading") {
-      setSourceImportState("idle");
-      setSourceImportMessage(
-        "The workspace connection changed. Import this issue again.",
-      );
-    }
-    if (codeWorkspaceImportState === "loading") {
-      setCodeWorkspaceImportState("idle");
-      setCodeWorkspaceImportMessage(
-        "The workspace connection changed. Choose the VS Code workspace file again.",
-      );
-    }
-    if (codeWorkspaceCloneState === "loading") {
-      setCodeWorkspaceCloneState("idle");
-      setCodeWorkspaceCloneMessage(
-        "The workspace connection changed. Enter the repository URL again.",
-      );
-    }
-    if (step === "saving" && !saveError) {
-      setSaveError(
-        "The workspace connection changed before the save completed. Review and retry the plan.",
-      );
-    }
-  }, [client]);
-
-  useEffect(() => {
-    if (!open || !initialTemplateWorkspaceId) return;
-    const sourceWorkspace = workspaces.find(
-      (workspace) => workspace.id === initialTemplateWorkspaceId,
-    );
-    setSourceMode("workspace");
-    setTemplateWorkspaceId(initialTemplateWorkspaceId);
-    if (!sourceWorkspace) return;
-    setProvider(sourceWorkspace.provider);
-    setPlanningEnabled(
-      initialPlanningEnabled ?? sourceWorkspace.planning !== undefined,
-    );
-    setPlanningFolder(sourceWorkspace.planning?.folder ?? "plansAndKanban");
-    setPlanningFormat(sourceWorkspace.planning?.format ?? "kanban");
-    setRevisionTitle(`${sourceWorkspace.title} · revised`);
-    setRepos(
-      sourceWorkspace.repositoryPlans.map((repository) => ({
-        key: repositoryEvidenceKey(repository.repositoryId, repository.label),
-        id: repository.label,
-        ...(repository.repositoryId === undefined
-          ? {}
-          : { repositoryId: repository.repositoryId }),
-        reason: `Revised from ${sourceWorkspace.key}`,
-        confidence: 100,
-        included: true,
-        base:
-          (repository.repositoryId
-            ? initialRepositoryBaseOverrides?.[repository.repositoryId]
-            : undefined) ?? repository.baseRef,
-      })),
-    );
-    if (
-      initialRepositoryBaseOverrides &&
-      Object.keys(initialRepositoryBaseOverrides).length > 0
-    ) {
-      setStep("evidence");
-    }
-  }, [
-    initialRepositoryBaseOverrides,
-    initialPlanningEnabled,
-    initialTemplateWorkspaceId,
-    open,
-    workspaces,
-  ]);
-
-  useEffect(() => {
-    if (!open || !initialReviewWorkspace) return;
-    const repository = initialReviewWorkspace.preparation.repository;
-    setSourceMode("set");
-    setSourceValue(
-      `Review ${initialReviewWorkspace.review.repository} !${initialReviewWorkspace.review.number}`,
-    );
-    setCodeWorkspaceClonedRepositories([repository]);
-    setCodeWorkspaceCloneRoot(
-      initialReviewWorkspace.preparation.repositoryRootDisplayPath,
-    );
-    setCodeWorkspaceAddedRepositoryIds([repository.id]);
-    setProvider("Codex");
-    setPlanningEnabled(true);
-  }, [initialReviewWorkspace, open]);
-
-  useEffect(() => {
-    const stepChanged = previousStepRef.current !== step;
-    previousStepRef.current = step;
-    if (!open || !stepChanged) return;
-
-    const frame = window.requestAnimationFrame(() => {
-      stepHeadingRef.current?.focus();
-    });
-    return () => window.cancelAnimationFrame(frame);
-  }, [open, step]);
-
-  useEffect(() => {
-    const reviewStepNumber =
-      step === "source"
-        ? 1
-        : step === "evidence"
-          ? 2
-          : step === "services"
-            ? 3
-            : step === "manifest"
-              ? 4
-              : 0;
-    if (reviewStepNumber === 0) return;
-    setFurthestReviewStepNumber((current) =>
-      Math.max(current, reviewStepNumber),
-    );
-  }, [step]);
-
-  useEffect(() => {
-    if (step === "evidence") return;
-    repositoryBaseOpenGenerationRef.current += 1;
-    setOpeningRepositoryBaseKey("");
-    setRepositoryBaseNotice(null);
-  }, [step]);
-
-  const runtimeAnalysisStartedAtRef = useRef<number>(0);
-  useEffect(() => {
-    if (runtimeAnalysisState === "loading") {
-      runtimeAnalysisStartedAtRef.current = Date.now();
-      setRuntimeAnalysisElapsedSeconds(0);
-    }
-  }, [runtimeAnalysisState]);
-
-  useVisiblePolling(
-    () => {
-      if (runtimeAnalysisState === "loading") {
-        setRuntimeAnalysisElapsedSeconds(
-          Math.max(
-            0,
-            Math.floor(
-              (Date.now() - runtimeAnalysisStartedAtRef.current) / 1000,
-            ),
-          ),
-        );
-      }
-    },
-    1000,
-    { enabled: runtimeAnalysisState === "loading" },
-  );
-
-  const included = repos.filter((repo) => repo.included);
-  const effectiveRepositoryCatalog = useMemo(() => {
-    if (
-      codeWorkspaceClonedRepositories.length === 0 &&
-      refreshedRepositories.length === 0
-    ) {
-      return repositoryCatalog;
-    }
-    const repositories = new Map(
-      (repositoryCatalog?.repositories ?? []).map((repository) => [
-        repository.id,
-        repository,
-      ]),
-    );
-    for (const repository of codeWorkspaceClonedRepositories) {
-      repositories.set(repository.id, repository);
-    }
-    for (const repository of refreshedRepositories) {
-      repositories.set(repository.id, repository);
-    }
-    return {
-      repositoryRootDisplayPath:
-        repositoryCatalog?.repositoryRootDisplayPath ?? codeWorkspaceCloneRoot,
-      repositories: Array.from(repositories.values()),
-      skippedEntries: repositoryCatalog?.skippedEntries ?? 0,
-    };
-  }, [
-    codeWorkspaceCloneRoot,
-    codeWorkspaceClonedRepositories,
-    refreshedRepositories,
-    repositoryCatalog,
-  ]);
-  useEffect(() => {
-    if (
-      !effectiveRepositoryCatalog ||
-      effectiveRepositoryCatalog.repositories.length === 0 ||
-      repos.length === 0
-    ) {
-      return;
-    }
-
-    setRepos((current) => {
-      const claimedRepositoryIds = new Set(
-        current.flatMap((repository) =>
-          repository.repositoryId ? [repository.repositoryId] : [],
-        ),
-      );
-      let changed = false;
-      const reconciled = current.map((repository) => {
-        if (repository.repositoryId) return repository;
-        const catalogRepository = catalogRepositoryFor(
-          undefined,
-          repository.id,
-          effectiveRepositoryCatalog,
-        );
-        if (
-          !catalogRepository ||
-          claimedRepositoryIds.has(catalogRepository.id)
-        ) {
-          return repository;
-        }
-
-        claimedRepositoryIds.add(catalogRepository.id);
-        changed = true;
-        const selectedBaseAvailable =
-          catalogRepository.availableBranches?.some(
-            (branch) => branch.name === repository.base,
-          ) ?? false;
-        return {
-          ...repository,
-          repositoryId: catalogRepository.id,
-          base: selectedBaseAvailable
-            ? repository.base
-            : catalogRepository.defaultBranch.name,
-        };
-      });
-      return changed ? reconciled : current;
-    });
-  }, [effectiveRepositoryCatalog, repos]);
-  const runtimeAnalysisPreparation = useMemo(
-    () =>
-      runtimeAnalysisPreparationFor(
-        repos.filter((repo) => repo.included),
-        effectiveRepositoryCatalog,
-      ),
-    [effectiveRepositoryCatalog, repos],
-  );
-  const runtimeAnalysisRequest = runtimeAnalysisPreparation.request;
-  const currentRuntimeFingerprint = runtimeAnalysisPreparation.fingerprint;
-  currentRuntimeFingerprintRef.current = currentRuntimeFingerprint;
-  const isIssueSource = sourceMode === "issue";
-  const isWorkspaceSource = sourceMode === "workspace";
-  const isCodeWorkspaceSource = sourceMode === "codeWorkspace";
-  const templateWorkspace = workspaces.find(
-    (workspace) => workspace.id === templateWorkspaceId,
-  );
-  const catalogRepositoriesById = useMemo(
-    () =>
-      new Map(
-        (effectiveRepositoryCatalog?.repositories ?? []).map((repository) => [
-          repository.id,
-          repository,
-        ]),
-      ),
-    [effectiveRepositoryCatalog],
-  );
-  const importedCodeWorkspaceRepositoryIds = useMemo(
-    () =>
-      new Set(
-        codeWorkspaceImport?.repositories.flatMap((repository) =>
-          repository.repositoryId ? [repository.repositoryId] : [],
-        ) ?? [],
-      ),
-    [codeWorkspaceImport],
-  );
-  const templateWorkspaceRepositoryIds = useMemo(
-    () =>
-      new Set(
-        templateWorkspace?.repositoryPlans.flatMap((repository) =>
-          repository.repositoryId ? [repository.repositoryId] : [],
-        ) ?? [],
-      ),
-    [templateWorkspace],
-  );
-  const templateWorkspaceRepositoryLabels = useMemo(
-    () =>
-      new Set(
-        templateWorkspace?.repositoryPlans.map((repository) =>
-          repository.label.toLocaleLowerCase(),
-        ) ?? [],
-      ),
-    [templateWorkspace],
-  );
-  const addedCodeWorkspaceRepositories = useMemo(
-    () =>
-      codeWorkspaceAddedRepositoryIds.flatMap((repositoryId) => {
-        const repository = catalogRepositoriesById.get(repositoryId);
-        return repository ? [repository] : [];
-      }),
-    [catalogRepositoriesById, codeWorkspaceAddedRepositoryIds],
-  );
-  const clonedCodeWorkspaceRepositoryIds = useMemo(
-    () =>
-      new Set(
-        codeWorkspaceClonedRepositories.map((repository) => repository.id),
-      ),
-    [codeWorkspaceClonedRepositories],
-  );
-  const availableCodeWorkspaceRepositories = useMemo(
-    () =>
-      (effectiveRepositoryCatalog?.repositories ?? []).filter(
-        (repository) =>
-          !importedCodeWorkspaceRepositoryIds.has(repository.id) &&
-          !templateWorkspaceRepositoryIds.has(repository.id) &&
-          !templateWorkspaceRepositoryLabels.has(
-            repository.label.toLocaleLowerCase(),
-          ) &&
-          !codeWorkspaceAddedRepositoryIds.includes(repository.id),
-      ),
-    [
-      codeWorkspaceAddedRepositoryIds,
-      importedCodeWorkspaceRepositoryIds,
-      templateWorkspaceRepositoryIds,
-      templateWorkspaceRepositoryLabels,
-      effectiveRepositoryCatalog,
-    ],
-  );
-  const codeWorkspaceCloneLeaf = repositoryLeafFromRemoteUrl(
-    codeWorkspaceCloneUrl,
-  );
-  const codeWorkspaceCloneTarget = codeWorkspaceCloneLeaf
-    ? joinDisplayPath(
-        effectiveRepositoryCatalog?.repositoryRootDisplayPath ??
-          codeWorkspaceCloneRoot,
-        codeWorkspaceCloneLeaf,
-      )
-    : "";
-  const jiraRepositoryUpstreams = useMemo(
-    () => repositoryUpstreamsFromIssueContent(jiraImport?.content ?? ""),
-    [jiraImport?.content],
-  );
-  const jiraRepositoryUpstreamsByLabel = useMemo(
-    () =>
-      new Map(
-        jiraRepositoryUpstreams.map((upstream) => [
-          upstream.label.toLocaleLowerCase(),
-          upstream,
-        ]),
-      ),
-    [jiraRepositoryUpstreams],
-  );
-  useEffect(() => {
-    if (
-      !runtimeAnalysisFingerprint ||
-      runtimeAnalysisFingerprint === currentRuntimeFingerprint
-    ) {
-      return;
-    }
-    runtimeAnalysisGenerationRef.current += 1;
-    setRuntimeAnalysis(null);
-    setRuntimeAnalysisState("idle");
-    setRuntimeAnalysisError("");
-    setRuntimeAnalysisFingerprint("");
-    setRuntimeServiceDrafts(new Map());
-  }, [currentRuntimeFingerprint, runtimeAnalysisFingerprint]);
-  const enteredRepositories: Array<{
-    repositoryId?: string;
-    label: string;
-    baseRef: string;
-  }> = isWorkspaceSource
-    ? [
-        ...(templateWorkspace?.repositoryPlans.map((repository) => ({
-          ...(repository.repositoryId === undefined
-            ? {}
-            : { repositoryId: repository.repositoryId }),
-          label: repository.label,
-          baseRef:
-            (repository.repositoryId
-              ? initialRepositoryBaseOverrides?.[repository.repositoryId]
-              : undefined) ?? repository.baseRef,
-        })) ?? []),
-        ...addedCodeWorkspaceRepositories.map((repository) => ({
-          repositoryId: repository.id,
-          label: repository.label,
-          baseRef:
-            initialRepositoryBaseOverrides?.[repository.id] ??
-            repository.defaultBranch.name,
-        })),
-      ]
-    : isCodeWorkspaceSource
-      ? [
-          ...(codeWorkspaceImport?.repositories ?? []),
-          ...addedCodeWorkspaceRepositories.map((repository) => ({
-            repositoryId: repository.id,
-            label: repository.label,
-            baseRef: repository.defaultBranch.name,
-          })),
-        ]
-      : sourceMode === "set"
-        ? addedCodeWorkspaceRepositories.map((repository) => ({
-            repositoryId: repository.id,
-            label: repository.label,
-            baseRef:
-              initialRepositoryBaseOverrides?.[repository.id] ??
-              repository.defaultBranch.name,
-          }))
-      : repositoryNamesFrom(
-          isIssueSource ? issueRepositories : sourceValue,
-        ).map((label) => {
-          const selectedRepositoryId = isIssueSource
-            ? issueRepositoryLocalMatches[label.toLocaleLowerCase()]
-            : undefined;
-          const catalogRepository = catalogRepositoryFor(
-            selectedRepositoryId,
-            label,
-            effectiveRepositoryCatalog,
-          );
-          return catalogRepository
-            ? {
-                repositoryId: catalogRepository.id,
-                label: catalogRepository.label,
-                baseRef: catalogRepository.defaultBranch.name,
-              }
-            : { label, baseRef: "main" };
-        });
-  const sourceRepositoryReview = enteredRepositories.map((repository) => ({
-    repository,
-    catalogRepository: catalogRepositoryFor(
-      repository.repositoryId,
-      repository.label,
-      effectiveRepositoryCatalog,
-    ),
-    upstreamRepository:
-      issueProvider === "jira"
-        ? jiraRepositoryUpstreamsByLabel.get(
-            repository.label.toLocaleLowerCase(),
-          )
-        : undefined,
-  }));
-  const enteredRepositoryNames = enteredRepositories.map(
-    (repository) => repository.label,
-  );
-  const sourceRepositoriesFingerprint = JSON.stringify(
-    enteredRepositories.map((repository) => [
-      repository.repositoryId ?? "",
-      repository.label,
-      repository.baseRef,
-    ]),
-  );
-  const jiraKey = issueKeyFrom(sourceValue);
-  const openProjectReference = openProjectReferenceFrom(sourceValue);
-  const draftKey = isIssueSource
-    ? issueProvider === "jira"
-      ? jiraKey
-      : (openProjectImport?.displayId ?? openProjectReference ?? "")
-    : isWorkspaceSource
-      ? isRevisionMode
-        ? (templateWorkspace?.key ?? "workspace")
-        : `Copy of ${templateWorkspace?.key ?? "workspace"}`
-      : isCodeWorkspaceSource
-        ? (codeWorkspaceImport?.suggestedRepositorySetLabel ?? "")
-        : initialReviewWorkspace
-          ? `Review ${initialReviewWorkspace.preparation.repository.label} !${initialReviewWorkspace.review.number}`
-          : `Local repositories · ${enteredRepositoryNames[0] ?? "workspace"}`;
-  const draftTitle = isIssueSource
-    ? issueProvider === "jira"
-      ? (jiraImport?.summary ?? `Work on ${draftKey || "Jira issue"}`)
-      : (openProjectImport?.subject ??
-        `Work on ${draftKey || "OpenProject work package"}`)
-    : isWorkspaceSource
-      ? isRevisionMode
-        ? revisionTitle.trim()
-        : `${templateWorkspace?.title ?? "Saved WTS plan"} · copy`
-      : isCodeWorkspaceSource
-        ? codeWorkspaceTitle.trim()
-      : initialReviewWorkspace
-        ? `Review ${initialReviewWorkspace.review.repository} !${initialReviewWorkspace.review.number}`
-        : `Repositories: ${
-            enteredRepositoryNames.slice(0, 2).join(" + ") || "local work"
-          }`;
-  const importedIssue =
-    issueProvider === "jira" && jiraImport
-      ? {
-          reference: jiraImport.issueKey,
-          title: jiraImport.summary ?? jiraImport.issueKey,
-          status: jiraImport.status,
-          project: undefined,
-          content: jiraImport.content,
-          recommendations: jiraImport.repositoryRecommendations,
-        }
-      : issueProvider === "openProject" && openProjectImport
-        ? {
-            reference: openProjectImport.displayId,
-            title: openProjectImport.subject,
-            status: openProjectImport.status,
-            project: openProjectImport.project,
-            content: openProjectImport.content,
-            recommendations: openProjectImport.repositoryRecommendations,
-          }
-        : null;
-  const jiraKeyIsValid = /^[A-Z][A-Z0-9]{1,15}-[1-9][0-9]{0,9}$/.test(jiraKey);
-  const openProjectReferenceIsValid = openProjectReference !== null;
-  const canAnalyze =
-    enteredRepositoryNames.length > 0 &&
-    (!isRevisionMode || revisionTitle.trim().length > 0) &&
-    (isWorkspaceSource
-      ? templateWorkspace !== undefined
-      : isCodeWorkspaceSource
-        ? codeWorkspaceImportState === "ready" &&
-          codeWorkspaceImport !== null &&
-          codeWorkspaceTitle.trim().length > 0
-        : sourceMode === "set"
-          ? true
-          : sourceValue.trim().length > 0 &&
-            (sourceImportState !== "loading" || issueProvider === "jira") &&
-            (issueProvider === "jira"
-              ? jiraKeyIsValid
-              : openProjectReferenceIsValid && openProjectImport !== null));
-  const sourceBlockingMessage = canAnalyze
-    ? null
-    : enteredRepositoryNames.length === 0
-      ? "Choose at least one local repository to continue."
-      : isRevisionMode && revisionTitle.trim().length === 0
-        ? "Add a title for the revised workspace."
-        : isWorkspaceSource && templateWorkspace === undefined
-          ? "Choose a saved WTS plan to copy."
-          : isCodeWorkspaceSource && codeWorkspaceImportState !== "ready"
-            ? "Import a valid VS Code workspace file first."
-            : isCodeWorkspaceSource && codeWorkspaceTitle.trim().length === 0
-              ? "Add a title for the imported workspace."
-              : sourceValue.trim().length === 0
-                ? sourceMode === "set"
-                  ? "Name this workspace to continue."
-                  : `Enter a ${issueProvider === "jira" ? "Jira issue key" : "work package reference"}.`
-                : issueProvider === "jira" && !jiraKeyIsValid
-                  ? "Enter a valid Jira issue key, such as PLATFORM-42."
-                  : issueProvider === "openProject" &&
-                      (!openProjectReferenceIsValid ||
-                        openProjectImport === null)
-                    ? "Import a valid OpenProject work package first."
-                    : "Complete the required source details to continue.";
-  const stepNumber =
-    step === "source"
-      ? 1
-      : step === "evidence"
-        ? 2
-        : step === "services"
-          ? 3
-          : step === "manifest"
-            ? 4
-            : 5;
-
-  const analyzeSource = () => {
-    if (!canAnalyze) return;
-    setRepositoryBaseNotice(null);
-    if (isIssueSource && sourceImportState === "loading") {
-      sourceImportGenerationRef.current += 1;
-      setSourceImportState("idle");
-      setSourceImportMessage(
-        "Continuing with the repositories you entered manually. The pending Jira result will be ignored.",
-      );
-    }
-    setRepos((current) => {
-      if (
-        reviewedSourceRepositoriesFingerprintRef.current ===
-          sourceRepositoriesFingerprint &&
-        current.length > 0
-      ) {
-        return current;
-      }
-      const currentByKey = new Map(
-        current.map((repository) => [repository.key, repository]),
-      );
-      return enteredRepositories.map((sourceRepository) => {
-        const key = repositoryEvidenceKey(
-          sourceRepository.repositoryId,
-          sourceRepository.label,
-        );
-        const existing = currentByKey.get(key);
-        return {
-          key,
-          id: sourceRepository.label,
-          ...(sourceRepository.repositoryId === undefined
-            ? {}
-            : { repositoryId: sourceRepository.repositoryId }),
-          reason: isWorkspaceSource
-            ? `${isRevisionMode ? "Revised" : "Copied"} from ${
-                templateWorkspace?.key ?? "the saved workspace"
-              }`
-            : isCodeWorkspaceSource
-              ? codeWorkspaceAddedRepositoryIds.includes(
-                  sourceRepository.repositoryId ?? "",
-                )
-                ? clonedCodeWorkspaceRepositoryIds.has(
-                    sourceRepository.repositoryId ?? "",
-                  )
-                  ? "Cloned from a reviewed Git URL"
-                  : "Added from the local repository catalog"
-                : `Imported from ${codeWorkspaceImport?.fileName ?? "VS Code workspace file"}`
-              : "Selected by you for this workspace plan",
-          confidence: 100,
-          included: existing?.included ?? true,
-          base: existing?.base ?? sourceRepository.baseRef,
-        };
-      });
-    });
-    reviewedSourceRepositoriesFingerprintRef.current =
-      sourceRepositoriesFingerprint;
-    setStep("evidence");
-  };
-
-  const importJira = async () => {
-    if (!jiraKeyIsValid) return;
-    const requestGeneration = ++sourceImportGenerationRef.current;
-    const sessionGeneration = dialogSessionGenerationRef.current;
-    const repositoryEditRevision = repositoryEditRevisionRef.current;
-    const requestClient = client;
-    setSourceImportState("loading");
-    setSourceImportMessage("");
-    try {
-      const imported = await requestClient.importJiraIssue(jiraKey);
-      if (
-        requestGeneration !== sourceImportGenerationRef.current ||
-        sessionGeneration !== dialogSessionGenerationRef.current ||
-        requestClient !== currentClientRef.current
-      ) {
-        return;
-      }
-      if (issueKeyFrom(imported.issueKey) !== jiraKey) {
-        throw new Error(
-          `Jira returned ${imported.issueKey} while WTS was importing ${jiraKey}. Try the import again.`,
-        );
-      }
-      const repositoriesWereEdited =
-        repositoryEditRevision !== repositoryEditRevisionRef.current;
-      const upstreamRepositories = repositoryUpstreamsFromIssueContent(
-        imported.content,
-      );
-      const suggestedRepositories = Array.from(
-        new Map(
-          [
-            ...imported.suggestedRepositories,
-            ...upstreamRepositories.map((upstream) => upstream.label),
-          ].map((label) => [label.toLocaleLowerCase(), label]),
-        ).values(),
-      );
-      setJiraImport(imported);
-      if (suggestedRepositories.length && !repositoriesWereEdited) {
-        const suggestions = suggestedRepositories.join(", ");
-        autoSuggestedRepositoriesRef.current = suggestions;
-        setIssueRepositoryLocalMatches({});
-        setIssueRepositoryShowAllRemotes({});
-        setIssueRepositories(suggestions);
-      } else if (!repositoriesWereEdited) {
-        autoSuggestedRepositoriesRef.current = null;
-        setIssueRepositoryLocalMatches({});
-        setIssueRepositoryShowAllRemotes({});
-      }
-      setSourceImportMessage(
-        repositoriesWereEdited
-          ? "Imported issue context. Kept the repositories you edited while the import was running."
-          : suggestedRepositories.length
-            ? upstreamRepositories.length
-              ? `Imported issue context and found ${suggestedRepositories.length} repository upstreams.`
-              : `Imported issue context and matched ${suggestedRepositories.length} local repositories.`
-            : "Imported issue context. No local repository names were found, so choose them below.",
-      );
-      setSourceImportState("ready");
-    } catch (error) {
-      if (
-        requestGeneration !== sourceImportGenerationRef.current ||
-        sessionGeneration !== dialogSessionGenerationRef.current ||
-        requestClient !== currentClientRef.current
-      ) {
-        return;
-      }
-      setSourceImportMessage(
-        error instanceof Error ? error.message : "Jira import failed.",
-      );
-      setSourceImportState("error");
-    }
-  };
-
-  const importOpenProject = async () => {
-    if (openProjectReference === null) return;
-    const requestGeneration = ++sourceImportGenerationRef.current;
-    const sessionGeneration = dialogSessionGenerationRef.current;
-    const repositoryEditRevision = repositoryEditRevisionRef.current;
-    const requestClient = client;
-    setSourceImportState("loading");
-    setSourceImportMessage("");
-    try {
-      const imported =
-        await requestClient.importOpenProjectWorkPackage(openProjectReference);
-      if (
-        requestGeneration !== sourceImportGenerationRef.current ||
-        sessionGeneration !== dialogSessionGenerationRef.current ||
-        requestClient !== currentClientRef.current
-      ) {
-        return;
-      }
-      if (!openProjectImportMatchesReference(imported, openProjectReference)) {
-        throw new Error(
-          `OpenProject returned ${imported.displayId} while WTS was importing ${openProjectReference}. Try the import again.`,
-        );
-      }
-      const repositoriesWereEdited =
-        repositoryEditRevision !== repositoryEditRevisionRef.current;
-      setOpenProjectImport(imported);
-      if (imported.suggestedRepositories.length && !repositoriesWereEdited) {
-        const suggestions = imported.suggestedRepositories.join(", ");
-        autoSuggestedRepositoriesRef.current = suggestions;
-        setIssueRepositories(suggestions);
-      } else if (!repositoriesWereEdited) {
-        autoSuggestedRepositoriesRef.current = null;
-      }
-      setSourceImportMessage(
-        repositoriesWereEdited
-          ? `Imported ${imported.displayId}. Kept the repositories you edited while the import was running.`
-          : imported.suggestedRepositories.length
-            ? `Imported ${imported.displayId} and matched ${imported.suggestedRepositories.length} local repositories.`
-            : `Imported ${imported.displayId}. Choose the local repositories for this workspace below.`,
-      );
-      setSourceImportState("ready");
-    } catch (error) {
-      if (
-        requestGeneration !== sourceImportGenerationRef.current ||
-        sessionGeneration !== dialogSessionGenerationRef.current ||
-        requestClient !== currentClientRef.current
-      ) {
-        return;
-      }
-      setSourceImportMessage(
-        error instanceof Error ? error.message : "OpenProject import failed.",
-      );
-      setSourceImportState("error");
-    }
-  };
-
-  const importCodeWorkspaceFile = async (input: HTMLInputElement) => {
-    const file = input.files?.[0];
-    input.value = "";
-    const requestGeneration = ++sourceImportGenerationRef.current;
-    const sessionGeneration = dialogSessionGenerationRef.current;
-    const requestClient = client;
-
-    setCodeWorkspaceImport(null);
-    codeWorkspaceImportIdRef.current = null;
-    setCodeWorkspaceTitle("");
-    setCodeWorkspaceAddedRepositoryIds([]);
-    setCodeWorkspaceRepositoryToAdd("");
-    repositoryCloneGenerationRef.current += 1;
-    setCodeWorkspaceRepositoryAddMode("existing");
-    setCodeWorkspaceCloneUrl("");
-    setCodeWorkspaceCloneState("idle");
-    setCodeWorkspaceCloneMessage("");
-    setCodeWorkspaceClonedRepositories([]);
-    setCodeWorkspaceCloneRoot("");
-    setCodeWorkspaceExportState("idle");
-    setCodeWorkspaceDiagnosticsCopyState("idle");
-    setRepos([]);
-    setProvider("VS Code");
-    if (!file) {
-      setCodeWorkspaceImportState("idle");
-      setCodeWorkspaceImportMessage("");
-      return;
-    }
-    const rejectBeforeRead = (message: string) => {
-      setCodeWorkspaceImportState("error");
-      setCodeWorkspaceImportMessage(message);
-      logCodeWorkspaceImportFailure(file.name, new Error(message));
-    };
-    if (!file.name.toLowerCase().endsWith(".code-workspace")) {
-      rejectBeforeRead("Choose a file ending in .code-workspace.");
-      return;
-    }
-    if (file.size === 0) {
-      rejectBeforeRead("That VS Code workspace file is empty.");
-      return;
-    }
-    if (file.size > CODE_WORKSPACE_FILE_MAX_BYTES) {
-      rejectBeforeRead(
-        "That file is larger than 48 KiB. Choose a smaller .code-workspace file.",
-      );
-      return;
-    }
-
-    setCodeWorkspaceImportState("loading");
-    setCodeWorkspaceImportMessage(`Reading ${file.name}…`);
-    try {
-      const contents = await readTextFile(file);
-      if (
-        new TextEncoder().encode(contents).byteLength >
-        CODE_WORKSPACE_FILE_MAX_BYTES
-      ) {
-        throw new Error(
-          "That file is larger than 48 KiB. Choose a smaller .code-workspace file.",
-        );
-      }
-      if (
-        requestGeneration !== sourceImportGenerationRef.current ||
-        sessionGeneration !== dialogSessionGenerationRef.current ||
-        requestClient !== currentClientRef.current
-      ) {
-        return;
-      }
-      const imported = await requestClient.importCodeWorkspaceFile({
-        fileName: file.name,
-        contents,
-      });
-      if (
-        requestGeneration !== sourceImportGenerationRef.current ||
-        sessionGeneration !== dialogSessionGenerationRef.current ||
-        requestClient !== currentClientRef.current
-      ) {
-        return;
-      }
-      if (imported.fileName !== file.name) {
-        throw new Error(
-          `WTS returned ${imported.fileName} while importing ${file.name}. Choose the file again.`,
-        );
-      }
-
-      logCodeWorkspaceImportCompletion(imported);
-      codeWorkspaceImportIdRef.current = imported.importId;
-      setCodeWorkspaceImport(imported);
-      setCodeWorkspaceTitle(imported.suggestedTitle);
-      setCodeWorkspaceImportState("ready");
-      const unmatchedFolderCount = imported.folders.filter(
-        (folder) => folder.status !== "matched",
-      ).length;
-      const matchedFolderCount = imported.folders.length - unmatchedFolderCount;
-      setCodeWorkspaceImportMessage(
-        imported.repositories.length === 0
-          ? imported.diagnostics
-            ? `No trusted local repositories matched ${imported.fileName}. Open Developer diagnostics to inspect the bounded nested scan and folder reasons.`
-            : `No trusted local repositories matched ${imported.fileName}. Check the configured repository root and folder entries.`
-          : unmatchedFolderCount > 0
-            ? `Imported ${matchedFolderCount} of ${imported.folders.length} folders from ${imported.fileName}. ${unmatchedFolderCount} not added.`
-            : `Imported ${imported.repositories.length} ${
-                imported.repositories.length === 1
-                  ? "repository"
-                  : "repositories"
-              } from ${imported.fileName}.`,
-      );
-    } catch (error) {
-      if (
-        requestGeneration !== sourceImportGenerationRef.current ||
-        sessionGeneration !== dialogSessionGenerationRef.current ||
-        requestClient !== currentClientRef.current
-      ) {
-        return;
-      }
-      setCodeWorkspaceImportState("error");
-      setCodeWorkspaceImportMessage(
-        error instanceof Error
-          ? error.message
-          : "The VS Code workspace file could not be imported.",
-      );
-      logCodeWorkspaceImportFailure(file.name, error);
-    }
-  };
-
-  const copyCodeWorkspaceDiagnostics = async () => {
-    if (!codeWorkspaceImport?.diagnostics) return;
-    const importId = codeWorkspaceImport.importId;
-    const sourceGeneration = sourceImportGenerationRef.current;
-    const dialogGeneration = dialogSessionGenerationRef.current;
-    const isCurrentImport = () =>
-      codeWorkspaceImportIdRef.current === importId &&
-      sourceImportGenerationRef.current === sourceGeneration &&
-      dialogSessionGenerationRef.current === dialogGeneration;
-    try {
-      if (!navigator.clipboard?.writeText) {
-        throw new Error("Clipboard access is unavailable.");
-      }
-      await navigator.clipboard.writeText(
-        JSON.stringify(
-          codeWorkspaceDiagnosticsPayload(codeWorkspaceImport),
-          null,
-          2,
-        ),
-      );
-      if (!isCurrentImport()) return;
-      setCodeWorkspaceDiagnosticsCopyState("copied");
-    } catch {
-      if (!isCurrentImport()) return;
-      setCodeWorkspaceDiagnosticsCopyState("error");
-    }
-  };
-
-  const addCodeWorkspaceRepository = () => {
-    if (
-      !codeWorkspaceRepositoryToAdd ||
-      importedCodeWorkspaceRepositoryIds.has(codeWorkspaceRepositoryToAdd) ||
-      codeWorkspaceAddedRepositoryIds.includes(codeWorkspaceRepositoryToAdd) ||
-      !catalogRepositoriesById.has(codeWorkspaceRepositoryToAdd)
-    ) {
-      return;
-    }
-    setCodeWorkspaceAddedRepositoryIds((current) => [
-      ...current,
-      codeWorkspaceRepositoryToAdd,
-    ]);
-    setCodeWorkspaceRepositoryToAdd("");
-    setCodeWorkspaceExportState("idle");
-  };
-
-  const cloneCodeWorkspaceRepository = async () => {
-    if (
-      !codeWorkspaceCloneLeaf ||
-      codeWorkspaceCloneState === "loading"
-    ) {
-      return;
-    }
-
-    const requestGeneration = ++repositoryCloneGenerationRef.current;
-    const sessionGeneration = dialogSessionGenerationRef.current;
-    const requestClient = client;
-    setCodeWorkspaceCloneState("loading");
-    setCodeWorkspaceCloneMessage(
-      `Cloning ${codeWorkspaceCloneLeaf} into the trusted repository root…`,
-    );
-    setCodeWorkspaceExportState("idle");
-
-    try {
-      const result = await requestClient.cloneRepository({
-        remoteUrl: codeWorkspaceCloneUrl.trim(),
-      });
-      if (
-        requestGeneration !== repositoryCloneGenerationRef.current ||
-        sessionGeneration !== dialogSessionGenerationRef.current ||
-        requestClient !== currentClientRef.current
-      ) {
-        return;
-      }
-
-      const alreadyInPlan =
-        importedCodeWorkspaceRepositoryIds.has(result.repository.id) ||
-        codeWorkspaceAddedRepositoryIds.includes(result.repository.id);
-      setCodeWorkspaceClonedRepositories((current) => [
-        ...current.filter(
-          (repository) => repository.id !== result.repository.id,
-        ),
-        result.repository,
-      ]);
-      setCodeWorkspaceCloneRoot(result.repositoryRootDisplayPath);
-      if (!alreadyInPlan) {
-        setCodeWorkspaceAddedRepositoryIds((current) => [
-          ...current,
-          result.repository.id,
-        ]);
-      }
-      setCodeWorkspaceCloneUrl("");
-      setCodeWorkspaceCloneState("ready");
-      setCodeWorkspaceCloneMessage(
-        alreadyInPlan
-          ? `${result.repository.label} is already included in this workspace plan.`
-          : result.reusedExisting
-            ? `Found ${result.repository.label} in the trusted repository root and added it to this plan.`
-            : `Cloned ${result.repository.label} and added it to this workspace plan.`,
-      );
-    } catch (error) {
-      if (
-        requestGeneration !== repositoryCloneGenerationRef.current ||
-        sessionGeneration !== dialogSessionGenerationRef.current ||
-        requestClient !== currentClientRef.current
-      ) {
-        return;
-      }
-      setCodeWorkspaceCloneState("error");
-      setCodeWorkspaceCloneMessage(
-        error instanceof Error
-          ? error.message
-          : "The repository could not be cloned.",
-      );
-    }
-  };
-
-  const cloneIssueRepository = async (upstream: IssueRepositoryUpstream) => {
-    if (issueRepositoryCloneKey) return;
-    const requestGeneration = ++repositoryCloneGenerationRef.current;
-    const sessionGeneration = dialogSessionGenerationRef.current;
-    const requestClient = client;
-    setIssueRepositoryCloneKey(upstream.label.toLocaleLowerCase());
-    setIssueRepositoryCloneNotice(null);
-
-    try {
-      const result = await requestClient.cloneRepository({
-        remoteUrl: upstream.remoteUrl,
-      });
-      if (
-        requestGeneration !== repositoryCloneGenerationRef.current ||
-        sessionGeneration !== dialogSessionGenerationRef.current ||
-        requestClient !== currentClientRef.current
-      ) {
-        return;
-      }
-      setRefreshedRepositories((current) => [
-        ...current.filter(
-          (repository) => repository.id !== result.repository.id,
-        ),
-        result.repository,
-      ]);
-      setIssueRepositoryCloneKey("");
-      setIssueRepositoryCloneNotice({
-        kind: "success",
-        message: result.reusedExisting
-          ? `Found ${result.repository.label} in the trusted repository root.`
-          : `Cloned ${result.repository.label} into the trusted repository root.`,
-      });
-    } catch (error) {
-      if (
-        requestGeneration !== repositoryCloneGenerationRef.current ||
-        sessionGeneration !== dialogSessionGenerationRef.current ||
-        requestClient !== currentClientRef.current
-      ) {
-        return;
-      }
-      setIssueRepositoryCloneKey("");
-      setIssueRepositoryCloneNotice({
-        kind: "error",
-        message:
-          error instanceof Error
-            ? error.message
-            : "The repository could not be cloned.",
-      });
-    }
-  };
-
-  const removeCodeWorkspaceRepository = (repositoryId: string) => {
-    setCodeWorkspaceAddedRepositoryIds((current) =>
-      current.filter((candidate) => candidate !== repositoryId),
-    );
-    setCodeWorkspaceExportState("idle");
-  };
-
-  const downloadEditedCodeWorkspace = () => {
-    if (!codeWorkspaceImport || addedCodeWorkspaceRepositories.length === 0) {
-      return;
-    }
-    try {
-      const folders = codeWorkspaceImport.folders
-        .filter(
-          (folder) =>
-            folder.rawPath !== unsupportedUriDiagnosticValue &&
-            folder.rawPath !== unsupportedDiagnosticValue &&
-            folder.rawPath !== missingDiagnosticPathValue,
-        )
-        .map((folder) => ({
-          name: folder.name,
-          path: folder.rawPath,
-        }));
-      folders.push(
-        ...addedCodeWorkspaceRepositories.map((repository) => ({
-          name: repository.label,
-          path: repository.displayPath,
-        })),
-      );
-      const contents = `${JSON.stringify({ folders }, null, 2)}\n`;
-      const baseName = codeWorkspaceImport.fileName.replace(
-        /\.code-workspace$/i,
-        "",
-      );
-      const anchor = document.createElement("a");
-      anchor.download = `${baseName}.edited.code-workspace`;
-      anchor.href = `data:application/json;charset=utf-8,${encodeURIComponent(
-        contents,
-      )}`;
-      anchor.style.display = "none";
-      document.body.append(anchor);
-      anchor.click();
-      anchor.remove();
-      setCodeWorkspaceExportState("downloaded");
-    } catch {
-      setCodeWorkspaceExportState("error");
-    }
-  };
-
-  const continueFromSource = (event: FormEvent) => {
-    event.preventDefault();
-    analyzeSource();
-  };
-
-  const updateRepo = (key: string, patch: Partial<RepoEvidence>) => {
-    setRepositoryBaseNotice(null);
-    setRepos((current) =>
-      current.map((repo) => (repo.key === key ? { ...repo, ...patch } : repo)),
-    );
-  };
-
-  const openRepositoryBase = async (
-    repo: RepoEvidence,
-    target: RepositoryForgeTarget,
-  ) => {
-    if (!repo.repositoryId || openingRepositoryBaseKey) return;
-    const requestedBase = repo.base;
-    const requestGeneration = ++repositoryBaseOpenGenerationRef.current;
-    const sessionGeneration = dialogSessionGenerationRef.current;
-    const requestClient = client;
-    setOpeningRepositoryBaseKey(repo.key);
-    setRepositoryBaseNotice({
-      kind: "opening",
-      message: `Resolving ${repo.id} at ${requestedBase} locally, then opening ${forgeDisplayName(target.forge)}…`,
-    });
-    try {
-      const result = await requestClient.openRepositoryBase(
-        repo.repositoryId,
-        requestedBase,
-      );
-      if (
-        requestGeneration !== repositoryBaseOpenGenerationRef.current ||
-        sessionGeneration !== dialogSessionGenerationRef.current ||
-        requestClient !== currentClientRef.current
-      ) {
-        return;
-      }
-      if (
-        result.repositoryId !== repo.repositoryId ||
-        result.baseRef !== requestedBase ||
-        result.forge !== target.forge ||
-        result.host !== target.host ||
-        !result.accepted
-      ) {
-        throw new Error("WTS returned a mismatched repository base handoff.");
-      }
-      setRepositoryBaseNotice({
-        kind: "success",
-        message: `Browser handoff accepted for ${repo.id} at ${requestedBase} (${result.commitOid.slice(0, 12)}) on ${forgeDisplayName(target.forge)}.`,
-      });
-    } catch (error) {
-      if (
-        requestGeneration !== repositoryBaseOpenGenerationRef.current ||
-        sessionGeneration !== dialogSessionGenerationRef.current ||
-        requestClient !== currentClientRef.current
-      ) {
-        return;
-      }
-      setRepositoryBaseNotice({
-        kind: "error",
-        message:
-          error instanceof Error
-            ? error.message
-            : "The selected repository base could not be opened.",
-      });
-    } finally {
-      if (
-        requestGeneration === repositoryBaseOpenGenerationRef.current &&
-        sessionGeneration === dialogSessionGenerationRef.current &&
-        requestClient === currentClientRef.current
-      ) {
-        setOpeningRepositoryBaseKey("");
-      }
-    }
-  };
-
-  const refreshRepositoryBranches = async (repo: RepoEvidence) => {
-    if (!repo.repositoryId || refreshingRepositoryId) return;
-    const repositoryId = repo.repositoryId;
-    const sessionGeneration = dialogSessionGenerationRef.current;
-    const requestClient = client;
-    setRefreshingRepositoryId(repositoryId);
-    setRepositoryBaseNotice({
-      kind: "opening",
-      message: `Fetching current branches for ${repo.id} from origin…`,
-    });
-    try {
-      const repository =
-        await requestClient.refreshRepositoryBranches(repositoryId);
-      if (
-        sessionGeneration !== dialogSessionGenerationRef.current ||
-        requestClient !== currentClientRef.current
-      ) {
-        return;
-      }
-      setRefreshedRepositories((current) => [
-        ...current.filter((candidate) => candidate.id !== repository.id),
-        repository,
-      ]);
-      const count = repository.availableBranches?.length ?? 0;
-      setRepositoryBaseNotice({
-        kind: "success",
-        message: `Fetched ${count} ${count === 1 ? "branch" : "branches"} for ${repo.id}. Choose the base you want to pin.`,
-      });
-    } catch (error) {
-      if (
-        sessionGeneration !== dialogSessionGenerationRef.current ||
-        requestClient !== currentClientRef.current
-      ) {
-        return;
-      }
-      setRepositoryBaseNotice({
-        kind: "error",
-        message:
-          error instanceof Error
-            ? error.message
-            : `Could not refresh branches for ${repo.id}.`,
-      });
-    } finally {
-      if (
-        sessionGeneration === dialogSessionGenerationRef.current &&
-        requestClient === currentClientRef.current
-      ) {
-        setRefreshingRepositoryId("");
-      }
-    }
-  };
-
-  const analyzeRuntime = async (retry = false) => {
-    if (!included.length) return;
-    const request = runtimeAnalysisRequest;
-    const fingerprint = currentRuntimeFingerprint;
-    if (!request) {
-      runtimeAnalysisGenerationRef.current += 1;
-      setRuntimeAnalysisFingerprint(fingerprint);
-      setRuntimeAnalysis(null);
-      setRuntimeServiceDrafts(new Map());
-      setRuntimeAnalysisError(
-        `WTS needs one trusted local repository match for ${
-          runtimeAnalysisPreparation.unresolvedLabels.length === 1
-            ? runtimeAnalysisPreparation.unresolvedLabels[0]
-            : runtimeAnalysisPreparation.unresolvedLabels.join(", ")
-        } before it can inspect code. Refresh repository discovery or continue without services.`,
-      );
-      setRuntimeAnalysisState("error");
-      return;
-    }
-    if (!retry) {
-      if (
-        runtimeAnalysisFingerprint === fingerprint &&
-        runtimeAnalysisState !== "idle"
-      ) {
-        return;
-      }
-      const cached = runtimeAnalysisCacheRef.current.get(fingerprint);
-      if (cached) {
-        setRuntimeAnalysis(cached);
-        setRuntimeAnalysisFingerprint(fingerprint);
-        setRuntimeServiceDrafts(runtimeDraftsFromAnalysis(cached));
-        setRuntimeAnalysisError("");
-        setRuntimeAnalysisState("ready");
-        return;
-      }
-    }
-
-    const requestGeneration = ++runtimeAnalysisGenerationRef.current;
-    const sessionGeneration = dialogSessionGenerationRef.current;
-    const requestClient = client;
-    setRuntimeAnalysisFingerprint(fingerprint);
-    setRuntimeAnalysis(null);
-    setRuntimeServiceDrafts(new Map());
-    setRuntimeAnalysisError("");
-    setRuntimeAnalysisState("loading");
-    try {
-      const result = await requestClient.analyzeWorkspaceRuntime(request);
-      if (
-        requestGeneration !== runtimeAnalysisGenerationRef.current ||
-        sessionGeneration !== dialogSessionGenerationRef.current ||
-        requestClient !== currentClientRef.current
-      ) {
-        return;
-      }
-      runtimeAnalysisCacheRef.current.set(fingerprint, result);
-      if (fingerprint !== currentRuntimeFingerprintRef.current) return;
-      setRuntimeAnalysis(result);
-      setRuntimeServiceDrafts(runtimeDraftsFromAnalysis(result));
-      setRuntimeAnalysisError("");
-      setRuntimeAnalysisState("ready");
-    } catch (error) {
-      if (
-        requestGeneration !== runtimeAnalysisGenerationRef.current ||
-        sessionGeneration !== dialogSessionGenerationRef.current ||
-        requestClient !== currentClientRef.current ||
-        fingerprint !== currentRuntimeFingerprintRef.current
-      ) {
-        return;
-      }
-      setRuntimeAnalysisError(
-        error instanceof WorkspaceClientError
-          ? `${error.message} (${error.code})`
-          : error instanceof Error
-            ? error.message
-            : "WTS could not analyze the selected repository bases.",
-      );
-      setRuntimeAnalysisState("error");
-    }
-  };
-
-  const setRuntimeServiceIncluded = (
-    candidateId: string,
-    included: boolean,
-  ) => {
-    setRuntimeServiceDrafts((current) => {
-      const next = new Map(current);
-      const draft = next.get(candidateId);
-      if (!draft) return current;
-      next.set(candidateId, { ...draft, included });
-      return next;
-    });
-  };
-
-  const updateRuntimePort = (
-    candidateId: string,
-    portId: string,
-    update: Partial<Pick<RuntimePortDraft, "preferredPort" | "policy">>,
-  ) => {
-    setRuntimeServiceDrafts((current) => {
-      const next = new Map(current);
-      const draft = next.get(candidateId);
-      if (!draft) return current;
-      next.set(candidateId, {
-        ...draft,
-        ports: draft.ports.map((port) =>
-          port.portId === portId ? { ...port, ...update } : port,
-        ),
-      });
-      return next;
-    });
-  };
-
-  const selectedRuntimeServices =
-    runtimeAnalysis?.services.filter(
-      (service) => runtimeServiceDrafts.get(service.candidateId)?.included,
-    ) ?? [];
-  const runtimePortErrors = selectedRuntimeServices.flatMap((service) => {
-    const draft = runtimeServiceDrafts.get(service.candidateId);
-    return (
-      draft?.ports
-        .filter((port) => validRuntimePort(port.preferredPort) === null)
-        .map((port) => `${service.displayName} · ${port.portId}`) ?? []
-    );
-  });
-  const runtimeSelection: RuntimePlanSelection | undefined =
-    runtimeAnalysisState === "ready" &&
-    runtimeAnalysis &&
-    runtimeAnalysisFingerprint === currentRuntimeFingerprint &&
-    selectedRuntimeServices.length > 0 &&
-    runtimePortErrors.length === 0
-      ? {
-          analysisDigest: runtimeAnalysis.analysisDigest,
-          services: selectedRuntimeServices.map((service) => {
-            const draft = runtimeServiceDrafts.get(service.candidateId)!;
-            return {
-              candidateId: service.candidateId,
-              ports: draft.ports.map((port) => ({
-                portId: port.portId,
-                preferredPort: validRuntimePort(port.preferredPort)!,
-                policy: port.policy,
-              })),
-            };
-          }),
-        }
-      : undefined;
-
-  const createRequest = (): CreateWorkspaceRequest => ({
-    intent:
-      isRevisionMode && templateWorkspace
-        ? templateWorkspace.intent
-        : sourceMode === "issue" && issueProvider === "jira"
-          ? { type: "jira", issueKey: draftKey }
-          : sourceMode === "issue" && openProjectImport !== null
-            ? {
-                type: "openProject",
-                workPackageId: openProjectImport.workPackageId,
-                displayId: openProjectImport.displayId,
-              }
-            : { type: "repositorySet", label: draftKey },
-    title: draftTitle,
-    preferredProvider: providerToRequest[provider],
-    repositories:
-      runtimeAnalysisPreparation.request?.repositories.map((repository) => ({
-        repositoryId: repository.repositoryId,
-        label: repository.label,
-        baseRef: repository.baseRef,
-      })) ??
-      included.map((repository) => ({
-        ...(repository.repositoryId === undefined
-          ? {}
-          : { repositoryId: repository.repositoryId }),
-        label: repository.id,
-        baseRef: repository.base,
-      })),
-    ...(runtimeSelection === undefined ? {} : { runtime: runtimeSelection }),
-    ...(planningEnabled
-      ? {
-          planning: {
-            folder: planningFolder,
-            format: planningFormat,
-          },
-        }
-      : {}),
-  });
-
-  const savePlan = async () => {
-    if (!included.length) return;
-    const request = createRequest();
-    const requestFingerprint = JSON.stringify(request);
-    if (
-      !idempotencyKeyRef.current ||
-      idempotencyRequestRef.current !== requestFingerprint
-    ) {
-      idempotencyKeyRef.current = newIdempotencyKey();
-      idempotencyRequestRef.current = requestFingerprint;
-    }
-    const requestGeneration = ++saveGenerationRef.current;
-    const sessionGeneration = dialogSessionGenerationRef.current;
-    const requestClient = client;
-    activeSaveRef.current = true;
-    setSaveError("");
-    setSaveWarning("");
-    setStep("saving");
-    try {
-      const result = await requestClient.createWorkspace(
-        request,
-        idempotencyKeyRef.current,
-      );
-      if (
-        requestGeneration !== saveGenerationRef.current ||
-        sessionGeneration !== dialogSessionGenerationRef.current ||
-        requestClient !== currentClientRef.current
-      ) {
-        return;
-      }
-      if (
-        isRevisionMode &&
-        templateWorkspace &&
-        (result.workspace.workspaceId === templateWorkspace.id ||
-          !workspaceIntentMatches(result.workspace.intent, request.intent))
-      ) {
-        throw new Error(
-          "WTS did not return a separate revised workspace. The original plan remains unchanged; review the request and retry.",
-        );
-      }
-      activeSaveRef.current = false;
-      setSavedWorkspace(result.workspace);
-      setStep("saved");
-    } catch (error) {
-      if (
-        requestGeneration !== saveGenerationRef.current ||
-        sessionGeneration !== dialogSessionGenerationRef.current ||
-        requestClient !== currentClientRef.current
-      ) {
-        return;
-      }
-      activeSaveRef.current = false;
-      setSaveError(
-        error instanceof Error
-          ? error.message
-          : "The local workspace registry could not save this plan.",
-      );
-    }
-  };
-
-  const stopWaitingForSave = () => {
-    if (!activeSaveRef.current) return;
-    saveGenerationRef.current += 1;
-    activeSaveRef.current = false;
-    setSaveError("");
-    setSaveWarning(
-      "WTS stopped waiting, but the original save may still complete. Retry from this dialog to reconcile it with the same request identity.",
-    );
-    setStep("manifest");
-  };
-
-  const saveIsPending = step === "saving" && !saveError;
-  const handleDialogOpenChange = (nextOpen: boolean) => {
-    if (!nextOpen && activeSaveRef.current) return;
-    if (!nextOpen) {
-      dialogSessionGenerationRef.current += 1;
-      sourceImportGenerationRef.current += 1;
-      codeWorkspaceImportIdRef.current = null;
-      repositoryBaseOpenGenerationRef.current += 1;
-      saveGenerationRef.current += 1;
-      activeSaveRef.current = false;
-    }
-    onOpenChange(nextOpen);
-  };
-
-  const dialogHeading =
-    step === "saved"
-      ? isRevisionMode
-        ? "Revised plan saved"
-        : "Workspace plan saved"
-      : step === "saving"
-        ? saveError
-          ? "Save needs attention"
-          : isRevisionMode
-            ? "Saving revised plan"
-            : "Saving workspace plan"
-        : isRevisionMode
-          ? `Revise ${templateWorkspace?.key ?? "workspace"}`
-          : "New workspace";
-  const dialogStepDescription =
-    step === "source"
-      ? isRevisionMode
-        ? `Create a separate plan from ${templateWorkspace?.key ?? "this workspace"}. The original workspace is retained.`
-        : "Start from an issue, a saved workspace, or repositories you already know. Saved workspaces are WTS plans, and you can also import a VS Code workspace file."
-      : step === "evidence"
-        ? isRevisionMode
-          ? "Adjust the copied repository requests and base branches for the revised plan."
-          : "Confirm the repository requests and their base branches."
-        : step === "services"
-          ? "Review the services and preferred ports WTS found at the selected base commits."
-          : step === "manifest"
-            ? isRevisionMode
-              ? "Review the separate revised plan. The original workspace remains unchanged."
-              : "Review the durable plan. No Git or process effects happen yet."
-            : step === "saving"
-              ? saveError
-                ? "WTS could not confirm the registry write. Retry safely with the same request identity, or go back and review the plan."
-                : isRevisionMode
-                  ? "Saving a separate revised plan to your local workspace registry."
-                  : "Saving the plan to your local workspace registry."
-              : isRevisionMode
-                ? `The revised plan is saved separately at ${savedWorkspace?.workspaceDisplayPath}.`
-                : `The plan is saved at ${savedWorkspace?.workspaceDisplayPath}.`;
-  const progressLabels = isRevisionMode
-    ? ["Original", "Repositories", "Services", "Revised plan", "Save"]
-    : ["Source", "Repositories", "Services", "Plan", "Save"];
-  const sourceReviewIsCurrent =
-    repos.length > 0 &&
-    reviewedSourceRepositoriesFingerprintRef.current ===
-      sourceRepositoriesFingerprint;
-  const runtimeReviewIsCurrent =
-    runtimeAnalysisState === "ready" &&
-    runtimeAnalysisFingerprint === currentRuntimeFingerprint &&
-    runtimePortErrors.length === 0;
-  const canRevisitProgressStep = (index: number) => {
-    if (index === 0) return true;
-    if (index === 1) return sourceReviewIsCurrent;
-    if (index === 2) return sourceReviewIsCurrent && included.length > 0;
-    return (
-      sourceReviewIsCurrent &&
-      included.length > 0 &&
-      (runtimeReviewIsCurrent || runtimeAnalysisState === "error")
-    );
-  };
-  const revisitProgressStep = (index: number) => {
-    const target = (["source", "evidence", "services", "manifest"] as const)[
-      index
-    ];
-    if (!target || !canRevisitProgressStep(index)) return;
-    setStep(target);
-    if (target === "services" && runtimeAnalysisState === "idle") {
-      void analyzeRuntime();
-    }
-  };
-  const handleSourceChoiceKeyDown = (
-    event: ReactKeyboardEvent<HTMLInputElement>,
-  ) => {
-    const grid = event.currentTarget.closest<HTMLElement>(
-      "[data-source-choice-grid]",
-    );
-    if (grid) {
-      moveCompositeFocus(grid, event, "input[type='radio']", 2, true);
-    }
-  };
-
-  return (
-    <Dialog.Root open={open} onOpenChange={handleDialogOpenChange}>
-      <Dialog.Portal>
-        <Dialog.Overlay className={styles.dialogOverlay} />
-        <Dialog.Content
-          className={`${styles.portalSurface} ${styles.createDialog}`}
-          data-ui="workspace-create.dialog"
-          data-ui-label="New workspace dialog"
-          aria-describedby="new-workspace-description"
-          onEscapeKeyDown={(event) => {
-            if (saveIsPending) event.preventDefault();
-          }}
-          onPointerDownOutside={(event) => {
-            if (saveIsPending) event.preventDefault();
-          }}
-        >
-          <div
-            className={styles.dialogHeader}
-            data-ui="workspace-create.header"
-            data-ui-label="New workspace heading"
-          >
-            <div>
-              <span className={styles.dialogEyebrow}>
-                {isRevisionMode ? "REVISED WORKSPACE PLAN" : "LOCAL WORKSPACE"}
-              </span>
-              <Dialog.Title
-                className={styles.dialogTitle}
-                ref={stepHeadingRef}
-                tabIndex={-1}
-              >
-                {dialogHeading}
-              </Dialog.Title>
-              <Dialog.Description
-                className={styles.dialogDescription}
-                id="new-workspace-description"
-              >
-                {dialogStepDescription}
-              </Dialog.Description>
-            </div>
-            <Dialog.Close
-              className={styles.iconButton}
-              aria-label="Close new workspace"
-              disabled={saveIsPending}
-            >
-              <Glyph name="close" />
-            </Dialog.Close>
-          </div>
-
-          <ol
-            className={styles.stepper}
-            data-ui="workspace-create.progress"
-            data-ui-label="Workspace setup steps"
-            aria-label="Workspace creation progress"
-            onKeyDownCapture={(event) =>
-              moveCompositeFocus(event.currentTarget, event, `.${styles.stepButton}`, 5)
-            }
-          >
-            {progressLabels.map((label, index) => (
-              <li
-                key={label}
-                data-active={index + 1 === stepNumber}
-                data-complete={index + 1 < stepNumber}
-                aria-current={index + 1 === stepNumber ? "step" : undefined}
-              >
-                {index + 1 <= furthestReviewStepNumber &&
-                index + 1 !== stepNumber &&
-                step !== "saving" &&
-                step !== "saved" &&
-                index < 4 ? (
-                  <button
-                    className={styles.stepButton}
-                    disabled={!canRevisitProgressStep(index)}
-                    onClick={() => revisitProgressStep(index)}
-                    type="button"
-                  >
-                    <span className={styles.stepMarker}>
-                      <Glyph name="check" size={13} />
-                    </span>
-                    <span className={styles.stepLabel}>{label}</span>
-                  </button>
-                ) : (
-                  <span className={styles.stepItem}>
-                    <span className={styles.stepMarker}>
-                      {index + 1 < stepNumber ? (
-                        <Glyph name="check" size={13} />
-                      ) : (
-                        index + 1
-                      )}
-                    </span>
-                    <span className={styles.stepLabel}>{label}</span>
-                  </span>
-                )}
-              </li>
-            ))}
-          </ol>
-
-          <div
-            className={styles.dialogBody}
-            data-ui="workspace-create.content"
-            data-ui-label="Workspace setup content"
-            data-workspace-dialog-body
-            key={step}
-          >
-            {step === "source" && (
-              <form
-                className={styles.sourceForm}
-                data-ui="workspace-create.source"
-                data-ui-label="Workspace source"
-                onSubmit={continueFromSource}
-              >
-                {!isRevisionMode && (
-                  <RadioGroup
-                    className={styles.sourceChoices}
-                    data-source-choice-grid
-                    value={sourceMode}
-                    onChange={(value) => {
-                      const next = value as SourceMode;
-                      sourceImportGenerationRef.current += 1;
-                      repositoryEditRevisionRef.current += 1;
-                      autoSuggestedRepositoriesRef.current = null;
-                      setSourceMode(next);
-                      setSourceValue("");
-                      setTemplateWorkspaceId("");
-                      setIssueRepositories("");
-                      setIssueRepositoryLocalMatches({});
-                      setIssueRepositoryShowAllRemotes({});
-                      setJiraImport(null);
-                      setOpenProjectImport(null);
-                      setSourceImportState("idle");
-                      setSourceImportMessage("");
-                      setCodeWorkspaceImport(null);
-                      codeWorkspaceImportIdRef.current = null;
-                      setCodeWorkspaceImportState("idle");
-                      setCodeWorkspaceImportMessage("");
-                      setCodeWorkspaceTitle("");
-                      setCodeWorkspaceAddedRepositoryIds([]);
-                      setCodeWorkspaceRepositoryToAdd("");
-                      setCodeWorkspaceExportState("idle");
-                      setCodeWorkspaceDiagnosticsCopyState("idle");
-                      setRepos([]);
-                      setRepositoryBaseNotice(null);
-                      setProvider(
-                        next === "codeWorkspace" ? "VS Code" : "Codex",
-                      );
-                    }}
-                    aria-label="Workspace source"
-                  >
-                    <Radio
-                      value="issue"
-                      className={styles.sourceChoice}
-                      onKeyDown={handleSourceChoiceKeyDown}
-                    >
-                      <span className={styles.radioIndicator} />
-                      <span className={styles.sourceIcon} data-source="issue">
-                        <Glyph name="issue" size={18} />
-                      </span>
-                      <span>
-                        <strong>Issue</strong>
-                        <small>Import context and infer repository scope</small>
-                      </span>
-                    </Radio>
-                    <Radio
-                      value="workspace"
-                      className={styles.sourceChoice}
-                      onKeyDown={handleSourceChoiceKeyDown}
-                    >
-                      <span className={styles.radioIndicator} />
-                      <span
-                        className={styles.sourceIcon}
-                        data-source="workspace"
-                      >
-                        <Glyph name="copy" size={18} />
-                      </span>
-                      <span>
-                        <strong>Saved WTS plan</strong>
-                        <small>Copy repository and base-ref requests</small>
-                      </span>
-                    </Radio>
-                    <Radio
-                      value="set"
-                      className={styles.sourceChoice}
-                      onKeyDown={handleSourceChoiceKeyDown}
-                    >
-                      <span className={styles.radioIndicator} />
-                      <span className={styles.sourceIcon}>
-                        <Glyph name="folder" size={18} />
-                      </span>
-                      <span>
-                        <strong>Repositories</strong>
-                        <small>Choose local repositories directly</small>
-                      </span>
-                    </Radio>
-                    <Radio
-                      value="codeWorkspace"
-                      className={styles.sourceChoice}
-                      onKeyDown={handleSourceChoiceKeyDown}
-                    >
-                      <span className={styles.radioIndicator} />
-                      <span
-                        className={styles.sourceIcon}
-                        data-source="codeWorkspace"
-                      >
-                        <Glyph name="file" size={18} />
-                      </span>
-                      <span>
-                        <strong>VS Code workspace file</strong>
-                        <small>Import folders from .code-workspace</small>
-                      </span>
-                    </Radio>
-                  </RadioGroup>
-                )}
-                {isIssueSource && (
-                  <div className={styles.issueProviderField}>
-                    <span>Issue provider</span>
-                    <div
-                      className={styles.issueProviderSelector}
-                      role="radiogroup"
-                      aria-label="Issue provider"
-                      onKeyDownCapture={(event) =>
-                        moveCompositeFocus(event.currentTarget, event, "[role='radio']", 2, true)
-                      }
-                    >
-                      {(
-                        [
-                          ["jira", "Jira", "jira"],
-                          ["openProject", "OpenProject", "openProject"],
-                        ] as const
-                      ).map(([id, label, glyph]) => (
-                        <button
-                          aria-checked={issueProvider === id}
-                          data-selected={issueProvider === id || undefined}
-                          key={id}
-                          role="radio"
-                          tabIndex={issueProvider === id ? 0 : -1}
-                          onClick={() => {
-                            if (issueProvider === id) return;
-                            sourceImportGenerationRef.current += 1;
-                            repositoryEditRevisionRef.current += 1;
-                            autoSuggestedRepositoriesRef.current = null;
-                            setIssueProvider(id);
-                            setSourceValue("");
-                            setIssueRepositories("");
-                            setJiraImport(null);
-                            setOpenProjectImport(null);
-                            setSourceImportState("idle");
-                            setSourceImportMessage("");
-                            setRepos([]);
-                            setRepositoryBaseNotice(null);
-                          }}
-                          type="button"
-                        >
-                          <Glyph name={glyph} size={14} />
-                          {label}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                )}
-                {isWorkspaceSource ? (
-                  <div className={styles.field}>
-                    <Label>
-                      {isRevisionMode
-                        ? "Original workspace"
-                        : "Saved plan to copy"}
-                    </Label>
-                    {!isRevisionMode && (
-                      <div className={styles.inputWithIcon}>
-                        <Glyph name="copy" size={17} />
-                        <SelectMenu
-                          autoFocus
-                          aria-label="Saved plan to copy"
-                          disabled={!workspaces.length}
-                          value={templateWorkspaceId}
-                          onChange={(workspaceId) => {
-                            const template = workspaces.find(
-                              (workspace) => workspace.id === workspaceId,
-                            );
-                            setTemplateWorkspaceId(workspaceId);
-                            setProvider(template?.provider ?? "Codex");
-                            setPlanningEnabled(
-                              template?.planning !== undefined,
-                            );
-                            setPlanningFolder(
-                              template?.planning?.folder ?? "plansAndKanban",
-                            );
-                            setPlanningFormat(
-                              template?.planning?.format ?? "kanban",
-                            );
-                            setRepos([]);
-                          }}
-                        >
-                          <option value="">Choose a saved WTS plan…</option>
-                          {workspaces.map((workspace) => (
-                            <option key={workspace.id} value={workspace.id}>
-                              {workspace.key} · {workspace.title}
-                            </option>
-                          ))}
-                        </SelectMenu>
-                      </div>
-                    )}
-                    <small>
-                      {isRevisionMode
-                        ? "This fixed source supplies the intent, repository requests, base refs, and preferred provider for a separate revised plan."
-                        : "Copy the saved repository requests, base refs, and preferred provider into a fresh plan. This is a WTS plan, not a VS Code file."}
-                    </small>
-                    {!isRevisionMode && !workspaces.length && (
-                      <p className={styles.templateEmpty}>
-                        No saved WTS plans yet. Start from an issue, a
-                        repositories, or a VS Code workspace file first.
-                      </p>
-                    )}
-                    {isRevisionMode && !templateWorkspace && (
-                      <p className={styles.templateEmpty} role="alert">
-                        The original workspace is no longer available. Close
-                        this dialog, refresh Spaces, and start the
-                        revision again.
-                      </p>
-                    )}
-                    {templateWorkspace && (
-                      <>
-                        <div
-                          className={styles.templatePreview}
-                          data-revision={isRevisionMode || undefined}
-                        >
-                          <span className={styles.templateIdentity}>
-                            <span className={styles.providerMark}>
-                              {providerMarks[templateWorkspace.provider]}
-                            </span>
-                            <span>
-                              <b>{templateWorkspace.key}</b>
-                              <strong>{templateWorkspace.title}</strong>
-                            </span>
-                          </span>
-                          <span className={styles.templateFacts}>
-                            <span>
-                              {templateWorkspace.repos}{" "}
-                              {templateWorkspace.repos === 1 ? "repo" : "repos"}
-                            </span>
-                            <span>{templateWorkspace.provider}</span>
-                            <code>{templateWorkspace.path}</code>
-                          </span>
-                          <span className={styles.templateRepositories}>
-                            {templateWorkspace.repositoryPlans.map(
-                              (repository) => (
-                                <code
-                                  key={repositoryEvidenceKey(
-                                    repository.repositoryId,
-                                    repository.label,
-                                  )}
-                                >
-                                  {repository.label} ← {repository.baseRef}
-                                </code>
-                              ),
-                            )}
-                          </span>
-                        </div>
-                        <p
-                          className={styles.templateNote}
-                          data-revision={isRevisionMode || undefined}
-                        >
-                          <Glyph name="copy" size={14} />
-                          <span>
-                            {isRevisionMode && <b>Original retained</b>}
-                            {isRevisionMode
-                              ? `${templateWorkspace.key} and its existing worktrees, branches, changes, and sessions remain untouched. WTS will save a separate plan with its own path.`
-                              : "This copies the plan—not branches, uncommitted changes, agent history, or running processes."}
-                          </span>
-                        </p>
-                        {isRevisionMode && (
-                          <div className={styles.revisionTitleField}>
-                            <Label>New plan title</Label>
-                            <div className={styles.inputWithIcon}>
-                              <Glyph name="file" size={17} />
-                              <Input
-                                aria-label="New plan title"
-                                autoFocus
-                                maxLength={240}
-                                required
-                                value={revisionTitle}
-                                onChange={(event) =>
-                                  setRevisionTitle(event.target.value)
-                                }
-                              />
-                            </div>
-                            <small>
-                              Required · up to 240 characters. The original
-                              title remains unchanged.
-                            </small>
-                          </div>
-                        )}
-                        <section
-                          aria-labelledby="copied-plan-repositories-title"
-                          className={styles.workspaceFolderEditor}
-                          data-ui="workspace-create.copy-repositories"
-                          data-ui-label="Copied plan repositories"
-                        >
-                          <header>
-                            <span><Glyph name="folder" size={15} /></span>
-                            <div>
-                              <h4 id="copied-plan-repositories-title">
-                                Add repositories
-                              </h4>
-                              <small>
-                                Extend this copied plan before WTS saves it.
-                              </small>
-                            </div>
-                            <b>
-                              {templateWorkspace.repositoryPlans.length +
-                                addedCodeWorkspaceRepositories.length}{" "}
-                              IN PLAN
-                            </b>
-                          </header>
-                          <Tabs.Root
-                            onValueChange={(value) => {
-                              setCodeWorkspaceRepositoryAddMode(
-                                value as CodeWorkspaceRepositoryAddMode,
-                              );
-                              setCodeWorkspaceCloneState("idle");
-                              setCodeWorkspaceCloneMessage("");
-                            }}
-                            value={codeWorkspaceRepositoryAddMode}
-                          >
-                            <Tabs.List
-                              aria-label="Additional repository source"
-                              className={styles.repositoryAddModes}
-                            >
-                              <Tabs.Trigger
-                                disabled={codeWorkspaceCloneState === "loading"}
-                                value="existing"
-                              >
-                                Existing local
-                              </Tabs.Trigger>
-                              <Tabs.Trigger
-                                disabled={codeWorkspaceCloneState === "loading"}
-                                value="clone"
-                              >
-                                Clone Git URL
-                              </Tabs.Trigger>
-                            </Tabs.List>
-                            <Tabs.Content value="existing">
-                              <div className={styles.repositoryClonePanel}>
-                                <div className={styles.workspaceFolderPicker}>
-                                  <label>
-                                    <span>Local repository</span>
-                                    <SelectMenu
-                                      aria-label="Repository to add to copied plan"
-                                      disabled={
-                                        availableCodeWorkspaceRepositories.length ===
-                                        0
-                                      }
-                                      onChange={setCodeWorkspaceRepositoryToAdd}
-                                      value={codeWorkspaceRepositoryToAdd}
-                                    >
-                                      <option value="">
-                                        {availableCodeWorkspaceRepositories.length
-                                          ? "Choose a discovered repository…"
-                                          : "No more discovered repositories"}
-                                      </option>
-                                      {availableCodeWorkspaceRepositories.map(
-                                        (repository) => (
-                                          <option
-                                            key={repository.id}
-                                            value={repository.id}
-                                          >
-                                            {repository.label} ·{" "}
-                                            {repository.displayPath}
-                                          </option>
-                                        ),
-                                      )}
-                                    </SelectMenu>
-                                  </label>
-                                  <button
-                                    className={styles.addWorkspaceFolderButton}
-                                    disabled={!codeWorkspaceRepositoryToAdd}
-                                    onClick={addCodeWorkspaceRepository}
-                                    type="button"
-                                  >
-                                    <Glyph name="plus" size={13} />
-                                    Add repository
-                                  </button>
-                                </div>
-                              </div>
-                            </Tabs.Content>
-                            <Tabs.Content value="clone">
-                              <div className={styles.repositoryClonePanel}>
-                                <div className={styles.workspaceFolderPicker}>
-                                  <label>
-                                    <span>Git repository URL</span>
-                                    <input
-                                      aria-describedby="copied-plan-clone-help"
-                                      autoComplete="off"
-                                      onChange={(event) => {
-                                        setCodeWorkspaceCloneUrl(
-                                          event.target.value,
-                                        );
-                                        setCodeWorkspaceCloneState("idle");
-                                        setCodeWorkspaceCloneMessage("");
-                                      }}
-                                      placeholder="https://host/team/repo.git or git@host:team/repo.git"
-                                      spellCheck={false}
-                                      type="text"
-                                      value={codeWorkspaceCloneUrl}
-                                    />
-                                  </label>
-                                  <button
-                                    className={styles.addWorkspaceFolderButton}
-                                    disabled={
-                                      !codeWorkspaceCloneLeaf ||
-                                      codeWorkspaceCloneState === "loading"
-                                    }
-                                    onClick={() =>
-                                      void cloneCodeWorkspaceRepository()
-                                    }
-                                    type="button"
-                                  >
-                                    <Glyph
-                                      name={
-                                        codeWorkspaceCloneState === "loading"
-                                          ? "refresh"
-                                          : "plus"
-                                      }
-                                      size={13}
-                                    />
-                                    {codeWorkspaceCloneState === "loading"
-                                      ? "Cloning…"
-                                      : "Clone and add"}
-                                  </button>
-                                </div>
-                                <div
-                                  className={styles.repositoryCloneHelp}
-                                  id="copied-plan-clone-help"
-                                >
-                                  <span>
-                                    {codeWorkspaceCloneTarget ? (
-                                      <>Clone target <code>{codeWorkspaceCloneTarget}</code></>
-                                    ) : (
-                                      "Paste an HTTPS or SSH Git URL to preview its local destination."
-                                    )}
-                                  </span>
-                                  <small>
-                                    Git uses your credential helper or SSH agent.
-                                    WTS does not store credentials.
-                                  </small>
-                                </div>
-                                {codeWorkspaceCloneMessage && (
-                                  <p
-                                    className={styles.repositoryCloneStatus}
-                                    data-error={
-                                      codeWorkspaceCloneState === "error" ||
-                                      undefined
-                                    }
-                                    role={
-                                      codeWorkspaceCloneState === "error"
-                                        ? "alert"
-                                        : "status"
-                                    }
-                                  >
-                                    {codeWorkspaceCloneMessage}
-                                  </p>
-                                )}
-                              </div>
-                            </Tabs.Content>
-                          </Tabs.Root>
-                          {addedCodeWorkspaceRepositories.length > 0 && (
-                            <div
-                              aria-label="Additional repositories in copied plan"
-                              className={styles.addedWorkspaceFolders}
-                              role="list"
-                            >
-                              {addedCodeWorkspaceRepositories.map(
-                                (repository) => (
-                                  <div key={repository.id} role="listitem">
-                                    <span>
-                                      <b>{repository.label}</b>
-                                      <code>{repository.displayPath}</code>
-                                    </span>
-                                    <small>
-                                      Base {repository.defaultBranch.name}
-                                    </small>
-                                    <button
-                                      aria-label={`Remove ${repository.label} from copied plan`}
-                                      onClick={() =>
-                                        removeCodeWorkspaceRepository(
-                                          repository.id,
-                                        )
-                                      }
-                                      type="button"
-                                    >
-                                      <Glyph name="close" size={12} />
-                                    </button>
-                                  </div>
-                                ),
-                              )}
-                            </div>
-                          )}
-                        </section>
-                      </>
-                    )}
-                  </div>
-                ) : isCodeWorkspaceSource ? (
-                  <div className={styles.fileImportField}>
-                    <div className={styles.fileImportHeading}>
-                      <span>
-                        <b>Bring in an existing VS Code workspace</b>
-                        <small>
-                          WTS finds local Git sources under your trusted
-                          repository roots, including nested checkouts.
-                        </small>
-                      </span>
-                      <span className={styles.fileLimitBadge}>MAX 48 KiB</span>
-                    </div>
-                    <label htmlFor="code-workspace-file-input">
-                      VS Code workspace file
-                    </label>
-                    <input
-                      accept=".code-workspace,application/json"
-                      aria-describedby="code-workspace-file-help code-workspace-file-status"
-                      className={styles.fileInput}
-                      id="code-workspace-file-input"
-                      onChange={(event) =>
-                        void importCodeWorkspaceFile(event.currentTarget)
-                      }
-                      type="file"
-                    />
-                    <p
-                      className={styles.fileImportHelp}
-                      id="code-workspace-file-help"
-                    >
-                      Choose one <code>.code-workspace</code> file, up to 48
-                      KiB. WTS reads it once and treats its folder paths as
-                      lookup hints for a bounded search under your trusted
-                      repository roots. The file and existing checkouts are
-                      never changed.
-                    </p>
-                    <div
-                      aria-live={
-                        codeWorkspaceImportState === "error"
-                          ? "assertive"
-                          : "polite"
-                      }
-                      className={styles.fileImportStatus}
-                      data-state={codeWorkspaceImportState}
-                      data-warning={
-                        codeWorkspaceImportState === "ready" &&
-                        codeWorkspaceImport?.repositories.length === 0
-                          ? true
-                          : undefined
-                      }
-                      id="code-workspace-file-status"
-                      role={
-                        codeWorkspaceImportState === "error"
-                          ? "alert"
-                          : "status"
-                      }
-                    >
-                      <Glyph
-                        name={
-                          codeWorkspaceImportState === "error" ||
-                          (codeWorkspaceImportState === "ready" &&
-                            codeWorkspaceImport?.repositories.length === 0)
-                            ? "warning"
-                            : codeWorkspaceImportState === "loading"
-                              ? "refresh"
-                              : codeWorkspaceImportState === "ready"
-                                ? "check"
-                                : "file"
-                        }
-                        size={15}
-                      />
-                      <span>
-                        {codeWorkspaceImportMessage ||
-                          "No file selected. Your VS Code configuration remains untouched."}
-                      </span>
-                    </div>
-
-                    {codeWorkspaceImport && (
-                      <section
-                        aria-label={`Import preview for ${codeWorkspaceImport.fileName}`}
-                        className={styles.fileImportPreview}
-                        data-ui="workspace-create.import-preview"
-                        data-ui-label="Workspace import preview"
-                      >
-                        <header>
-                          <span>
-                            <Glyph name="file" size={17} />
-                          </span>
-                          <div>
-                            <b>{codeWorkspaceImport.fileName}</b>
-                            <small>
-                              {codeWorkspaceImport.repositories.length} matched{" "}
-                              {codeWorkspaceImport.repositories.length === 1
-                                ? "repository"
-                                : "repositories"}{" "}
-                              · {codeWorkspaceImport.folders.length}{" "}
-                              {codeWorkspaceImport.folders.length === 1
-                                ? "folder"
-                                : "folders"}{" "}
-                              inspected
-                            </small>
-                          </div>
-                          <span className={styles.fileReadyBadge}>
-                            READ ONCE
-                          </span>
-                        </header>
-
-                        <div className={styles.fileTitleField}>
-                          <Label>Workspace plan title</Label>
-                          <div className={styles.inputWithIcon}>
-                            <Glyph name="file" size={17} />
-                            <Input
-                              aria-label="Workspace plan title"
-                              maxLength={240}
-                              onChange={(event) =>
-                                setCodeWorkspaceTitle(event.target.value)
-                              }
-                              required
-                              value={codeWorkspaceTitle}
-                            />
-                          </div>
-                          <small>
-                            Suggested from the file name. You can change it
-                            before saving.
-                          </small>
-                        </div>
-
-                        <div
-                          aria-label="Imported workspace folders"
-                          className={styles.importFolderList}
-                          role="list"
-                        >
-                          {codeWorkspaceImport.folders.map((folder, index) => (
-                            <div
-                              className={styles.importFolderRow}
-                              data-status={folder.status}
-                              key={`${folder.rawPath}-${index}`}
-                              role="listitem"
-                            >
-                              <span className={styles.importFolderGlyph}>
-                                <Glyph
-                                  name={
-                                    folder.status === "matched"
-                                      ? "check"
-                                      : "warning"
-                                  }
-                                  size={14}
-                                />
-                              </span>
-                              <span className={styles.importFolderIdentity}>
-                                <b>{folder.name}</b>
-                                <code>{folder.rawPath}</code>
-                                {folder.message && (
-                                  <small>{folder.message}</small>
-                                )}
-                              </span>
-                              <span className={styles.importFolderMatch}>
-                                <b>
-                                  {folder.status === "matched"
-                                    ? folder.repositoryLabel
-                                    : folder.status}
-                                </b>
-                                {folder.status === "matched" &&
-                                  folder.repositoryDisplayPath && (
-                                    <InfoTooltip
-                                      content={`Local Git source: ${folder.repositoryDisplayPath}`}
-                                    >
-                                      <code tabIndex={0}>
-                                        {folder.repositoryDisplayPath}
-                                      </code>
-                                    </InfoTooltip>
-                                  )}
-                                <small>
-                                  {folder.status === "matched"
-                                    ? folder.baseRef
-                                      ? `Base ${folder.baseRef}`
-                                      : "Matched locally"
-                                    : "Not added to the plan"}
-                                </small>
-                              </span>
-                            </div>
-                          ))}
-                        </div>
-
-                        <section
-                          aria-labelledby="workspace-folder-editor-title"
-                          className={styles.workspaceFolderEditor}
-                          data-ui="workspace-create.import-repositories"
-                          data-ui-label="Imported repositories"
-                        >
-                          <header>
-                            <span>
-                              <Glyph name="folder" size={15} />
-                            </span>
-                            <div>
-                              <h4 id="workspace-folder-editor-title">
-                                Add repository folders
-                              </h4>
-                              <small>
-                                Extend this WTS plan before creating its
-                                isolated worktrees.
-                              </small>
-                            </div>
-                            <b>
-                              {codeWorkspaceImport.repositories.length +
-                                addedCodeWorkspaceRepositories.length}{" "}
-                              IN PLAN
-                            </b>
-                          </header>
-                          <Tabs.Root
-                            onValueChange={(value) => {
-                              const mode =
-                                value as CodeWorkspaceRepositoryAddMode;
-                              setCodeWorkspaceRepositoryAddMode(mode);
-                              if (mode === "clone") {
-                                setCodeWorkspaceCloneState("idle");
-                                setCodeWorkspaceCloneMessage("");
-                              }
-                            }}
-                            value={codeWorkspaceRepositoryAddMode}
-                          >
-                            <Tabs.List
-                              aria-label="Repository folder source"
-                              className={styles.repositoryAddModes}
-                            >
-                              <Tabs.Trigger
-                                disabled={codeWorkspaceCloneState === "loading"}
-                                value="existing"
-                              >
-                                Existing local
-                              </Tabs.Trigger>
-                              <Tabs.Trigger
-                                disabled={codeWorkspaceCloneState === "loading"}
-                                value="clone"
-                              >
-                                Clone from URL
-                              </Tabs.Trigger>
-                            </Tabs.List>
-                            <Tabs.Content value="existing">
-                              <div className={styles.workspaceFolderPicker}>
-                                <label>
-                                  <span>Local repository</span>
-                                  <SelectMenu
-                                    aria-label="Add local repository folder"
-                                    disabled={
-                                      availableCodeWorkspaceRepositories.length ===
-                                      0
-                                    }
-                                    value={codeWorkspaceRepositoryToAdd}
-                                    onChange={(value) => {
-                                      setCodeWorkspaceRepositoryToAdd(value);
-                                      setCodeWorkspaceExportState("idle");
-                                    }}
-                                  >
-                                    <option value="">
-                                      {availableCodeWorkspaceRepositories.length
-                                        ? "Choose a discovered repository…"
-                                        : "No more discovered repositories"}
-                                    </option>
-                                    {availableCodeWorkspaceRepositories.map(
-                                      (repository) => (
-                                        <option
-                                          key={repository.id}
-                                          value={repository.id}
-                                        >
-                                          {repository.label} ·{" "}
-                                          {repository.checkoutLeaf}
-                                        </option>
-                                      ),
-                                    )}
-                                  </SelectMenu>
-                                </label>
-                                <button
-                                  className={styles.addWorkspaceFolderButton}
-                                  disabled={!codeWorkspaceRepositoryToAdd}
-                                  onClick={addCodeWorkspaceRepository}
-                                  type="button"
-                                >
-                                  <Glyph name="plus" size={13} />
-                                  Add folder
-                                </button>
-                              </div>
-                            </Tabs.Content>
-                            <Tabs.Content value="clone">
-                              <div className={styles.repositoryClonePanel}>
-                                <div className={styles.workspaceFolderPicker}>
-                                  <label>
-                                    <span>Git repository URL</span>
-                                    <input
-                                      aria-describedby="repository-clone-help"
-                                      autoComplete="off"
-                                      onChange={(event) => {
-                                        setCodeWorkspaceCloneUrl(
-                                          event.target.value,
-                                        );
-                                        setCodeWorkspaceCloneState("idle");
-                                        setCodeWorkspaceCloneMessage("");
-                                      }}
-                                      placeholder="https://host/team/repo.git or git@host:team/repo.git"
-                                      spellCheck={false}
-                                      type="url"
-                                      value={codeWorkspaceCloneUrl}
-                                    />
-                                  </label>
-                                  <button
-                                    className={styles.addWorkspaceFolderButton}
-                                    disabled={
-                                      !codeWorkspaceCloneLeaf ||
-                                      codeWorkspaceCloneState === "loading"
-                                    }
-                                    onClick={() => {
-                                      void cloneCodeWorkspaceRepository();
-                                    }}
-                                    type="button"
-                                  >
-                                    <Glyph
-                                      name={
-                                        codeWorkspaceCloneState === "loading"
-                                          ? "refresh"
-                                          : "plus"
-                                      }
-                                      size={13}
-                                    />
-                                    {codeWorkspaceCloneState === "loading"
-                                      ? "Cloning…"
-                                      : "Clone and add"}
-                                  </button>
-                                </div>
-                                <div
-                                  className={styles.repositoryCloneHelp}
-                                  id="repository-clone-help"
-                                >
-                                  <span>
-                                    {codeWorkspaceCloneTarget ? (
-                                      <>
-                                        Clone target{" "}
-                                        <code>{codeWorkspaceCloneTarget}</code>
-                                      </>
-                                    ) : (
-                                      "Paste an HTTPS or SSH Git URL to preview its local destination."
-                                    )}
-                                  </span>
-                                  <small>
-                                    Uses your Git credential helper or SSH
-                                    agent. WTS does not store credentials.
-                                  </small>
-                                </div>
-                                {codeWorkspaceCloneMessage && (
-                                  <p
-                                    className={styles.repositoryCloneStatus}
-                                    data-error={
-                                      codeWorkspaceCloneState === "error" ||
-                                      undefined
-                                    }
-                                    role={
-                                      codeWorkspaceCloneState === "error"
-                                        ? "alert"
-                                        : "status"
-                                    }
-                                  >
-                                    {codeWorkspaceCloneMessage}
-                                  </p>
-                                )}
-                              </div>
-                            </Tabs.Content>
-                          </Tabs.Root>
-                          {addedCodeWorkspaceRepositories.length > 0 && (
-                            <div
-                              aria-label="Additional repository folders"
-                              className={styles.addedWorkspaceFolders}
-                              role="list"
-                            >
-                              {addedCodeWorkspaceRepositories.map(
-                                (repository) => (
-                                  <div key={repository.id} role="listitem">
-                                    <span>
-                                      <b>{repository.label}</b>
-                                      <code>{repository.displayPath}</code>
-                                    </span>
-                                    <small>
-                                      Base {repository.defaultBranch.name}
-                                    </small>
-                                    <button
-                                      aria-label={`Remove added folder ${repository.label}`}
-                                      onClick={() =>
-                                        removeCodeWorkspaceRepository(
-                                          repository.id,
-                                        )
-                                      }
-                                      type="button"
-                                    >
-                                      <Glyph name="close" size={12} />
-                                    </button>
-                                  </div>
-                                ),
-                              )}
-                            </div>
-                          )}
-                          <footer>
-                            <span>
-                              <b>Edit the VS Code file too?</b>
-                              <small>
-                                Download a folder-only copy with these
-                                additions. Settings, tasks, comments, and the
-                                original file stay untouched.
-                              </small>
-                            </span>
-                            <button
-                              className={styles.downloadWorkspaceCopyButton}
-                              disabled={
-                                addedCodeWorkspaceRepositories.length === 0
-                              }
-                              onClick={downloadEditedCodeWorkspace}
-                              type="button"
-                            >
-                              <Glyph name="file" size={13} />
-                              Download edited copy
-                            </button>
-                          </footer>
-                          {codeWorkspaceExportState !== "idle" && (
-                            <p
-                              className={styles.workspaceFolderExportStatus}
-                              data-error={
-                                codeWorkspaceExportState === "error" ||
-                                undefined
-                              }
-                              role={
-                                codeWorkspaceExportState === "error"
-                                  ? "alert"
-                                  : "status"
-                              }
-                            >
-                              {codeWorkspaceExportState === "downloaded"
-                                ? `Downloaded ${codeWorkspaceImport.fileName.replace(
-                                    /\.code-workspace$/i,
-                                    "",
-                                  )}.edited.code-workspace.`
-                                : "The edited workspace copy could not be downloaded."}
-                            </p>
-                          )}
-                        </section>
-
-                        {codeWorkspaceImport.warnings.length > 0 && (
-                          <div className={styles.fileWarnings}>
-                            <b>Import notes</b>
-                            <ul>
-                              {codeWorkspaceImport.warnings.map(
-                                (warning, index) => (
-                                  <li
-                                    key={`${warning.code}-${warning.folderName ?? "general"}-${index}`}
-                                  >
-                                    <Glyph name="warning" size={13} />
-                                    <span>{warning.message}</span>
-                                  </li>
-                                ),
-                              )}
-                            </ul>
-                          </div>
-                        )}
-                        <CodeWorkspaceDiagnosticsPanel
-                          copyState={codeWorkspaceDiagnosticsCopyState}
-                          imported={codeWorkspaceImport}
-                          onCopy={() => void copyCodeWorkspaceDiagnostics()}
-                        />
-                        <section
-                          aria-labelledby="code-workspace-worktree-boundary"
-                          className={styles.fileBoundaryNote}
-                        >
-                          <Glyph name="check" size={14} />
-                          <span>
-                            <h4 id="code-workspace-worktree-boundary">
-                              Local source → managed worktree
-                            </h4>
-                            <small>
-                              A matched checkout is used as the local Git
-                              source. When you later create this workspace, WTS
-                              adds a separate worktree under{" "}
-                              <code>{workspaceRootDisplayPath}</code>. Import
-                              and preflight do not fetch or edit any source
-                              checkout; cloning happens only when you explicitly
-                              choose Clone from URL.
-                            </small>
-                          </span>
-                        </section>
-                      </section>
-                    )}
-                  </div>
-                ) : sourceMode === "set" ? (
-                  <section
-                    aria-labelledby="repository-source-title"
-                    className={styles.workspaceFolderEditor}
-                    data-ui="workspace-create.repositories"
-                    data-ui-label="Repository selection"
-                  >
-                    <header>
-                      <span><Glyph name="folder" size={15} /></span>
-                      <div>
-                        <h4 id="repository-source-title">Choose repositories</h4>
-                        <small>
-                          Use a discovered checkout or clone any Git repository
-                          into the trusted repository root.
-                        </small>
-                      </div>
-                      <b>{addedCodeWorkspaceRepositories.length} IN PLAN</b>
-                    </header>
-                    <Tabs.Root
-                      onValueChange={(value) => {
-                        setCodeWorkspaceRepositoryAddMode(
-                          value as CodeWorkspaceRepositoryAddMode,
-                        );
-                        setCodeWorkspaceCloneState("idle");
-                        setCodeWorkspaceCloneMessage("");
-                      }}
-                      value={codeWorkspaceRepositoryAddMode}
-                    >
-                      <Tabs.List
-                        aria-label="Repository source"
-                        className={styles.repositoryAddModes}
-                      >
-                        <Tabs.Trigger
-                          disabled={codeWorkspaceCloneState === "loading"}
-                          value="existing"
-                        >
-                          Existing local
-                        </Tabs.Trigger>
-                        <Tabs.Trigger
-                          disabled={codeWorkspaceCloneState === "loading"}
-                          value="clone"
-                        >
-                          Clone Git URL
-                        </Tabs.Trigger>
-                      </Tabs.List>
-                      <Tabs.Content value="existing">
-                        <div className={styles.repositoryClonePanel}>
-                          <div className={styles.workspaceFolderPicker}>
-                            <label>
-                              <span>Local repository</span>
-                              <SelectMenu
-                                aria-label="Repository to add"
-                                disabled={
-                                  availableCodeWorkspaceRepositories.length ===
-                                  0
-                                }
-                                onChange={setCodeWorkspaceRepositoryToAdd}
-                                value={codeWorkspaceRepositoryToAdd}
-                              >
-                                <option value="">
-                                  {availableCodeWorkspaceRepositories.length
-                                    ? "Choose a discovered repository…"
-                                    : "No more discovered repositories"}
-                                </option>
-                                {availableCodeWorkspaceRepositories.map(
-                                  (repository) => (
-                                    <option
-                                      key={repository.id}
-                                      value={repository.id}
-                                    >
-                                      {repository.label} ·{" "}
-                                      {repository.displayPath}
-                                    </option>
-                                  ),
-                                )}
-                              </SelectMenu>
-                            </label>
-                            <button
-                              className={styles.addWorkspaceFolderButton}
-                              disabled={!codeWorkspaceRepositoryToAdd}
-                              onClick={addCodeWorkspaceRepository}
-                              type="button"
-                            >
-                              <Glyph name="plus" size={13} /> Add repository
-                            </button>
-                          </div>
-                          <div className={styles.repositoryCloneHelp}>
-                            <span>
-                              WTS lists only repositories discovered under your
-                              trusted repository roots.
-                            </span>
-                            <small>
-                              A typed local path cannot expand this access. Use
-                              Clone Git URL to add another repository safely.
-                            </small>
-                          </div>
-                        </div>
-                      </Tabs.Content>
-                      <Tabs.Content value="clone">
-                        <div className={styles.repositoryClonePanel}>
-                          <div className={styles.workspaceFolderPicker}>
-                            <label>
-                              <span>Git repository URL</span>
-                              <input
-                                aria-describedby="new-workspace-repository-clone-help"
-                                autoComplete="off"
-                                onChange={(event) => {
-                                  setCodeWorkspaceCloneUrl(event.target.value);
-                                  setCodeWorkspaceCloneState("idle");
-                                  setCodeWorkspaceCloneMessage("");
-                                }}
-                                placeholder="https://host/team/repo.git or git@host:team/repo.git"
-                                spellCheck={false}
-                                type="text"
-                                value={codeWorkspaceCloneUrl}
-                              />
-                            </label>
-                            <button
-                              className={styles.addWorkspaceFolderButton}
-                              disabled={
-                                !codeWorkspaceCloneLeaf ||
-                                codeWorkspaceCloneState === "loading"
-                              }
-                              onClick={() => void cloneCodeWorkspaceRepository()}
-                              type="button"
-                            >
-                              <Glyph
-                                name={
-                                  codeWorkspaceCloneState === "loading"
-                                    ? "refresh"
-                                    : "plus"
-                                }
-                                size={13}
-                              />
-                              {codeWorkspaceCloneState === "loading"
-                                ? "Cloning…"
-                                : "Clone and add"}
-                            </button>
-                          </div>
-                          <div
-                            className={styles.repositoryCloneHelp}
-                            id="new-workspace-repository-clone-help"
-                          >
-                            <span>
-                              {codeWorkspaceCloneTarget ? (
-                                <>Clone target <code>{codeWorkspaceCloneTarget}</code></>
-                              ) : (
-                                "Paste an HTTPS or SSH Git URL to preview its local destination."
-                              )}
-                            </span>
-                            <small>
-                              Git uses your credential helper or SSH agent. WTS
-                              does not store credentials.
-                            </small>
-                          </div>
-                          {codeWorkspaceCloneMessage && (
-                            <p
-                              aria-live="polite"
-                              className={styles.repositoryCloneStatus}
-                              data-error={
-                                codeWorkspaceCloneState === "error" || undefined
-                              }
-                              role={
-                                codeWorkspaceCloneState === "error"
-                                  ? "alert"
-                                  : "status"
-                              }
-                            >
-                              {codeWorkspaceCloneMessage}
-                            </p>
-                          )}
-                        </div>
-                      </Tabs.Content>
-                    </Tabs.Root>
-                    {addedCodeWorkspaceRepositories.length > 0 && (
-                      <div
-                        aria-label="Repositories in this workspace plan"
-                        className={styles.addedWorkspaceFolders}
-                        role="list"
-                      >
-                        {addedCodeWorkspaceRepositories.map((repository) => (
-                          <div key={repository.id} role="listitem">
-                            <span>
-                              <b>{repository.label}</b>
-                              <code>{repository.displayPath}</code>
-                            </span>
-                            <small>Base {repository.defaultBranch.name}</small>
-                            <button
-                              aria-label={`Remove ${repository.label} from plan`}
-                              onClick={() =>
-                                removeCodeWorkspaceRepository(repository.id)
-                              }
-                              type="button"
-                            >
-                              <Glyph name="close" size={12} />
-                            </button>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                    <footer>
-                      <span>
-                        <b>Branch selection comes next</b>
-                        <small>
-                          Add every repository now. You can choose a branch for
-                          each repository on the next step and return here at
-                          any time.
-                        </small>
-                      </span>
-                    </footer>
-                  </section>
-                ) : (
-                  <div className={styles.field}>
-                    <Label>
-                      {isIssueSource
-                        ? issueProvider === "jira"
-                          ? "Jira issue key or URL"
-                          : "OpenProject work package"
-                        : "Repositories"}
-                    </Label>
-                    <div className={styles.inputWithIcon}>
-                      <Glyph
-                        name={
-                          isIssueSource
-                            ? issueProvider === "jira"
-                              ? "jira"
-                              : "openProject"
-                            : "folder"
-                        }
-                        size={17}
-                      />
-                      <Input
-                        autoFocus
-                        value={sourceValue}
-                        onChange={(event) => {
-                          sourceImportGenerationRef.current += 1;
-                          setSourceValue(event.target.value);
-                          setRepositoryBaseNotice(null);
-                          if (
-                            autoSuggestedRepositoriesRef.current !== null &&
-                            issueRepositories ===
-                              autoSuggestedRepositoriesRef.current
-                          ) {
-                            setIssueRepositories("");
-                          }
-                          autoSuggestedRepositoriesRef.current = null;
-                          setJiraImport(null);
-                          setOpenProjectImport(null);
-                          setSourceImportState("idle");
-                          setSourceImportMessage("");
-                        }}
-                        aria-label={
-                          isIssueSource
-                            ? issueProvider === "jira"
-                              ? "Jira issue key or URL"
-                              : "OpenProject work package"
-                            : "Repositories"
-                        }
-                        placeholder={
-                          isIssueSource
-                            ? issueProvider === "jira"
-                              ? "e.g. PLATFORM-42"
-                              : "e.g. APP-42, #42, or a work package URL"
-                            : "repo-a, repo-b"
-                        }
-                      />
-                      {isIssueSource && (
-                        <button
-                          className={styles.inlineImportButton}
-                          disabled={
-                            (issueProvider === "jira"
-                              ? !jiraKeyIsValid
-                              : !openProjectReferenceIsValid) ||
-                            sourceImportState === "loading"
-                          }
-                          onClick={() =>
-                            void (issueProvider === "jira"
-                              ? importJira()
-                              : importOpenProject())
-                          }
-                          type="button"
-                        >
-                          {sourceImportState === "loading"
-                            ? "Importing…"
-                            : sourceImportState === "ready"
-                              ? "Re-import"
-                              : "Import"}
-                        </button>
-                      )}
-                    </div>
-                    <small>
-                      {isIssueSource
-                        ? issueProvider === "jira"
-                          ? jiraKeyIsValid || !sourceValue.trim()
-                            ? "Import through your connected Jira account, or continue with repositories you enter manually."
-                            : "Enter a Jira key such as PLATFORM-42."
-                          : openProjectReferenceIsValid || !sourceValue.trim()
-                            ? openProjectImport
-                              ? "Imported from OpenProject. Review the repository scope before continuing."
-                              : "Import through WTS before reviewing the repository scope."
-                            : "Enter APP-42, #42, or a work package URL."
-                        : "These labels are matched against repositories discovered in your configured local folder."}
-                    </small>
-                    {sourceImportMessage && (
-                      <small
-                        className={styles.sourceImportMessage}
-                        data-error={sourceImportState === "error" || undefined}
-                        role={
-                          sourceImportState === "error" ? "alert" : "status"
-                        }
-                      >
-                        {sourceImportMessage}
-                      </small>
-                    )}
-                  </div>
-                )}
-                {isIssueSource && importedIssue && (
-                  <section
-                    aria-labelledby="imported-issue-title"
-                    className={styles.importedIssueCard}
-                    data-ui="workspace-create.issue-preview"
-                    data-ui-label="Issue preview"
-                  >
-                    <header>
-                      <span>
-                        <Glyph name="check" size={15} />
-                        <span>
-                          <h4 id="imported-issue-title">
-                            Imported {importedIssue.reference}
-                          </h4>
-                          <small>{importedIssue.title}</small>
-                        </span>
-                      </span>
-                      {importedIssue.status && <b>{importedIssue.status}</b>}
-                    </header>
-                    <div className={styles.importedIssueBody}>
-                      {importedIssue.project && (
-                        <small>
-                          Project <b>{importedIssue.project}</b>
-                        </small>
-                      )}
-                      <p>
-                        {importedIssueContent(
-                          importedIssue.content,
-                          importedIssue.title,
-                        )}
-                      </p>
-                      <section aria-label="Recommended repositories">
-                        <h4>Recommended repositories</h4>
-                        {importedIssue.recommendations.length > 0 ? (
-                          <div role="list">
-                            {importedIssue.recommendations.map(
-                              (recommendation) => (
-                                <div
-                                  className={styles.importedRecommendation}
-                                  key={recommendation.repositoryId}
-                                  role="listitem"
-                                >
-                                  <span>
-                                    <b>{recommendation.label}</b>
-                                    <small>{recommendation.reason}</small>
-                                  </span>
-                                  <b>
-                                    {recommendation.confidence >= 96
-                                      ? "Strong match"
-                                      : recommendation.confidence >= 90
-                                        ? "Good match"
-                                        : "Possible match"}
-                                  </b>
-                                </div>
-                              ),
-                            )}
-                          </div>
-                        ) : (
-                          <p>
-                            No trusted repository metadata matched this issue.
-                            Choose the scope manually below.
-                          </p>
-                        )}
-                        <small>
-                          Based on local repository identity metadata. Review
-                          these suggestions before continuing; no LLM was used.
-                        </small>
-                      </section>
-                    </div>
-                  </section>
-                )}
-                {isIssueSource && (
-                  <div className={styles.field}>
-                    <Label>Repositories for this plan</Label>
-                    <div className={styles.inputWithIcon}>
-                      <Glyph name="folder" size={17} />
-                      <Input
-                        value={issueRepositories}
-                        onChange={(event) => {
-                          repositoryEditRevisionRef.current += 1;
-                          autoSuggestedRepositoriesRef.current = null;
-                          setIssueRepositories(event.target.value);
-                          setIssueRepositoryLocalMatches({});
-                          setIssueRepositoryShowAllRemotes({});
-                          setRepositoryBaseNotice(null);
-                        }}
-                        aria-label="Repositories for this plan"
-                        placeholder="repo-a, repo-b"
-                      />
-                    </div>
-                    <small>
-                      {(
-                        issueProvider === "jira"
-                          ? jiraImport?.suggestedRepositories.length
-                          : openProjectImport?.suggestedRepositories.length
-                      )
-                        ? "Suggested from the imported issue context. Review before continuing."
-                        : "Choose the local repositories that belong in this issue workspace."}
-                    </small>
-                  </div>
-                )}
-                {sourceRepositoryReview.length > 0 && (
-                  <section
-                    aria-labelledby="source-repository-review-title"
-                    className={styles.sourceRepositoryReview}
-                    data-ui="workspace-create.repository-matches"
-                    data-ui-label="Repository matches"
-                  >
-                    <header>
-                      <span>
-                        <Glyph name="branch" size={15} />
-                        <span>
-                          <h4 id="source-repository-review-title">
-                            Repository identity
-                          </h4>
-                          <small>
-                            Confirm the name and trusted remote before
-                            continuing.
-                          </small>
-                        </span>
-                      </span>
-                      <b>
-                        {sourceRepositoryReview.length}{" "}
-                        {sourceRepositoryReview.length === 1
-                          ? "REPOSITORY"
-                          : "REPOSITORIES"}
-                      </b>
-                    </header>
-                    <div
-                      aria-label="Repository identity list"
-                      className={styles.sourceRepositoryList}
-                      role="list"
-                    >
-                      {sourceRepositoryReview.map(
-                        ({
-                          repository,
-                          catalogRepository,
-                          upstreamRepository,
-                        }) => {
-                          const remoteMatchKey =
-                            repository.label.toLocaleLowerCase();
-                          const allLocalRemoteChoices = (
-                            effectiveRepositoryCatalog?.repositories ?? []
-                          ).filter((candidate) => Boolean(candidate.originUrl));
-                          const scopedLocalRemoteChoices =
-                            allLocalRemoteChoices.filter((candidate) =>
-                              remoteMatchesRepositoryLabel(
-                                repository.label,
-                                candidate,
-                              ),
-                            );
-                          const localRemoteChoices =
-                            issueRepositoryShowAllRemotes[remoteMatchKey]
-                              ? allLocalRemoteChoices
-                              : scopedLocalRemoteChoices;
-                          const forgeTarget = repositoryForgeTarget(
-                            catalogRepository?.originUrl,
-                          );
-                          const openingKey = repositoryEvidenceKey(
-                            repository.repositoryId,
-                            repository.label,
-                          );
-                          const opening =
-                            openingRepositoryBaseKey === openingKey;
-                          const defaultBase =
-                            catalogRepository?.defaultBranch.name ??
-                            repository.baseRef;
-
-                          return (
-                            <div
-                              className={styles.sourceRepositoryRow}
-                              data-resolved={
-                                catalogRepository ? "true" : "false"
-                              }
-                              data-upstream={
-                                !catalogRepository && upstreamRepository
-                                  ? "true"
-                                  : undefined
-                              }
-                              key={openingKey}
-                              role="listitem"
-                            >
-                              <span className={styles.sourceRepositoryIdentity}>
-                                <b>{repository.label}</b>
-                                <InfoTooltip
-                                  content={
-                                    catalogRepository?.originUrl ??
-                                    upstreamRepository?.remoteUrl ??
-                                    "No unique repository match in the local catalog"
-                                  }
-                                >
-                                  <code tabIndex={0}>
-                                    {catalogRepository?.originUrl ??
-                                      upstreamRepository?.remoteUrl ??
-                                      "No unique local repository match"}
-                                  </code>
-                                </InfoTooltip>
-                              </span>
-                              <InfoTooltip content={catalogRepository?.displayPath}>
-                                <span
-                                  className={styles.sourceRepositoryStatus}
-                                  data-resolved={
-                                    catalogRepository ? "true" : "false"
-                                  }
-                                  data-upstream={
-                                    !catalogRepository && upstreamRepository
-                                      ? "true"
-                                      : undefined
-                                  }
-                                  tabIndex={0}
-                                >
-                                  <Glyph
-                                    name={catalogRepository ? "check" : "warning"}
-                                    size={11}
-                                  />
-                                  {catalogRepository
-                                    ? `Base ${defaultBase}`
-                                    : upstreamRepository
-                                      ? "Upstream found"
-                                    : "Needs match"}
-                                </span>
-                              </InfoTooltip>
-                              {!catalogRepository && localRemoteChoices.length > 0 ? (
-                                <SelectMenu
-                                  aria-label={`Select local remote for ${repository.label}`}
-                                  className={styles.sourceRepositorySelect}
-                                  onChange={(repositoryId) => {
-                                    repositoryEditRevisionRef.current += 1;
-                                    setIssueRepositoryLocalMatches((current) => {
-                                      const key = repository.label.toLocaleLowerCase();
-                                      if (!repositoryId) {
-                                        const { [key]: _removed, ...remaining } = current;
-                                        return remaining;
-                                      }
-                                      return { ...current, [key]: repositoryId };
-                                    });
-                                  }}
-                                  value=""
-                                >
-                                  <option value="">Select remote</option>
-                                  {localRemoteChoices.map((candidate) => (
-                                    <option key={candidate.id} value={candidate.id}>
-                                      {candidate.label} — {candidate.originUrl}
-                                    </option>
-                                  ))}
-                                </SelectMenu>
-                              ) : !catalogRepository &&
-                                allLocalRemoteChoices.length > 0 ? (
-                                <Button
-                                  aria-label={`Show all local remotes for ${repository.label}`}
-                                  className={styles.sourceRepositoryLink}
-                                  onPress={() =>
-                                    setIssueRepositoryShowAllRemotes((current) => ({
-                                      ...current,
-                                      [remoteMatchKey]: true,
-                                    }))
-                                  }
-                                >
-                                  Show all
-                                </Button>
-                              ) : !catalogRepository && upstreamRepository ? (
-                                <InfoTooltip
-                                  content="Clone this upstream into the trusted repository root."
-                                >
-                                  <Button
-                                    aria-label={`Clone ${repository.label} from its Jira upstream`}
-                                    className={styles.sourceRepositoryLink}
-                                    isDisabled={Boolean(issueRepositoryCloneKey)}
-                                    onPress={() =>
-                                      void cloneIssueRepository(
-                                        upstreamRepository,
-                                      )
-                                    }
-                                  >
-                                    {issueRepositoryCloneKey ===
-                                    upstreamRepository.label.toLocaleLowerCase()
-                                      ? "Cloning…"
-                                      : "Clone"}
-                                    <Glyph
-                                      name={
-                                        issueRepositoryCloneKey ===
-                                        upstreamRepository.label.toLocaleLowerCase()
-                                          ? "refresh"
-                                          : "plus"
-                                      }
-                                      size={11}
-                                    />
-                                  </Button>
-                                </InfoTooltip>
-                              ) : catalogRepository && forgeTarget ? (
-                                <InfoTooltip
-                                  content={
-                                    openingRepositoryBaseKey
-                                      ? "Opening repository base in browser"
-                                      : undefined
-                                  }
-                                >
-                                  <Button
-                                    aria-label={`${opening ? "Opening" : "Open"} ${repository.label} default base ${defaultBase} on ${forgeDisplayName(forgeTarget.forge)} (${forgeTarget.host}) in browser`}
-                                    className={styles.sourceRepositoryLink}
-                                    data-forge={forgeTarget.forge}
-                                    isDisabled={Boolean(openingRepositoryBaseKey)}
-                                    onPress={() =>
-                                      void openRepositoryBase(
-                                        {
-                                          key: openingKey,
-                                          id: repository.label,
-                                          repositoryId: catalogRepository.id,
-                                          reason:
-                                            "Selected in the workspace source",
-                                          confidence: 100,
-                                          included: true,
-                                          base: defaultBase,
-                                        },
-                                        forgeTarget,
-                                      )
-                                    }
-                                  >
-                                    {opening
-                                      ? "Opening"
-                                      : forgeDisplayName(forgeTarget.forge)}
-                                    <Glyph name="external" size={11} />
-                                  </Button>
-                                </InfoTooltip>
-                              ) : (
-                                <InfoTooltip
-                                  content={
-                                    catalogRepository
-                                      ? "The origin is visible, but it is not a supported GitHub or GitLab URL."
-                                      : "Match this name to a discovered local repository to inspect its remote."
-                                  }
-                                >
-                                  <span
-                                    className={styles.sourceRepositoryNoLink}
-                                    tabIndex={0}
-                                  >
-                                    {catalogRepository?.originUrl
-                                      ? "Origin only"
-                                      : "No remote"}
-                                  </span>
-                                </InfoTooltip>
-                              )}
-                            </div>
-                          );
-                        },
-                      )}
-                    </div>
-                    {issueRepositoryCloneNotice && (
-                      <p
-                        className={styles.sourceRepositoryNotice}
-                        data-error={
-                          issueRepositoryCloneNotice.kind === "error" ||
-                          undefined
-                        }
-                        role={
-                          issueRepositoryCloneNotice.kind === "error"
-                            ? "alert"
-                            : "status"
-                        }
-                      >
-                        <Glyph
-                          name={
-                            issueRepositoryCloneNotice.kind === "error"
-                              ? "warning"
-                              : "check"
-                          }
-                          size={12}
-                        />
-                        {issueRepositoryCloneNotice.message}
-                      </p>
-                    )}
-                    {repositoryBaseNotice && (
-                      <p
-                        className={styles.sourceRepositoryNotice}
-                        data-error={
-                          repositoryBaseNotice.kind === "error" || undefined
-                        }
-                        role={
-                          repositoryBaseNotice.kind === "error"
-                            ? "alert"
-                            : "status"
-                        }
-                      >
-                        <Glyph
-                          name={
-                            repositoryBaseNotice.kind === "error"
-                              ? "warning"
-                              : repositoryBaseNotice.kind === "opening"
-                                ? "refresh"
-                                : "check"
-                          }
-                          size={12}
-                        />
-                        {repositoryBaseNotice.message}
-                      </p>
-                    )}
-                  </section>
-                )}
-                <div className={styles.sourcePreview}>
-                  <Glyph name="folder" />
-                  <span>
-                    <strong>Managed workspace root</strong>
-                    <code>{workspaceRootDisplayPath}</code>
-                  </span>
-                  <span className={styles.localPill}>On this Mac</span>
-                </div>
-              </form>
-            )}
-
-            {step === "evidence" && (
-              <div
-                className={styles.evidencePanel}
-                data-ui="workspace-create.repository-review"
-                data-ui-label="Repository review"
-              >
-                <div className={styles.issueContext}>
-                  <span className={styles.jiraTile}>
-                    <Glyph
-                      name={
-                        isIssueSource
-                          ? issueProvider === "jira"
-                            ? "jira"
-                            : "openProject"
-                          : isWorkspaceSource
-                            ? "copy"
-                            : isCodeWorkspaceSource
-                              ? "file"
-                              : "folder"
-                      }
-                      size={18}
-                    />
-                  </span>
-                  <span>
-                    <b>{draftKey}</b>
-                    <strong>{draftTitle}</strong>
-                  </span>
-                  <span className={styles.contextStatus}>
-                    <Glyph name="check" size={13} />{" "}
-                    {isRevisionMode
-                      ? "Original retained"
-                      : isWorkspaceSource
-                        ? "Copied setup"
-                        : isCodeWorkspaceSource
-                          ? "File read · original unchanged"
-                          : "Details entered"}
-                  </span>
-                </div>
-                <div className={styles.evidenceHeading}>
-                  <span>
-                    <strong>Repository requests</strong>
-                    <small>
-                      {included.length} included · no worktrees created
-                    </small>
-                  </span>
-                  <span className={styles.boundaryBadge}>PLAN PREVIEW</span>
-                </div>
-                <div className={styles.repoEvidenceList}>
-                  {repos.map((repo) => {
-                    const catalogRepository = repo.repositoryId
-                      ? catalogRepositoriesById.get(repo.repositoryId)
-                      : undefined;
-                    const forgeTarget = repositoryForgeTarget(
-                      catalogRepository?.originUrl,
-                    );
-                    const forgeName = forgeTarget
-                      ? forgeDisplayName(forgeTarget.forge)
-                      : "";
-                    const opening = openingRepositoryBaseKey === repo.key;
-                    const baseActionAvailable = Boolean(
-                      repo.repositoryId && forgeTarget,
-                    );
-                    const baseActionLabel = baseActionAvailable
-                      ? `${opening ? "Opening" : "Open"} ${repo.id} base ${repo.base} on ${forgeName} (${forgeTarget!.host}) in browser`
-                      : `Cannot open ${repo.id} base in browser: no trusted GitHub or GitLab origin`;
-                    const baseActionTooltip = baseActionAvailable
-                      ? `Open “${repo.base}” on ${forgeName} · ${forgeTarget!.host}`
-                      : repo.repositoryId
-                        ? "No supported GitHub or GitLab origin is available."
-                        : "This repository has no trusted catalog identity.";
-                    const knownBranches =
-                      catalogRepository?.availableBranches ?? [];
-                    const selectedBaseAvailable = knownBranches.some(
-                      (branch) => branch.name === repo.base,
-                    );
-                    const baseOptions = selectedBaseAvailable
-                      ? knownBranches
-                      : [
-                          {
-                            name: repo.base,
-                            fullRef: "",
-                            commitOid: "",
-                            remote: false,
-                          },
-                          ...knownBranches,
-                        ];
-                    const refreshing =
-                      refreshingRepositoryId === repo.repositoryId;
-
-                    return (
-                      <div
-                        className={styles.repoEvidenceRow}
-                        data-included={repo.included}
-                        key={repo.key}
-                      >
-                        <Checkbox
-                          className={styles.checkbox}
-                          isSelected={repo.included}
-                          onChange={(included) =>
-                            updateRepo(repo.key, { included })
-                          }
-                          aria-label={`Include ${repo.id}${
-                            repo.repositoryId ? ` [${repo.repositoryId}]` : ""
-                          }`}
-                        >
-                          <span>
-                            <Glyph name="check" size={12} />
-                          </span>
-                        </Checkbox>
-                        <span className={styles.repoEvidenceMeta}>
-                          <span className={styles.repoIdentity}>
-                            {baseActionAvailable && forgeTarget ? (
-                              <InfoTooltip content={baseActionTooltip}>
-                                <Button
-                                  aria-label={baseActionLabel}
-                                  className={styles.repositoryIdentityLink}
-                                  data-forge={forgeTarget.forge}
-                                  data-opening={opening || undefined}
-                                  isDisabled={Boolean(openingRepositoryBaseKey)}
-                                  onPress={() =>
-                                    void openRepositoryBase(repo, forgeTarget)
-                                  }
-                                >
-                                  <b>{repo.id}</b>
-                                  <Glyph name="external" size={11} />
-                                </Button>
-                              </InfoTooltip>
-                            ) : (
-                              <b>{repo.id}</b>
-                            )}
-                            <small>{repo.reason}</small>
-                          </span>
-                          <span className={styles.confidence} data-level="high">
-                            {isRevisionMode
-                              ? "Revised from plan"
-                              : isWorkspaceSource
-                                ? "Copied from plan"
-                                : isCodeWorkspaceSource
-                                  ? codeWorkspaceAddedRepositoryIds.includes(
-                                      repo.repositoryId ?? "",
-                                    )
-                                    ? clonedCodeWorkspaceRepositoryIds.has(
-                                        repo.repositoryId ?? "",
-                                      )
-                                      ? "Cloned from URL"
-                                      : "Added from catalog"
-                                    : "Matched locally"
-                                  : repo.repositoryId
-                                    ? "Matched locally"
-                                    : "Selected manually"}
-                          </span>
-                        </span>
-                        <div className={styles.baseReviewControl}>
-                          <label className={styles.compactSelect}>
-                            <span>Base branch</span>
-                            <InfoTooltip content={!repo.included ? "Include repository to choose a base branch" : repo.base}>
-                              <SelectMenu
-                                value={repo.base}
-                                onChange={(value) =>
-                                  updateRepo(repo.key, {
-                                    base: value,
-                                  })
-                                }
-                                disabled={!repo.included || opening}
-                                aria-label={`Base branch for ${repo.id}${
-                                  repo.repositoryId
-                                    ? ` [${repo.repositoryId}]`
-                                    : ""
-                                }`}
-                              >
-                                {baseOptions.map((branch) => (
-                                  <option
-                                    key={`${branch.fullRef}:${branch.name}`}
-                                    value={branch.name}
-                                  >
-                                    {branch.name}
-                                    {!selectedBaseAvailable &&
-                                    branch.name === repo.base
-                                      ? " · unavailable"
-                                      : branch.remote
-                                        ? " · origin"
-                                        : catalogRepository?.originUrl
-                                          ? " · local"
-                                          : ""}
-                                  </option>
-                                ))}
-                              </SelectMenu>
-                            </InfoTooltip>
-                          </label>
-                          <div className={styles.baseReviewActions}>
-                            <InfoTooltip
-                              content={
-                                refreshingRepositoryId === repo.repositoryId
-                                  ? "Refreshing branches from origin"
-                                  : !repo.repositoryId
-                                    ? "This repository is not matched to the local catalog"
-                                    : !catalogRepository?.originUrl
-                                      ? "This repository has no configured origin URL"
-                                      : "Fetch current branches from origin"
-                              }
-                            >
-                              <Button
-                                aria-label={`Fetch current branches for ${repo.id} from origin`}
-                                className={styles.repositoryBaseLink}
-                                data-opening={refreshing || undefined}
-                                isDisabled={
-                                  !repo.repositoryId ||
-                                  !catalogRepository?.originUrl ||
-                                  Boolean(refreshingRepositoryId)
-                                }
-                                onPress={() =>
-                                  void refreshRepositoryBranches(repo)
-                                }
-                              >
-                                <Glyph name="refresh" size={12} />
-                                <b>{refreshing ? "Fetching" : "Refresh"}</b>
-                              </Button>
-                            </InfoTooltip>
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-                {repositoryBaseNotice && (
-                  <p
-                    className={styles.repositoryBaseNotice}
-                    data-error={
-                      repositoryBaseNotice.kind === "error" || undefined
-                    }
-                    data-opening={
-                      repositoryBaseNotice.kind === "opening" || undefined
-                    }
-                    role={
-                      repositoryBaseNotice.kind === "error" ? "alert" : "status"
-                    }
-                  >
-                    <Glyph
-                      name={
-                        repositoryBaseNotice.kind === "error"
-                          ? "warning"
-                          : repositoryBaseNotice.kind === "opening"
-                            ? "refresh"
-                            : "check"
-                      }
-                      size={13}
-                    />
-                    <span>{repositoryBaseNotice.message}</span>
-                  </p>
-                )}
-                <p className={styles.evidenceNote}>
-                  <Glyph name="warning" size={14} />
-                  <span>
-                    {isCodeWorkspaceSource
-                      ? `Read-only preflight verifies each trusted source, base commit, branch conflict, and target path. Creating the workspace later adds separate managed worktrees under ${workspaceRootDisplayPath}; preflight does not fetch or edit the source checkouts.`
-                      : "WTS resolves these labels against the local catalog and verifies base commits, branch conflicts, and safe target paths during the read-only preflight."}
-                  </span>
-                </p>
-              </div>
-            )}
-
-            {step === "services" && (
-              <div
-                className={styles.runtimeAnalysisPanel}
-                data-ui="workspace-create.runtime"
-                data-ui-label="Runtime setup"
-              >
-                <header className={styles.runtimeAnalysisHeader}>
-                  <span className={styles.runtimeAnalysisIcon}>
-                    <Glyph name="command" size={18} />
-                  </span>
-                  <div>
-                    <small>READ-ONLY CODE ANALYSIS</small>
-                    <h3>Choose what this workspace should run</h3>
-                    <p>
-                      WTS found runnable services at the selected base commits.
-                      Include only what this task needs; commands and source
-                      paths are read-only findings.
-                    </p>
-                  </div>
-                  <span
-                    className={styles.runtimeAnalysisState}
-                    data-state={runtimeAnalysisState}
-                  >
-                    {runtimeAnalysisState === "loading"
-                      ? "Analyzing…"
-                      : runtimeAnalysisState === "ready"
-                        ? "Analysis ready"
-                        : runtimeAnalysisState === "error"
-                          ? "Needs attention"
-                          : "Not started"}
-                  </span>
-                </header>
-
-                {runtimeAnalysisState === "loading" && (
-                  <div
-                    aria-live="polite"
-                    className={styles.runtimeAnalysisLoading}
-                    role="status"
-                  >
-                    <span aria-hidden="true">
-                      <Glyph name="refresh" size={18} />
-                    </span>
-                    <div>
-                      <b>
-                        Analyzing {included.length} selected base{" "}
-                        {included.length === 1 ? "commit" : "commits"} ·{" "}
-                        {runtimeAnalysisElapsedSeconds}s
-                      </b>
-                      <small>
-                        1. Resolve exact refs · 2. Build evidence graph · 3.
-                        Inspect manifests, Compose, Dockerfiles, and example env
-                        files · 4. Correlate commands and ports
-                      </small>
-                    </div>
-                  </div>
-                )}
-
-                {runtimeAnalysisState === "idle" && (
-                  <div className={styles.runtimeAnalysisEmpty}>
-                    <span>
-                      <Glyph name="refresh" size={17} />
-                    </span>
-                    <div>
-                      <b>Repository selection changed</b>
-                      <p>
-                        Analyze the selected base commits again before adding
-                        services or port preferences to this plan.
-                      </p>
-                    </div>
-                  </div>
-                )}
-
-                {runtimeAnalysisState === "error" && (
-                  <div className={styles.runtimeAnalysisError} role="alert">
-                    <Glyph name="warning" size={17} />
-                    <div>
-                      <b>Service analysis could not finish</b>
-                      <p>{runtimeAnalysisError}</p>
-                    </div>
-                    <span className={styles.runtimeAnalysisErrorActions}>
-                      <button
-                        className={styles.secondaryAction}
-                        onClick={() => setStep("manifest")}
-                        type="button"
-                      >
-                        Continue without services
-                      </button>
-                      <button
-                        className={styles.primaryButton}
-                        onClick={() => void analyzeRuntime(true)}
-                        type="button"
-                      >
-                        <Glyph name="refresh" size={13} /> Retry
-                      </button>
-                    </span>
-                  </div>
-                )}
-
-                {runtimeAnalysisState === "ready" && runtimeAnalysis && (
-                  <>
-                    <div className={styles.runtimeAnalysisSummary}>
-                      <span>
-                        <b>{runtimeAnalysis.services.length}</b>
-                        <small>
-                          {runtimeAnalysis.services.length === 1
-                            ? "service found"
-                            : "services found"}
-                        </small>
-                      </span>
-                      <span>
-                        <b>{selectedRuntimeServices.length}</b>
-                        <small>will be ready to run</small>
-                      </span>
-                      <span>
-                        <b>
-                          {runtimeAnalysis.services.reduce(
-                            (total, service) => total + service.ports.length,
-                            0,
-                          )}
-                        </b>
-                        <small>ports to reserve</small>
-                      </span>
-                      <InfoTooltip content={runtimeAnalysis.graph.detail}>
-                        <span
-                          className={styles.runtimeGraphStatus}
-                          data-state={runtimeAnalysis.graph.status}
-                          tabIndex={0}
-                        >
-                          <Glyph
-                            name={
-                              runtimeAnalysis.graph.status === "ready"
-                                ? "check"
-                                : "warning"
-                            }
-                            size={13}
-                          />
-                          <b>Graph {runtimeAnalysis.graph.status}</b>
-                          <small>{runtimeAnalysis.graph.detail}</small>
-                        </span>
-                      </InfoTooltip>
-                    </div>
-
-                    {runtimeAnalysis.warnings.length > 0 && (
-                      <div
-                        aria-label="Runtime analysis warnings"
-                        className={styles.runtimeAnalysisWarnings}
-                      >
-                        {runtimeAnalysis.warnings.map((warning, index) => (
-                          <p key={`${warning}-${index}`}>
-                            <Glyph name="warning" size={13} />
-                            <span>{warning}</span>
-                          </p>
-                        ))}
-                      </div>
-                    )}
-
-                    {runtimeAnalysis.services.length === 0 ? (
-                      <div className={styles.runtimeAnalysisEmpty}>
-                        <span>
-                          <Glyph name="check" size={17} />
-                        </span>
-                        <div>
-                          <b>No runnable services detected</b>
-                          <p>
-                            You can save without runtime services. WTS will not
-                            guess a command or open a port without evidence.
-                          </p>
-                        </div>
-                      </div>
-                    ) : (
-                      <div
-                        aria-label="Detected services"
-                        className={styles.runtimeServiceList}
-                        role="list"
-                      >
-                        {runtimeAnalysis.services.map((service) => {
-                          const draft = runtimeServiceDrafts.get(
-                            service.candidateId,
-                          );
-                          if (!draft) return null;
-                          const evidence = [
-                            ...service.evidence,
-                            ...service.ports.flatMap((port) => port.evidence),
-                          ];
-                          return (
-                            <article
-                              className={styles.runtimeServiceCard}
-                              data-included={draft.included}
-                              key={service.candidateId}
-                              role="listitem"
-                            >
-                              <header>
-                                <Checkbox
-                                  aria-label={`Include ${service.displayName} in runtime plan`}
-                                  className={styles.checkbox}
-                                  isSelected={draft.included}
-                                  onChange={(included) =>
-                                    setRuntimeServiceIncluded(
-                                      service.candidateId,
-                                      included,
-                                    )
-                                  }
-                                >
-                                  <span>
-                                    <Glyph name="check" size={12} />
-                                  </span>
-                                </Checkbox>
-                                <span className={styles.runtimeServiceIdentity}>
-                                  <b>{service.displayName}</b>
-                                  <small>
-                                    {service.repositoryLabel} ·{" "}
-                                    <code>
-                                      {service.commitOid.slice(0, 12)}
-                                    </code>
-                                  </small>
-                                </span>
-                                <span className={styles.runtimeInclusionLabel}>
-                                  {draft.included
-                                    ? "Included in this plan"
-                                    : "Not included"}
-                                </span>
-                                <span
-                                  className={styles.runtimeConfidence}
-                                  data-confidence={service.confidence}
-                                >
-                                  {runtimeConfidenceLabels[service.confidence]}
-                                </span>
-                              </header>
-
-                              <div className={styles.runtimeServiceFacts}>
-                                <span>
-                                  <small>RUNS</small>
-                                  <InfoTooltip content={service.command.join(" ")}>
-                                    <code tabIndex={0}>
-                                      {service.command.join(" ")}
-                                    </code>
-                                  </InfoTooltip>
-                                </span>
-                                <span>
-                                  <small>FROM</small>
-                                  <InfoTooltip content={service.workingDirectory}>
-                                    <code tabIndex={0}>
-                                      {service.workingDirectory}
-                                    </code>
-                                  </InfoTooltip>
-                                </span>
-                                <span>
-                                  <small>START ORDER</small>
-                                  <code>
-                                    {service.dependencies.length
-                                      ? `After ${service.dependencies.join(", ")}`
-                                      : "Can start immediately"}
-                                  </code>
-                                </span>
-                              </div>
-
-                              {service.ports.length > 0 && (
-                                <fieldset
-                                  className={styles.runtimePortSet}
-                                  disabled={!draft.included}
-                                >
-                                  <legend>Ports this service expects</legend>
-                                  {service.ports.map((port) => {
-                                    const portDraft = draft.ports.find(
-                                      (item) => item.portId === port.portId,
-                                    );
-                                    if (!portDraft) return null;
-                                    const invalid =
-                                      validRuntimePort(
-                                        portDraft.preferredPort,
-                                      ) === null;
-                                    const errorId = runtimePortErrorId(
-                                      service.candidateId,
-                                      port.portId,
-                                    );
-                                    return (
-                                      <div
-                                        className={styles.runtimePortRow}
-                                        key={port.portId}
-                                      >
-                                        <span
-                                          className={styles.runtimePortIdentity}
-                                        >
-                                          <b>{port.portId}</b>
-                                          <small>
-                                            {port.environment ??
-                                              "WTS_PORT / PORT"}
-                                          </small>
-                                        </span>
-                                        <label>
-                                          <span>Preferred port</span>
-                                          <input
-                                            aria-invalid={invalid || undefined}
-                                            aria-describedby={
-                                              invalid && draft.included
-                                                ? errorId
-                                                : undefined
-                                            }
-                                            aria-label={`Preferred port for ${service.displayName} ${port.portId}`}
-                                            inputMode="numeric"
-                                            max={65_535}
-                                            min={1_024}
-                                            onChange={(event) =>
-                                              updateRuntimePort(
-                                                service.candidateId,
-                                                port.portId,
-                                                {
-                                                  preferredPort:
-                                                    event.currentTarget.value,
-                                                },
-                                              )
-                                            }
-                                            type="number"
-                                            value={portDraft.preferredPort}
-                                          />
-                                        </label>
-                                        <label>
-                                          <span>Allocation</span>
-                                          <SelectMenu
-                                            aria-label={`Port allocation policy for ${service.displayName} ${port.portId}`}
-                                            onChange={(value) =>
-                                              updateRuntimePort(
-                                                service.candidateId,
-                                                port.portId,
-                                                {
-                                                  policy: value as RuntimePortPolicy,
-                                                },
-                                              )
-                                            }
-                                            value={portDraft.policy}
-                                          >
-                                            <option value="prefer">
-                                              Prefer; move if occupied
-                                            </option>
-                                            <option value="fixed">
-                                              Fixed; block if occupied
-                                            </option>
-                                          </SelectMenu>
-                                        </label>
-                                        <span
-                                          className={
-                                            styles.runtimePortConfidence
-                                          }
-                                          data-confidence={port.confidence}
-                                        >
-                                          {
-                                            runtimeConfidenceLabels[
-                                              port.confidence
-                                            ]
-                                          }
-                                        </span>
-                                        {invalid && draft.included && (
-                                          <small
-                                            className={styles.runtimePortError}
-                                            id={errorId}
-                                            role="alert"
-                                          >
-                                            Enter a port from 1024 to 65535.
-                                          </small>
-                                        )}
-                                      </div>
-                                    );
-                                  })}
-                                </fieldset>
-                              )}
-
-                              <details className={styles.runtimeEvidence}>
-                                <summary>
-                                  <Glyph name="file" size={13} />
-                                  Evidence · {evidence.length}{" "}
-                                  {evidence.length === 1
-                                    ? "finding"
-                                    : "findings"}
-                                </summary>
-                                {evidence.length ? (
-                                  <ul>
-                                    {evidence.map((item, index) => (
-                                      <li
-                                        key={`${item.repositoryId}-${item.path}-${item.detector}-${index}`}
-                                      >
-                                        <code>{item.path}</code>
-                                        <span>{item.detail}</span>
-                                        <small>
-                                          {item.detector} ·{" "}
-                                          {item.commitOid.slice(0, 12)}
-                                        </small>
-                                      </li>
-                                    ))}
-                                  </ul>
-                                ) : (
-                                  <p>
-                                    No additional file evidence was returned.
-                                  </p>
-                                )}
-                              </details>
-                            </article>
-                          );
-                        })}
-                      </div>
-                    )}
-
-                    <p className={styles.runtimeAssignmentNote}>
-                      <Glyph name="check" size={14} />
-                      <span>
-                        This plan stores preferred ports only. WTS assigns and
-                        shows actual loopback ports when you explicitly start
-                        the runtime.
-                      </span>
-                    </p>
-                  </>
-                )}
-              </div>
-            )}
-
-            {step === "manifest" && (
-              <div
-                className={styles.manifestPanel}
-                data-ui="workspace-create.plan-review"
-                data-ui-label="Workspace plan review"
-              >
-                {saveWarning && (
-                  <p className={styles.evidenceNote} role="alert">
-                    <Glyph name="warning" size={14} />
-                    <span>{saveWarning}</span>
-                  </p>
-                )}
-                {isRevisionMode && templateWorkspace && (
-                  <div className={styles.revisionContinuity}>
-                    <span>
-                      <Glyph name="copy" size={16} />
-                    </span>
-                    <div>
-                      <b>Original retained</b>
-                      <p>
-                        {templateWorkspace.key} remains unchanged. Saving adds a
-                        separate durable plan titled “{draftTitle}” with its own
-                        workspace path.
-                      </p>
-                    </div>
-                  </div>
-                )}
-                <div className={styles.manifestSummary}>
-                  <span>
-                    <small>
-                      {isRevisionMode
-                        ? "ORIGINAL"
-                        : isIssueSource
-                          ? issueProvider === "jira"
-                            ? "ISSUE"
-                            : "WORK PACKAGE"
-                          : isWorkspaceSource
-                            ? "TEMPLATE"
-                            : isCodeWorkspaceSource
-                              ? "VS CODE FILE"
-                              : "DIRECT"}
-                    </small>
-                    <b>
-                      {isCodeWorkspaceSource
-                        ? codeWorkspaceImport?.fileName
-                        : draftKey}
-                    </b>
-                  </span>
-                  <span>
-                    <small>REPOSITORIES</small>
-                    <b>{included.length}</b>
-                  </span>
-                  <span>
-                    <small>SERVICES</small>
-                    <b>{selectedRuntimeServices.length}</b>
-                  </span>
-                  <span>
-                    <small>OPEN WITH</small>
-                    <b>{provider}</b>
-                  </span>
-                </div>
-                <div className={styles.reviewDecisionIntro}>
-                  <span>
-                    <small>FINAL REVIEW</small>
-                    <h3>Does this plan match the task?</h3>
-                    <p>
-                      Check repository branches and runnable services before
-                      saving. You can edit either choice without starting over.
-                    </p>
-                  </span>
-                  <span className={styles.reviewDecisionState}>
-                    <Glyph name="check" size={14} />
-                    No Git or processes yet
-                  </span>
-                </div>
-                <div className={styles.manifestGrid}>
-                  <section className={styles.planningHomeSection}>
-                    <div className={styles.planningHomeIntro}>
-                      <span className={styles.planningHomeIcon}>
-                        <Glyph name="file" size={17} />
-                      </span>
-                      <div>
-                        <h3>Planning home</h3>
-                        <p>
-                          Give agents a durable place for plans, findings, and
-                          handoffs.
-                        </p>
-                      </div>
-                    </div>
-                    <RadioGroup
-                      aria-label="Planning home"
-                      className={styles.planningChoices}
-                      value={planningEnabled ? "starter" : "existing"}
-                      onChange={(value) =>
-                        setPlanningEnabled(value === "starter")
-                      }
-                    >
-                      <Radio value="existing" className={styles.planningChoice}>
-                        <span className={styles.radioIndicator} />
-                        <span>
-                          <strong>Use repositories as-is</strong>
-                          <small>
-                            Planning files already exist, or are not needed.
-                          </small>
-                        </span>
-                      </Radio>
-                      <Radio value="starter" className={styles.planningChoice}>
-                        <span className={styles.radioIndicator} />
-                        <span>
-                          <strong>Create a starter kit</strong>
-                          <small>
-                            Add editable planning files when provisioning.
-                          </small>
-                        </span>
-                      </Radio>
-                    </RadioGroup>
-                    {planningEnabled && (
-                      <div className={styles.planningSettings}>
-                        <label>
-                          <span>Folder</span>
-                          <SelectMenu
-                            aria-label="Planning folder"
-                            value={planningFolder}
-                            onChange={(value) =>
-                              setPlanningFolder(
-                                value as WorkspacePlanningSelection["folder"],
-                              )
-                            }
-                          >
-                            <option value="plansAndKanban">
-                              plans-and-kanban
-                            </option>
-                            <option value="plans">plans</option>
-                          </SelectMenu>
-                        </label>
-                        <label>
-                          <span>Starter</span>
-                          <SelectMenu
-                            aria-label="Planning starter"
-                            value={planningFormat}
-                            onChange={(value) =>
-                              setPlanningFormat(
-                                value as WorkspacePlanningSelection["format"],
-                              )
-                            }
-                          >
-                            <option value="kanban">
-                              Plan, findings &amp; Kanban
-                            </option>
-                            <option value="notes">Plan &amp; findings</option>
-                          </SelectMenu>
-                        </label>
-                        <p>
-                          WTS creates these files once. They remain editable
-                          user content and are never silently removed.
-                        </p>
-                      </div>
-                    )}
-                  </section>
-                  <section className={styles.planDecisionSection}>
-                    <header className={styles.planDecisionHeader}>
-                      <span>
-                        <h3>Repositories and branches</h3>
-                        <small>
-                          {included.length} selected for separate worktrees
-                        </small>
-                      </span>
-                      <button
-                        className={styles.planEditButton}
-                        onClick={() => setStep("evidence")}
-                        type="button"
-                      >
-                        Edit repositories
-                      </button>
-                    </header>
-                    <dl className={styles.manifestList}>
-                      <div>
-                        <dt>Root</dt>
-                        <dd>
-                          <code>{workspaceRootDisplayPath}</code>
-                          <small>WTS assigns the final folder on save</small>
-                        </dd>
-                      </div>
-                      <div>
-                        <dt>Base refs</dt>
-                        <dd>
-                          {included.map((repo) => (
-                            <code key={repo.key}>
-                              {repo.id} ← {repo.base}
-                            </code>
-                          ))}
-                        </dd>
-                      </div>
-                      <div>
-                        <dt>Worktrees</dt>
-                        <dd>
-                          <code>Created only after saved-plan review</code>
-                        </dd>
-                      </div>
-                      <div>
-                        <dt>Planning</dt>
-                        <dd>
-                          <code>
-                            {planningEnabled
-                              ? `${planningFolder === "plans" ? "plans" : "plans-and-kanban"}/ · ${
-                                  planningFormat === "kanban"
-                                    ? "Kanban kit"
-                                    : "notes kit"
-                                }`
-                              : "Use repository planning files as-is"}
-                          </code>
-                          <small>
-                            {planningEnabled
-                              ? "Included as a folder in the generated VS Code workspace"
-                              : "No extra planning folder will be created"}
-                          </small>
-                        </dd>
-                      </div>
-                      <div>
-                        <dt>Graph scope</dt>
-                        <dd>
-                          <code>Built on demand after workspace creation</code>
-                        </dd>
-                      </div>
-                    </dl>
-                  </section>
-                  <section className={styles.planDecisionSection}>
-                    <header className={styles.planDecisionHeader}>
-                      <span>
-                        <h3>Runtime services</h3>
-                        <small>
-                          {selectedRuntimeServices.length
-                            ? `${selectedRuntimeServices.length} selected`
-                            : "No services selected"}
-                        </small>
-                      </span>
-                      <button
-                        className={styles.planEditButton}
-                        onClick={() => setStep("services")}
-                        type="button"
-                      >
-                        Edit services
-                      </button>
-                    </header>
-                    <div className={styles.planServiceReview}>
-                      {selectedRuntimeServices.length ? (
-                        selectedRuntimeServices.map((service) => {
-                          const draft = runtimeServiceDrafts.get(
-                            service.candidateId,
-                          );
-                          const ports =
-                            draft?.ports
-                              .map(
-                                (port) =>
-                                  `${port.portId}: ${port.preferredPort} · ${port.policy}`,
-                              )
-                              .join(", ") || "No ports";
-                          return (
-                            <span key={service.candidateId}>
-                              <b>{service.displayName}</b>
-                              <code>{ports}</code>
-                            </span>
-                          );
-                        })
-                      ) : (
-                        <p>
-                          This workspace will not start any runtime services.
-                        </p>
-                      )}
-                      <small>
-                        Actual loopback ports are assigned only when you
-                        explicitly start the runtime.
-                      </small>
-                    </div>
-                  </section>
-                  <section>
-                    <h3>Open with</h3>
-                    <div className={styles.providerCompactGrid}>
-                      {providers.map((item) => (
-                        <Button
-                          key={item.id}
-                          className={styles.providerCompact}
-                          data-selected={provider === item.id}
-                          onPress={() => setProvider(item.id)}
-                          aria-pressed={provider === item.id}
-                        >
-                          <span>{providerMarks[item.id]}</span>
-                          <b>{item.id}</b>
-                          {provider === item.id && (
-                            <Glyph name="check" size={14} />
-                          )}
-                        </Button>
-                      ))}
-                    </div>
-                    <div className={styles.safetyNote}>
-                      <Glyph name="check" />
-                      <span>
-                        <b>
-                          {isRevisionMode
-                            ? "This action saves a separate revised plan."
-                            : isCodeWorkspaceSource
-                              ? "This action only saves a local plan from the matched folders."
-                              : "This action only saves a local plan."}
-                        </b>
-                        {isRevisionMode
-                          ? ` The original ${templateWorkspace?.key ?? "workspace"}, its worktrees, branches, changes, and sessions remain untouched.`
-                          : isCodeWorkspaceSource
-                            ? " The source file and trusted checkouts—including their settings, branches, changes, and existing worktrees—remain untouched. Saving performs no Git operation; provisioning later creates separate managed worktrees."
-                            : " No repository, worktree, port, process, editor, graph, or agent side effect is started by this step."}
-                      </span>
-                    </div>
-                  </section>
-                </div>
-              </div>
-            )}
-
-            {step === "saving" && (
-              <div
-                className={styles.provisionPanel}
-                data-ui="workspace-create.saving"
-                data-ui-label="Workspace save progress"
-                role={saveError ? "alert" : "status"}
-                aria-live={saveError ? "assertive" : "polite"}
-                aria-busy={!saveError}
-              >
-                <div
-                  className={styles.savingGlyph}
-                  data-error={Boolean(saveError)}
-                  aria-hidden="true"
-                >
-                  <Glyph name={saveError ? "warning" : "refresh"} size={24} />
-                </div>
-                <div className={styles.provisionDetails}>
-                  <h3>
-                    {saveError ? "Save needs attention" : `Saving ${draftKey}`}
-                  </h3>
-                  <p>
-                    {saveError
-                      ? saveError
-                      : "Writing the workspace and idempotency record in one local transaction…"}
-                  </p>
-                  {saveError && (
-                    <small>
-                      Retrying uses the same request identity so WTS can safely
-                      reconcile an uncertain result.
-                    </small>
-                  )}
-                  {!saveError && (
-                    <ul>
-                      <li data-complete>
-                        <span>
-                          <Glyph name="check" size={13} />
-                        </span>
-                        Validate the structured plan
-                      </li>
-                      <li data-active>
-                        <span>2</span>
-                        Commit to the local registry
-                      </li>
-                      <li>
-                        <span>3</span>
-                        Return the saved workspace identity
-                      </li>
-                    </ul>
-                  )}
-                </div>
-              </div>
-            )}
-
-            {step === "saved" && savedWorkspace && (
-              <div
-                className={styles.readyPanel}
-                data-ui="workspace-create.saved"
-                data-ui-label="Saved workspace"
-                role="status"
-                aria-live="polite"
-              >
-                <span className={styles.readyGlyph}>
-                  <Glyph name="check" size={28} />
-                </span>
-                <h3>
-                  {isRevisionMode
-                    ? `Revised ${draftKey} plan is saved`
-                    : `${draftKey} is saved`}
-                </h3>
-                <p>
-                  {isRevisionMode
-                    ? `Original retained: ${templateWorkspace?.key ?? "the source workspace"} remains unchanged. This separate plan is ready for Git preflight at its new reserved path.`
-                    : "The durable workspace plan is ready for Git preflight in its workbench. No worktrees or processes were created."}
-                </p>
-                <div className={styles.readyFacts}>
-                  <span>
-                    <Glyph name="folder" />
-                    <b>{savedWorkspace.workspaceDisplayPath}</b>
-                    <small>Reserved display path</small>
-                  </span>
-                  <span>
-                    <span className={styles.providerMark}>
-                      {providerMarks[provider]}
-                    </span>
-                    <b>{provider}</b>
-                    <small>Default provider</small>
-                  </span>
-                </div>
-              </div>
-            )}
-          </div>
-
-          <div
-            className={styles.dialogFooter}
-            data-ui="workspace-create.actions"
-            data-ui-label="Workspace setup actions"
-          >
-            <span
-              className={styles.dialogFootnote}
-              data-attention={
-                step === "source" && Boolean(sourceBlockingMessage)
-              }
-            >
-              <Glyph
-                name={
-                  step === "source" && sourceBlockingMessage
-                    ? "warning"
-                    : isRevisionMode
-                      ? "copy"
-                      : isCodeWorkspaceSource
-                        ? "file"
-                        : "folder"
-                }
-                size={14}
-              />{" "}
-              {step === "source" && sourceBlockingMessage
-                ? sourceBlockingMessage
-                : isRevisionMode
-                  ? `${templateWorkspace?.key ?? "Original workspace"} stays unchanged`
-                  : isCodeWorkspaceSource
-                    ? `${codeWorkspaceImport?.fileName ?? "Source file"} stays unchanged`
-                    : `Workspace roots stay under ${workspaceRootDisplayPath}`}
-            </span>
-            <span className={styles.dialogActions}>
-              {step === "evidence" && (
-                <Button
-                  className={styles.secondaryButton}
-                  onPress={() => setStep("source")}
-                >
-                  Back
-                </Button>
-              )}
-              {step === "services" && (
-                <Button
-                  className={styles.secondaryButton}
-                  onPress={() => setStep("evidence")}
-                >
-                  Back
-                </Button>
-              )}
-              {step === "manifest" && (
-                <Button
-                  className={styles.secondaryButton}
-                  onPress={() => setStep("services")}
-                >
-                  Back
-                </Button>
-              )}
-              {step === "source" && (
-                <Button
-                  className={styles.primaryButton}
-                  onPress={analyzeSource}
-                  isDisabled={!canAnalyze}
-                >
-                  {isWorkspaceSource
-                    ? isRevisionMode
-                      ? "Review revised setup"
-                      : "Review copied setup"
-                    : isCodeWorkspaceSource
-                      ? "Review imported repositories"
-                      : "Review repositories"}{" "}
-                  <Glyph name="arrow" />
-                </Button>
-              )}
-              {step === "evidence" && (
-                <Button
-                  className={styles.primaryButton}
-                  onPress={() => {
-                    setStep("services");
-                    void analyzeRuntime();
-                  }}
-                  isDisabled={included.length === 0}
-                >
-                  Analyze services <Glyph name="arrow" />
-                </Button>
-              )}
-              {step === "services" && (
-                <Button
-                  className={styles.primaryButton}
-                  onPress={() => {
-                    if (runtimeAnalysisState === "idle") {
-                      void analyzeRuntime();
-                      return;
-                    }
-                    setStep("manifest");
-                  }}
-                  isDisabled={
-                    runtimeAnalysisState === "loading" ||
-                    runtimeAnalysisState === "error" ||
-                    (runtimeAnalysisState === "ready" &&
-                      (runtimeAnalysisFingerprint !==
-                        currentRuntimeFingerprint ||
-                        runtimePortErrors.length > 0))
-                  }
-                >
-                  {runtimeAnalysisState === "loading"
-                    ? "Analyzing services…"
-                    : runtimeAnalysisState === "idle"
-                      ? "Analyze services"
-                      : isRevisionMode
-                        ? "Review revised plan"
-                        : "Review plan"}{" "}
-                  <Glyph name="arrow" />
-                </Button>
-              )}
-              {step === "manifest" && (
-                <Button
-                  className={styles.primaryButton}
-                  onPress={() => void savePlan()}
-                >
-                  {isRevisionMode ? "Save revised plan" : "Save workspace plan"}{" "}
-                  <Glyph name="arrow" />
-                </Button>
-              )}
-              {step === "saving" && saveError && (
-                <>
-                  <Button
-                    className={styles.secondaryButton}
-                    onPress={() => setStep("manifest")}
-                  >
-                    Back
-                  </Button>
-                  <Button
-                    className={styles.primaryButton}
-                    onPress={() => void savePlan()}
-                  >
-                    Retry save <Glyph name="refresh" />
-                  </Button>
-                </>
-              )}
-              {step === "saving" && !saveError && (
-                <Button
-                  className={styles.secondaryButton}
-                  onPress={stopWaitingForSave}
-                >
-                  <Glyph name="stop" /> Stop waiting
-                </Button>
-              )}
-              {step === "saved" && savedWorkspace && (
-                <Button
-                  className={styles.primaryButton}
-                  onPress={() => {
-                    handleDialogOpenChange(false);
-                    onComplete(savedWorkspace);
-                  }}
-                >
-                  {isRevisionMode ? "Open revised plan" : "Open saved plan"}{" "}
-                  <Glyph name="arrow" />
-                </Button>
-              )}
-            </span>
-          </div>
-        </Dialog.Content>
-      </Dialog.Portal>
-    </Dialog.Root>
-  );
 }
 
 function AddWorkspaceRepositoryDialog({
@@ -7426,6 +1586,7 @@ function WorkspaceProvisionPanel({
   materialization,
   repositoryCatalog,
   error,
+  errorCode,
   driftDetected,
   onReview,
   onFetchBranches,
@@ -7433,6 +1594,8 @@ function WorkspaceProvisionPanel({
   onCreateRevisedCopy,
   onReconcile,
   onMaterialize,
+  onReviewRemainingFiles,
+  onRecoverSetup,
 }: {
   workspace: Workspace;
   state: WorkspaceActionState;
@@ -7441,6 +1604,7 @@ function WorkspaceProvisionPanel({
   materialization: WorkspaceMaterialization | null;
   repositoryCatalog: RepositoryCatalog | null;
   error: string;
+  errorCode: string;
   driftDetected: boolean;
   onReview: () => void;
   onFetchBranches: (repositoryId: string) => void;
@@ -7448,6 +1612,8 @@ function WorkspaceProvisionPanel({
   onCreateRevisedCopy: () => void;
   onReconcile: () => void;
   onMaterialize: () => void;
+  onReviewRemainingFiles: () => void;
+  onRecoverSetup: () => void;
 }) {
   const isCheckingRecordedMaterialization =
     !materialization &&
@@ -7510,7 +1676,17 @@ function WorkspaceProvisionPanel({
   }
 
   const busy = commandBusy || state === "checking" || state === "materializing";
-  const blocked = preflight && !preflight.ready;
+  const setupRecovery = preflight?.setupRecovery;
+  const creationReady = preflight?.ready && !setupRecovery;
+  const blocked = preflight && (!preflight.ready || Boolean(setupRecovery));
+  const recoveryReadOnly = !nativePreviewAllowsCommand("recover_workspace_setup");
+  const cleanupIncomplete = Boolean(error) && (
+    errorCode === "generated_workspace_cleanup_incomplete" ||
+    errorCode === "materialization_cleanup_incomplete"
+  );
+  const workspacePathConflict = blocked && preflight.blockers.some((blocker) =>
+    blocker.code === "targetConflict" && !blocker.repositoryId && !blocker.repositoryLabel,
+  );
   return (
     <section
       className={styles.provisionCard}
@@ -7533,32 +1709,81 @@ function WorkspaceProvisionPanel({
         <h2>
           {driftDetected
             ? "Register the current Git state"
-            : state === "checking"
-              ? "Checking the exact Git effects"
-              : state === "materializing"
-                ? `Creating ${workspace.key}`
-                : blocked
-                  ? "Resolve the blockers before creating worktrees"
-                  : preflight?.ready
-                    ? "Review complete · ready to create"
-                    : "Turn this saved plan into isolated worktrees"}
+            : setupRecovery
+              ? "Review the files from the failed setup"
+              : cleanupIncomplete
+              ? "Inspect the remaining workspace files"
+              : state === "checking"
+                ? "Checking the exact Git effects"
+                : state === "materializing"
+                  ? `Creating ${workspace.key}`
+                  : blocked
+                    ? "Resolve the blockers before creating worktrees"
+                    : creationReady
+                      ? "Review complete · ready to create"
+                      : "Turn this saved plan into isolated worktrees"}
         </h2>
         <p>
           {driftDetected
             ? "WTS can safely re-read the managed worktrees, register their current branches, HEAD commits, origins, and upstreams, then rebuild the workspace graph."
-            : state === "checking"
-              ? "WTS is resolving local repositories, base commits, branch names, and target paths."
-              : state === "materializing"
-                ? "WTS is creating the worktrees transactionally and writing the VS Code workspace."
-                : preflight?.ready
-                  ? "Nothing has changed yet. These exact effects are locked to this review and will be checked again before creation."
-                  : "WTS will inspect only the configured local repository catalog. Preflight itself does not write to Git."}
+            : setupRecovery
+              ? "WTS keeps your saved plan. Review the paths below before you clean setup files."
+              : cleanupIncomplete
+              ? "WTS could not finish cleanup. Inspect the preserved files before you review setup again."
+              : state === "checking"
+                ? "WTS is resolving local repositories, base commits, branch names, and target paths."
+                : state === "materializing"
+                  ? "WTS is creating the worktrees transactionally and writing the VS Code workspace."
+                  : creationReady
+                    ? "Review these exact effects. WTS checks them again before creation."
+                    : "WTS will inspect only the configured local repository catalog. Preflight itself does not write to Git."}
         </p>
         {error && (
           <div className={styles.provisionError} role="alert">
             <Glyph name="warning" size={14} />
             {error}
           </div>
+        )}
+        {!setupRecovery && (cleanupIncomplete || workspacePathConflict) && (
+          <div className={styles.branchRecovery}>
+            <button className={styles.baseRecoveryAction} disabled={busy} onClick={onReviewRemainingFiles} type="button">
+              Review remaining files
+              <Glyph name="arrow" size={11} />
+            </button>
+            <RecoveryCopyButton label="Copy setup path" text={preflight?.workspaceDisplayPath ?? workspace.path} disabled={busy} />
+            <small>WTS checks the remaining paths and shows recovery steps. This check does not remove files.</small>
+          </div>
+        )}
+        {setupRecovery && (
+          <section className={styles.branchRecovery} aria-label="Setup file recovery" data-ui="workspace-overview.setup-recovery" data-ui-label="Setup file recovery">
+            <p>WTS removes only unchanged files from the failed setup and its unchanged worktrees and branches.</p>
+            <p>WTS preserves changed files, ignored files, and new commits. Inspect the paths that block cleanup.</p>
+            {setupRecovery.blockers.length > 0 && (
+              <ul className={styles.blockerList} aria-label="Setup cleanup blockers">
+                {setupRecovery.blockers.map((blocker, index) => <li key={`${index}-${blocker}`}>{blocker}</li>)}
+              </ul>
+            )}
+            {recoveryReadOnly && <p role="status">{NATIVE_PREVIEW_READ_ONLY_MESSAGE}</p>}
+            <button className={styles.baseRecoveryAction} disabled={busy || !setupRecovery.ready || setupRecovery.blockers.length > 0 || recoveryReadOnly} onClick={onRecoverSetup} type="button">
+              Clean setup files
+            </button>
+            <small>After cleanup, WTS shows a fresh setup review. Select Create workspace only after you review it.</small>
+            {setupRecovery.paths.length > 0 && (
+              <details>
+                <summary>Review {setupRecovery.paths.length} setup path{setupRecovery.paths.length === 1 ? "" : "s"}</summary>
+              <ul className={styles.blockerList} aria-label="Setup recovery paths">
+                {setupRecovery.paths.map((path) => (
+                  <li key={path}>
+                    <div className={`${styles.blockerCopy} ${styles.removalRecoveryActions}`}>
+                      <code>{path}</code>
+                      <RecoveryCopyButton label={`Copy path ${path}`} text={path}>Copy path</RecoveryCopyButton>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+              </details>
+            )}
+          </section>
         )}
         {driftDetected && (
           <div className={styles.branchRecovery}>
@@ -7634,7 +1859,7 @@ function WorkspaceProvisionPanel({
             ))}
           </ul>
         )}
-        {preflight?.ready && (
+        {creationReady && (
           <div
             className={styles.effectTable}
             role="table"
@@ -7660,9 +1885,9 @@ function WorkspaceProvisionPanel({
       </div>
       <Button
         className={
-          preflight?.ready ? styles.primaryButton : styles.secondaryButton
+          creationReady ? styles.primaryButton : styles.secondaryButton
         }
-        onPress={preflight?.ready ? onMaterialize : onReview}
+        onPress={creationReady ? onMaterialize : onReview}
         isDisabled={busy}
       >
         {busy && <Glyph name="refresh" size={14} />}
@@ -7670,7 +1895,7 @@ function WorkspaceProvisionPanel({
           ? "Checking…"
           : state === "materializing"
             ? "Creating…"
-            : preflight?.ready
+            : creationReady
               ? "Create workspace"
               : blocked
                 ? "Check again"
@@ -7713,6 +1938,7 @@ function DraftOverviewPanel({
   materialization,
   repositoryCatalog,
   actionError,
+  actionErrorCode,
   driftDetected,
   onReview,
   onFetchBranches,
@@ -7727,6 +1953,10 @@ function DraftOverviewPanel({
   onReviewChanges,
   onOpenWorkspace,
   onNotice,
+  onOpenIntegrations,
+  onRefreshWorkspace,
+  onReviewRemainingFiles,
+  onRecoverSetup,
   gitlabReview,
 }: {
   client: WorkspaceClient;
@@ -7737,6 +1967,7 @@ function DraftOverviewPanel({
   materialization: WorkspaceMaterialization | null;
   repositoryCatalog: RepositoryCatalog | null;
   actionError: string;
+  actionErrorCode: string;
   driftDetected: boolean;
   onReview: () => void;
   onFetchBranches: (repositoryId: string) => void;
@@ -7756,12 +1987,21 @@ function DraftOverviewPanel({
   onReviewChanges: (repositoryId: string) => void;
   onOpenWorkspace: () => void;
   onNotice: (message: string, kind?: "info" | "error") => void;
+  onOpenIntegrations?: () => void;
+  onRefreshWorkspace: () => void;
+  onReviewRemainingFiles: () => void;
+  onRecoverSetup: () => void;
   gitlabReview?: GitlabReviewTarget & Partial<GitlabReview>;
 }) {
   type GitlabInboxView =
     | { state: "loading" }
     | { state: "ready"; inbox: GitlabMergeRequestInbox }
     | { state: "error"; detail: string };
+  type GitlabHandoffView = {
+    repositoryId: string;
+    headCommitOid: string;
+    state: "formOpened" | "checking";
+  };
   const [openingRepositoryId, setOpeningRepositoryId] = useState<string | null>(null);
   const [syncingRepositoryId, setSyncingRepositoryId] = useState<string | null>(null);
   const [repositoryNotice, setRepositoryNotice] = useState("");
@@ -7807,14 +2047,52 @@ function DraftOverviewPanel({
   const [gitlabInbox, setGitlabInbox] = useState<GitlabInboxView>({
     state: "loading",
   });
+  const [gitlabHandoff, setGitlabHandoff] =
+    useState<GitlabHandoffView | null>(null);
+  const gitlabHandoffRef = useRef(gitlabHandoff);
+  gitlabHandoffRef.current = gitlabHandoff;
   const [openingGitlabMergeRequestId, setOpeningGitlabMergeRequestId] =
     useState<string | null>(null);
   const [alignmentOpen, setAlignmentOpen] = useState(false);
+  const [alignmentRepositoryId, setAlignmentRepositoryId] = useState<string | null>(null);
+  const alignmentGeneration = useRef(0);
+  const alignmentWorkspaceId = useRef(workspace.id);
+  alignmentWorkspaceId.current = workspace.id;
   const [alignmentPreflight, setAlignmentPreflight] =
     useState<WorkspaceRepositoryAlignmentPreflight | null>(null);
   const [alignmentState, setAlignmentState] =
     useState<"loading" | "ready" | "aligning" | "error">("loading");
   const [alignmentError, setAlignmentError] = useState("");
+  useEffect(() => {
+    alignmentGeneration.current += 1;
+    setAlignmentOpen(false);
+    setAlignmentRepositoryId(null);
+    setAlignmentPreflight(null);
+    return () => { alignmentGeneration.current += 1; };
+  }, [workspace.id]);
+
+  const reviewRepositoryAlignment = async (repositoryId: string) => {
+    if (alignmentWorkspaceId.current !== workspace.id) return;
+    const generation = ++alignmentGeneration.current;
+    setAlignmentRepositoryId(repositoryId);
+    setAlignmentOpen(true);
+    setAlignmentState("loading");
+    setAlignmentError("");
+    setAlignmentPreflight(null);
+    try {
+      const preflight = await client.preflightWorkspaceRepositoryAlignment(workspace.id, repositoryId);
+      if (generation !== alignmentGeneration.current) return;
+      if (preflight.workspaceId !== workspace.id || preflight.repositoryId !== repositoryId) {
+        throw new Error("WTS returned alignment details for another repository.");
+      }
+      setAlignmentPreflight(preflight);
+      setAlignmentState("ready");
+    } catch (cause) {
+      if (generation !== alignmentGeneration.current) return;
+      setAlignmentError(cause instanceof Error ? cause.message : "WTS could not review repository alignment.");
+      setAlignmentState("error");
+    }
+  };
   const materializedById = new Map(
     materialization?.worktrees.map((worktree) => [
       worktree.repositoryId,
@@ -7926,8 +2204,9 @@ function DraftOverviewPanel({
         active = false;
       };
     }
+    setGitlabHandoff(null);
     setGitlabInbox({ state: "loading" });
-    void client.getGitlabMergeRequests(workspace.id).then(
+    void loadWorkspaceGitlabMergeRequests(client, workspace.id).then(
       (inbox) => {
         if (active) {
           setGitlabInbox({ state: "ready", inbox });
@@ -7946,6 +2225,66 @@ function DraftOverviewPanel({
     );
     return () => {
       active = false;
+    };
+  }, [client, gitlabDeliveryTargetKey, workspace.id]);
+  useEffect(() => {
+    let active = true;
+    let requestPending = false;
+    let requestGeneration = 0;
+    const refreshAfterHandoff = () => {
+      const handoff = gitlabHandoffRef.current;
+      if (
+        !active ||
+        requestPending ||
+        !handoff ||
+        handoff.state !== "formOpened"
+      ) return;
+      requestPending = true;
+      const generation = ++requestGeneration;
+      setGitlabHandoff((current) =>
+        current?.repositoryId === handoff.repositoryId &&
+        current.headCommitOid === handoff.headCommitOid
+          ? { ...current, state: "checking" }
+          : current,
+      );
+      void loadWorkspaceGitlabMergeRequests(client, workspace.id, { force: true }).then(
+        (inbox) => {
+          requestPending = false;
+          const current = gitlabHandoffRef.current;
+          if (
+            !active ||
+            generation !== requestGeneration ||
+            current?.repositoryId !== handoff.repositoryId ||
+            current.headCommitOid !== handoff.headCommitOid
+          ) return;
+          setGitlabInbox({ state: "ready", inbox });
+          setGitlabHandoff((latest) => {
+            if (
+              latest?.repositoryId !== handoff.repositoryId ||
+              latest.headCommitOid !== handoff.headCommitOid
+            ) return latest;
+            return inbox.state === "fresh"
+              ? null
+              : { ...latest, state: "formOpened" };
+          });
+        },
+        () => {
+          requestPending = false;
+          if (!active || generation !== requestGeneration) return;
+          setGitlabHandoff((latest) =>
+            latest?.repositoryId === handoff.repositoryId &&
+            latest.headCommitOid === handoff.headCommitOid
+              ? { ...latest, state: "formOpened" }
+              : latest,
+          );
+        },
+      );
+    };
+    window.addEventListener("focus", refreshAfterHandoff);
+    return () => {
+      active = false;
+      requestGeneration += 1;
+      window.removeEventListener("focus", refreshAfterHandoff);
     };
   }, [client, gitlabDeliveryTargetKey, workspace.id]);
   const openRepositoryUpstream = async (
@@ -8172,7 +2511,16 @@ function DraftOverviewPanel({
       }
       setChangeRequestDraft(null);
       const requestName = result.forge === "github" ? "pull request" : "merge request";
-      setRepositoryNotice(`${changeRequestDraft.repositoryLabel} · ${requestName} form opened.`);
+      if (result.forge === "gitlab") {
+        setGitlabHandoff({
+          repositoryId: changeRequestDraft.repositoryId,
+          headCommitOid: changeRequestDraft.sourceHeadCommitOid,
+          state: "formOpened",
+        });
+        setRepositoryNotice("");
+      } else {
+        setRepositoryNotice(`${changeRequestDraft.repositoryLabel} · ${requestName} form opened.`);
+      }
       onNotice(`${requestName === "pull request" ? "GitHub" : "GitLab"} form opened`);
     } catch (cause) {
       setChangeRequestError(
@@ -8267,31 +2615,7 @@ function DraftOverviewPanel({
         setRepositoryNotice(
           `${created.label} has different upstream history. Review alignment before moving the worktree.`,
         );
-        setAlignmentOpen(true);
-        setAlignmentState("loading");
-        setAlignmentError("");
-        setAlignmentPreflight(null);
-        try {
-          const preflight = await client.preflightWorkspaceRepositoryAlignment(
-            workspace.id,
-            created.repositoryId,
-          );
-          if (
-            preflight.workspaceId !== workspace.id ||
-            preflight.repositoryId !== created.repositoryId
-          ) {
-            throw new Error("WTS returned alignment details for another repository.");
-          }
-          setAlignmentPreflight(preflight);
-          setAlignmentState("ready");
-        } catch (preflightCause) {
-          setAlignmentError(
-            preflightCause instanceof Error
-              ? preflightCause.message
-              : "WTS could not review repository alignment.",
-          );
-          setAlignmentState("error");
-        }
+        await reviewRepositoryAlignment(created.repositoryId);
         return;
       }
       setRepositoryNoticeError(true);
@@ -8337,6 +2661,23 @@ function DraftOverviewPanel({
       data-ui="workspace-overview.page"
       data-ui-label="Workspace overview"
     >
+      {actionError && (materialization || gitlabReview) &&
+        !(repositoryNoticeError && (
+          repositoryNotice === actionError ||
+          (syncBlockedRepositoryId && actionErrorCode === "repository_sync_blocked")
+        )) && <section
+        aria-label="Workspace recovery"
+        className={styles.workspaceRecovery}
+        data-ui="workspace-overview.recovery"
+        data-ui-label="Workspace status recovery"
+      >
+        <p role="alert">{actionError}</p>
+        {driftDetected && <p>If the change is expected, register it before you continue.</p>}
+        <div>
+          <button disabled={commandBusy} className={styles.secondaryButton} onClick={driftDetected ? onReconcile : onRefreshWorkspace} type="button">{driftDetected ? "Register changes & re-index" : "Refresh workspace"}</button>
+          {onOpenIntegrations && <button disabled={commandBusy} className={styles.secondaryButton} onClick={onOpenIntegrations} type="button">Open integrations</button>}
+        </div>
+      </section>}
       <div className={styles.mainColumn}>
         {gitlabReview && reviewWorktree && (
           <section
@@ -8482,6 +2823,7 @@ function DraftOverviewPanel({
               materialization={materialization}
               repositoryCatalog={repositoryCatalog}
               error={actionError}
+              errorCode={actionErrorCode}
               driftDetected={driftDetected}
               onReview={onReview}
               onFetchBranches={onFetchBranches}
@@ -8489,9 +2831,12 @@ function DraftOverviewPanel({
               onCreateRevisedCopy={onCreateRevisedCopy}
               onReconcile={onReconcile}
               onMaterialize={onMaterialize}
+              onReviewRemainingFiles={onReviewRemainingFiles}
+              onRecoverSetup={onRecoverSetup}
             />
             <WorkspaceWorkItemsPanel
               client={client}
+              onOpenIntegrations={onOpenIntegrations}
               deliveryLabel={workItemDeliveryLabel}
               workspaceId={workspace.id}
               workspaceKey={workspace.key}
@@ -8717,7 +3062,49 @@ function DraftOverviewPanel({
                             : "Prepare PR"}
                         </button>
                       ) : created && forgeTarget?.forge === "gitlab" ? (
-                          mergeRequests.length > 0 ? (
+                          gitlabHandoff?.repositoryId === created.repositoryId ? (
+                            <span
+                              aria-label={`${repository.label} merge request status`}
+                              className={styles.repoDeliveryStatus}
+                              data-state={gitlabHandoff.state}
+                              role="status"
+                            >
+                              <span
+                                aria-hidden="true"
+                                className={styles.repoDeliveryStatusIcon}
+                                data-animated={
+                                  gitlabHandoff.state === "checking" || undefined
+                                }
+                              >
+                                <Glyph
+                                  name={
+                                    gitlabHandoff.state === "checking"
+                                      ? "refresh"
+                                      : "check"
+                                  }
+                                  size={9}
+                                />
+                              </span>
+                              {gitlabHandoff.state === "checking"
+                                ? "WTS checks GitLab for the MR"
+                                : "MR form opened"}
+                            </span>
+                          ) : gitlabInbox.state === "loading" ? (
+                            <span
+                              aria-label={`${repository.label} merge request status`}
+                              className={styles.repoDeliveryStatus}
+                              role="status"
+                            >
+                              <span
+                                aria-hidden="true"
+                                className={styles.repoDeliveryStatusIcon}
+                                data-animated="true"
+                              >
+                                <Glyph name="refresh" size={9} />
+                              </span>
+                              WTS checks GitLab
+                            </span>
+                          ) : mergeRequests.length > 0 ? (
                             <span className={styles.repoDeliveryFallback}>
                               {mergeRequests.map((mergeRequest) => {
                                 const hasNewLocalWork = Boolean(
@@ -8897,12 +3284,12 @@ function DraftOverviewPanel({
       <RepositoryAlignmentDialog
         error={alignmentError}
         onConfirm={() => void alignRepository()}
-        onOpenChange={setAlignmentOpen}
+        onOpenChange={(open) => {
+          setAlignmentOpen(open);
+          if (!open) alignmentGeneration.current += 1;
+        }}
         onRetry={() => {
-          const created = materialization?.worktrees.find(
-            (worktree) => worktree.repositoryId === alignmentPreflight?.repositoryId,
-          );
-          if (created) void syncRepository(created);
+          if (alignmentRepositoryId) void reviewRepositoryAlignment(alignmentRepositoryId);
         }}
         open={alignmentOpen}
         preflight={alignmentPreflight}
@@ -9617,6 +4004,7 @@ const cliProviderCommands: Record<AgentProvider, string> = {
   codex: "codex --sandbox workspace-write --ask-for-approval on-request",
   openCode: "opencode .",
   hermes: "hermes chat --tui",
+  copilot: "copilot",
 };
 
 const terminalNames: Record<TerminalProvider, string> = {
@@ -9673,7 +4061,9 @@ function WorkspaceCliPanel({
       ? "openCode"
       : workspace.provider === "Hermes"
         ? "hermes"
-        : "codex";
+        : workspace.provider === "Copilot"
+          ? "copilot"
+          : "codex";
   const [provider, setProvider] = useState<AgentProvider>(preferred);
   const warpIntegration = integrations?.find((item) => item.id === "warp");
   const warpAvailable =
@@ -10046,8 +4436,6 @@ function WorkspaceCliPanel({
   );
 }
 
-export type { NoticeToast };
-
 export interface LocalWorkspaceProps {
   initialView?: "board" | "workbench" | "time" | "reviews" | "updates";
   initialWorkspaceId?: string;
@@ -10070,6 +4458,9 @@ export function LocalWorkspace({
     () => materializationCacheFor(client),
     [client],
   );
+  const navigationCache = useMemo(() => navigationCacheFor(client), [client]);
+  const scrollCache = useMemo(() => scrollCacheFor(client), [client]);
+  const workbenchScrollRef = useRef<HTMLDivElement>(null);
   const [view, setView] = useState<
     "board" | "workbench" | "time" | "reviews" | "updates"
   >(initialView);
@@ -10079,6 +4470,8 @@ export function LocalWorkspace({
     (myReviews.gitlabInbox?.reviews.length ?? 0);
   const appUpdate = useAppUpdate(client);
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
+  const agentNavigationWorkspacesRef = useRef(workspaces);
+  agentNavigationWorkspacesRef.current = workspaces;
   const [draggedWorkspaceId, setDraggedWorkspaceId] = useState<string | null>(null);
   const [workspaceDropPreview, setWorkspaceDropPreview] =
     useState<WorkspaceBoardPlacement | null>(null);
@@ -10100,10 +4493,20 @@ export function LocalWorkspace({
   const [workspaceAgents, setWorkspaceAgents] = useState(
     () => new Map<string, WorkspaceAgentSnapshot>(),
   );
-  const [workspaceGitlabInboxes, setWorkspaceGitlabInboxes] = useState(
-    () => new Map<string, GitlabMergeRequestInbox>(),
-  );
-  const [boardStatusRevision, setBoardStatusRevision] = useState(0);
+  const attentionStore = useMemo(() => getWorkspaceAttentionStore(client), [client]);
+  const attentionInboxes = useWorkspaceAttention(attentionStore,
+    snapshot => Object.fromEntries(Object.entries(snapshot.inboxes).filter(([, inbox]) => inbox.mergeRequests.length > 0)),
+    (left, right) => Object.keys(left).length === Object.keys(right).length && Object.entries(left).every(([id, inbox]) =>
+      right[id]?.state === inbox.state && JSON.stringify(right[id]?.mergeRequests) === JSON.stringify(inbox.mergeRequests)));
+  const workspaceGitlabInboxes = useMemo(() => new Map(Object.entries(attentionInboxes)), [attentionInboxes]);
+  const attentionClientRef = useRef(client);
+  attentionClientRef.current = client;
+  const [verificationSelection, setVerificationSelection] = useState<VerificationAttentionSelection>();
+  const attentionInputKey = JSON.stringify(workspaces.map(workspace => [workspace.id,
+    workspace.lifecycleState === "materialized" || workspace.lifecycleState === "needsAttention"]));
+  const attentionWorkspaces = useMemo(() => (JSON.parse(attentionInputKey) as [string, boolean][])
+    .map(([workspaceId, materialized]) => ({ workspaceId, materialized })), [attentionInputKey]);
+
   const [workspaceNameEditing, setWorkspaceNameEditing] = useState(false);
   const [workspaceNameDraft, setWorkspaceNameDraft] = useState("");
   const [workspaceNameSaving, setWorkspaceNameSaving] = useState(false);
@@ -10111,6 +4514,18 @@ export function LocalWorkspace({
   const [selectedId, setSelectedId] = useState(initialWorkspaceId ?? "");
   const [registryState, setRegistryState] = useState<RegistryState>("loading");
   const [registryError, setRegistryError] = useState("");
+  const refreshAttention = useCallback((force = false) => {
+    if (view !== "board" || registryState !== "ready" || document.visibilityState === "hidden") return;
+    void attentionStore.refresh(attentionWorkspaces, { force });
+  }, [attentionStore, attentionWorkspaces, registryState, view]);
+  useEffect(() => {
+    refreshAttention();
+    const onFocus = () => refreshAttention();
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+  }, [refreshAttention]);
+  useVisiblePolling(refreshAttention, 60_000, { enabled: view === "board" && registryState === "ready" });
+
   const [deepLinkState, setDeepLinkState] = useState<DeepLinkState>(
     initialWorkspaceId ? "loading" : "idle",
   );
@@ -10124,6 +4539,17 @@ export function LocalWorkspace({
   const [searchExpanded, setSearchExpanded] = useState(false);
   const [filter, setFilter] = useState<Filter>("all");
   const [createOpen, setCreateOpen] = useState(initialCreateOpen);
+  const [feedbackSelectionReturn, setFeedbackSelectionReturn] = useState<FeedbackSelectionReturn>();
+  const feedbackReturnNavigationRef = useRef(-1);
+  const [deferredWorkspaceCreations, setDeferredWorkspaceCreations] = useState<
+    DeferredWorkspaceCreation[]
+  >([]);
+  const [resumedWorkspaceCreationId, setResumedWorkspaceCreationId] =
+    useState("");
+  const repositoryCloneRecordsRef = useRef(
+    new Map<string, RepositoryCloneRecord>(),
+  );
+  const repositoryCloneSequenceRef = useRef(0);
   const [addRepositoryOpen, setAddRepositoryOpen] = useState(false);
   const [createTemplateWorkspaceId, setCreateTemplateWorkspaceId] =
     useState("");
@@ -10152,7 +4578,7 @@ export function LocalWorkspace({
   const [setupOpen, setSetupOpen] = useState(false);
   const [removalOpen, setRemovalOpen] = useState(false);
   const [removalState, setRemovalState] = useState<
-    "loading" | "ready" | "removing" | "error"
+    "loading" | "ready" | "repairing" | "removing" | "error"
   >("loading");
   const [removalPreflight, setRemovalPreflight] =
     useState<WorkspaceRemovalPreflight | null>(null);
@@ -10213,8 +4639,18 @@ export function LocalWorkspace({
     useState<WorkspaceActionState>("idle");
   const [workspacePreflight, setWorkspacePreflight] =
     useState<WorkspacePreflight | null>(null);
-  const [workspaceMaterialization, setWorkspaceMaterialization] =
-    useState<WorkspaceMaterialization | null>(null);
+  const [materializationState, setMaterializationState] = useState<{
+    client: WorkspaceClient;
+    value: WorkspaceMaterialization | null;
+  }>({ client, value: null });
+  const workspaceMaterialization =
+    materializationState.client === client &&
+    materializationState.value?.workspaceId === selectedId
+      ? materializationState.value
+      : materializationCache.get(selectedId) ?? null;
+  const setWorkspaceMaterialization = useCallback((value: WorkspaceMaterialization | null) => {
+    setMaterializationState({ client, value });
+  }, [client]);
   const [workspaceEvidenceRefreshing, setWorkspaceEvidenceRefreshing] =
     useState(false);
   const [workspaceActionError, setWorkspaceActionError] = useState("");
@@ -10225,6 +4661,7 @@ export function LocalWorkspace({
     key: string;
   } | null>(null);
   const workspaceActionGenerationRef = useRef(0);
+  const setupRecoveryPendingRef = useRef(new Set<string>());
   const removalGenerationRef = useRef(0);
   const removalKeyRef = useRef<{
     digest: string;
@@ -10246,7 +4683,12 @@ export function LocalWorkspace({
   const pendingGitlabWorkflowTransitionsRef = useRef(new Set<string>());
   const pendingBoardFocusRef = useRef<string | null | undefined>(undefined);
   const cancelWorkspaceRenameRef = useRef(false);
+  const workspaceRenameGenerationRef = useRef(0);
+  const workspaceRenamePendingRef = useRef(false);
+  const workspaceRenameClientRef = useRef(client);
+  workspaceRenameClientRef.current = client;
   const deepLinkGenerationRef = useRef(0);
+  const agentNavigationGenerationRef = useRef(0);
   const deepLinkEnabledRef = useRef(Boolean(initialWorkspaceId));
   const deepLinkTargetRef = useRef(initialWorkspaceId);
   const pendingRecoveryFocusRef = useRef(false);
@@ -10286,12 +4728,23 @@ export function LocalWorkspace({
     .join(",");
 
   const invalidateDeepLinkLookup = () => {
+    agentNavigationGenerationRef.current += 1;
     if (!initialWorkspaceId) return;
     deepLinkEnabledRef.current = false;
     deepLinkGenerationRef.current += 1;
     setDeepLinkError("");
     setDeepLinkState("idle");
   };
+
+  useLayoutEffect(() => {
+    workspaceRenameGenerationRef.current += 1;
+    workspaceRenamePendingRef.current = false;
+    cancelWorkspaceRenameRef.current = false;
+    setWorkspaceNameEditing(false);
+    setWorkspaceNameSaving(false);
+    setWorkspaceNameDraft("");
+    setWorkspaceNameError("");
+  }, [client, selectedId, view]);
 
   useEffect(() => {
     let current = true;
@@ -10333,21 +4786,17 @@ export function LocalWorkspace({
         setWorkspaceRootDisplayPath(list.workspaceRootDisplayPath);
         setWorkspaceBoardSessionOrder(null);
         setWorkspaces(nextWorkspaces);
-        setSelectedId(
+        setSelectedId((currentId) =>
           resolveDeepLinkNow
             ? (initialWorkspaceId ?? "")
-            : (selected?.id ?? ""),
+            : nextWorkspaces.some((workspace) => workspace.id === currentId)
+              ? currentId
+              : (selected?.id ?? ""),
         );
         setDeepLinkState(
           resolveDeepLinkNow ? (listedWorkspace ? "ready" : "loading") : "idle",
         );
-        setNotice(
-          selected
-            ? `${selected.key} plan loaded from the local registry`
-            : resolveDeepLinkNow
-              ? "Local registry connected · opening linked workspace…"
-              : "Local registry connected · no workspace plans yet",
-        );
+        setToasts((current) => current.filter((toast) => toast.id !== "init"));
         setRegistryState("ready");
         if (resolveDeepLinkNow) setView("workbench");
       } catch (error) {
@@ -10358,6 +4807,7 @@ export function LocalWorkspace({
             : "The local workspace registry could not be opened.",
         );
         setRegistryState("error");
+        setToasts((current) => current.filter((toast) => toast.id !== "init"));
         setNotice("Local registry unavailable");
       }
     };
@@ -10385,7 +4835,7 @@ export function LocalWorkspace({
     };
     const refreshAgentOverview = async () => {
       try {
-        const sessions = await client.listAgentSessions();
+        const sessions = await loadAgentSessions(client);
         if (current) {
           const snapshots = buildWorkspaceAgentSnapshots(sessions);
           setWorkspaceAgents(snapshots);
@@ -10575,7 +5025,8 @@ export function LocalWorkspace({
     if (view !== "board" || registryState !== "ready") return;
     const candidates = workspaces.filter(
       (workspace) =>
-        workspace.lifecycleState === "materialized" &&
+        (workspace.lifecycleState === "materialized" ||
+          workspace.lifecycleState === "needsAttention") &&
         workspace.workflowPersisted,
     );
     if (!candidates.length) return;
@@ -10588,13 +5039,8 @@ export function LocalWorkspace({
             return;
           }
           try {
-            const inbox = await client.getGitlabMergeRequests(workspace.id);
-            if (!current) return;
-            setWorkspaceGitlabInboxes((existing) => {
-              const next = new Map(existing);
-              next.set(workspace.id, inbox);
-              return next;
-            });
+            const inbox = attentionInboxes[workspace.id];
+            if (!current || !inbox) return;
             if (inbox.state !== "fresh") return;
             const observation = inbox.mergeRequests
               .map(
@@ -10629,14 +5075,11 @@ export function LocalWorkspace({
               suggested,
               workspace.workflowRevision,
             );
-            gitlabWorkflowObservationsRef.current.set(
-              workspace.id,
-              observation,
-            );
-            if (!current) return;
+            if (attentionClientRef.current !== client) return;
+            gitlabWorkflowObservationsRef.current.set(workspace.id, observation);
             setWorkspaces((existing) =>
               existing.map((candidate) =>
-                candidate.id === workspace.id
+                candidate.id === workspace.id && candidate.workflowRevision <= workflow.revision
                   ? {
                       ...candidate,
                       lane: laneForWorkflowState(workflow.state),
@@ -10660,16 +5103,9 @@ export function LocalWorkspace({
     };
 
     void refreshMergeRequestWorkflow();
-    const refreshTimer = window.setInterval(
-      () => void refreshMergeRequestWorkflow(),
-      60_000,
-    );
-    return () => {
-      current = false;
-      window.clearInterval(refreshTimer);
-    };
+    return () => { current = false; };
   }, [
-    boardStatusRevision,
+    attentionInboxes,
     client,
     registryState,
     view,
@@ -10821,7 +5257,6 @@ export function LocalWorkspace({
         ]);
         setSelectedId(workspace.id);
         setDeepLinkState("ready");
-        setNotice(`${workspace.key} plan loaded from the local registry`);
       })
       .catch((error) => {
         if (
@@ -10930,16 +5365,19 @@ export function LocalWorkspace({
     );
     setWorkspaceEvidenceRefreshing(true);
 
-    void client
-      .getWorkspaceMaterialization(workspaceId)
-      .then((materialization) => {
+    void materializationCache.load(workspaceId, async () => {
+      const result = await client.getWorkspaceMaterialization(workspaceId);
+      if (result && result.workspaceId !== workspaceId) {
+        throw new Error("WTS returned status for another workspace.");
+      }
+      return result;
+    }).then((materialization) => {
         if (
           !current ||
           actionGeneration !== workspaceActionGenerationRef.current
         ) {
           return;
         }
-        materializationCache.set(workspaceId, materialization);
         setWorkspaceMaterialization(materialization);
         setWorkspaceActionErrorCode("");
         setWorkspaceActionState(materialization ? "materialized" : "idle");
@@ -11226,9 +5664,18 @@ export function LocalWorkspace({
       );
       counts.planned += unmatchedAssignedGitlabReviews.length;
       counts.all += unmatchedAssignedGitlabReviews.length;
+      for (const task of deferredWorkspaceCreations) {
+        counts[workspaceCreationLane(task)] += 1;
+        counts.all += 1;
+      }
       return counts;
     },
-    [unmatchedAssignedGitlabReviews.length, workspaceAgents, workspaces],
+    [
+      deferredWorkspaceCreations,
+      unmatchedAssignedGitlabReviews.length,
+      workspaceAgents,
+      workspaces,
+    ],
   );
   const visibleByLane = useMemo(() => {
     const grouped: Record<Lane, Workspace[]> = {
@@ -11246,6 +5693,17 @@ export function LocalWorkspace({
   }, [visibleWorkspaces, workspaceAgents]);
   const visibleLanes: Lane[] =
     filter === "all" ? [...WORKSPACE_LANE_ORDER] : [filter];
+  const visibleDeferredWorkspaceCreations = useMemo(() => {
+    const terms = search.trim().toLocaleLowerCase();
+    return deferredWorkspaceCreations.filter(
+      (task) =>
+        (filter === "all" || workspaceCreationLane(task) === filter) &&
+        (!terms ||
+          `${task.title} ${task.repositoryLabel}`
+            .toLocaleLowerCase()
+            .includes(terms)),
+    );
+  }, [deferredWorkspaceCreations, filter, search]);
 
   useEffect(() => {
     const handleWorkspaceShortcut = (event: KeyboardEvent) => {
@@ -11318,6 +5776,7 @@ export function LocalWorkspace({
         if (key === "n" && view === "board") {
           event.preventDefault();
           if (guideOpen || setupOpen || removalOpen || commandOpen) return;
+          if (!createOpen) setResumedWorkspaceCreationId("");
           setCreateOpen(true);
           return;
         }
@@ -11613,6 +6072,107 @@ export function LocalWorkspace({
     setView("board");
   };
 
+  const startRepositoryClone = useCallback(
+    (request: CloneRepositoryRequest): RepositoryCloneHandle => {
+      repositoryCloneSequenceRef.current += 1;
+      const id = `repository-clone-${Date.now()}-${repositoryCloneSequenceRef.current}`;
+      const promise = client.cloneRepository(request);
+      const record: RepositoryCloneRecord = {
+        id,
+        promise,
+        status: "cloning",
+      };
+      repositoryCloneRecordsRef.current.set(id, record);
+      void promise.then(
+        (result) => {
+          record.status = "ready";
+          record.result = result;
+          setDeferredWorkspaceCreations((current) =>
+            current.map((task) =>
+              task.id === id
+                ? {
+                    ...task,
+                    status: "ready",
+                    result,
+                    message: `Git cloned ${result.repository.label}. Continue workspace setup.`,
+                  }
+                : task,
+            ),
+          );
+        },
+        (error: unknown) => {
+          const message =
+            error instanceof Error
+              ? error.message
+              : "Git could not clone this repository.";
+          record.status = "error";
+          record.error = message;
+          setDeferredWorkspaceCreations((current) =>
+            current.map((task) =>
+              task.id === id
+                ? { ...task, status: "error", message }
+                : task,
+            ),
+          );
+        },
+      );
+      return { id, promise };
+    },
+    [client],
+  );
+
+  const deferRepositoryClone = useCallback(
+    (request: DeferredCloneRequest) => {
+      const record = repositoryCloneRecordsRef.current.get(request.cloneId);
+      if (!record) return;
+      const task: DeferredWorkspaceCreation = {
+        id: request.cloneId,
+        title: request.title,
+        repositoryLabel: request.repositoryLabel,
+        remoteUrl: request.cloneRequest.remoteUrl,
+        ...(request.cloneRequest.branch
+          ? { branch: request.cloneRequest.branch }
+          : {}),
+        shallow: request.cloneRequest.shallow === true,
+        draft: request.draft,
+        status: record.status,
+        message:
+          record.status === "ready" && record.result
+            ? `Git cloned ${record.result.repository.label}. Continue workspace setup.`
+            : record.status === "error"
+              ? record.error ?? "Git could not clone this repository."
+              : `Git is cloning ${request.repositoryLabel}${
+                  request.cloneRequest.branch
+                    ? ` from ${request.cloneRequest.branch}`
+                    : ""
+                }.`,
+        ...(record.result ? { result: record.result } : {}),
+      };
+      setDeferredWorkspaceCreations((current) => [
+        ...current.filter(
+          (candidate) =>
+            candidate.id !== task.id &&
+            candidate.id !== request.replacesTaskId,
+        ),
+        task,
+      ]);
+      setResumedWorkspaceCreationId("");
+      setCreateOpen(false);
+      returnToWorkspaceBoard();
+      setNotice(`${request.repositoryLabel} clone moved to the Kanban board`);
+    },
+    [returnToWorkspaceBoard],
+  );
+
+  const resumeWorkspaceCreation = (taskId: string) => {
+    setReviewWorkspaceSeed(null);
+    setCreateTemplateWorkspaceId("");
+    setCreateRepositoryBaseOverrides({});
+    setCreatePlanningEnabled(undefined);
+    setResumedWorkspaceCreationId(taskId);
+    setCreateOpen(true);
+  };
+
   const openTimeReview = () => {
     invalidateDeepLinkLookup();
     pushNavigationPath("/time");
@@ -11627,6 +6187,7 @@ export function LocalWorkspace({
 
   const openWorkbenchTab = (tab: WorkbenchTab) => {
     if (!selectedWorkspace) return;
+    invalidateDeepLinkLookup();
     setActiveTab(tab);
     setView("workbench");
     pushNavigationPath(
@@ -11642,6 +6203,7 @@ export function LocalWorkspace({
 
   const openRepositoryReview = (repositoryId: string) => {
     if (!selectedWorkspace) return;
+    invalidateDeepLinkLookup();
     setReviewRepositoryId(repositoryId);
     setActiveTab("changes");
     setView("workbench");
@@ -11673,6 +6235,7 @@ export function LocalWorkspace({
 
   const startNewWorkspace = () => {
     invalidateDeepLinkLookup();
+    setResumedWorkspaceCreationId("");
     setReviewWorkspaceSeed(null);
     setCreateTemplateWorkspaceId("");
     setCreateRepositoryBaseOverrides({});
@@ -11682,6 +6245,7 @@ export function LocalWorkspace({
 
   const startRevisedWorkspace = () => {
     if (!selectedWorkspace) return;
+    setResumedWorkspaceCreationId("");
     setReviewWorkspaceSeed(null);
     setCreateRepositoryBaseOverrides({});
     setCreatePlanningEnabled(undefined);
@@ -11725,6 +6289,8 @@ export function LocalWorkspace({
     ) {
       throw new Error("WTS returned a repository removal for another workspace.");
     }
+    invalidateRepositoryReview(client, workspaceId, repositoryId);
+    invalidateWorkspaceGitlabMergeRequests(client, workspaceId);
     materializationCache.set(workspaceId, result.materialization);
     setWorkspaceMaterialization(result.materialization);
     setWorkspaceActionState("materialized");
@@ -11751,6 +6317,7 @@ export function LocalWorkspace({
 
   const createPlanningHome = () => {
     if (!selectedWorkspace) return;
+    setResumedWorkspaceCreationId("");
     setReviewWorkspaceSeed(null);
     setCreateRepositoryBaseOverrides({});
     setCreatePlanningEnabled(true);
@@ -11760,6 +6327,7 @@ export function LocalWorkspace({
 
   const startBaseRevision = (repositoryId: string, baseRef: string) => {
     if (!selectedWorkspace) return;
+    setResumedWorkspaceCreationId("");
     setReviewWorkspaceSeed(null);
     setCreatePlanningEnabled(undefined);
     setCreateRepositoryBaseOverrides({ [repositoryId]: baseRef });
@@ -11947,6 +6515,8 @@ export function LocalWorkspace({
         setActiveTab("overview");
         setWorkspaceActionState("error");
         setWorkspaceActionError(message);
+        setWorkspaceActionErrorCode(error instanceof WorkspaceClientError ? error.code : "");
+        setWorkspacePreflight(null);
       }
       setReviewWorkspaceErrors((current) =>
         new Map(current).set(review.id, message),
@@ -12052,7 +6622,7 @@ export function LocalWorkspace({
   };
 
   const saveWorkspaceName = async () => {
-    if (!selectedWorkspace || workspaceNameSaving) return;
+    if (!selectedWorkspace || workspaceNameSaving || workspaceRenamePendingRef.current) return;
     const title = workspaceNameDraft.trim();
     if (!title) {
       setWorkspaceNameError("Workspace name is required.");
@@ -12063,6 +6633,8 @@ export function LocalWorkspace({
       setWorkspaceNameError("");
       return;
     }
+    const generation = workspaceRenameGenerationRef.current;
+    workspaceRenamePendingRef.current = true;
     setWorkspaceNameSaving(true);
     setWorkspaceNameError("");
     try {
@@ -12070,38 +6642,51 @@ export function LocalWorkspace({
       if (renamed.workspaceId !== selectedWorkspace.id) {
         throw new Error("WTS returned another workspace after renaming.");
       }
+      if (workspaceRenameClientRef.current !== client) return;
       const updated = workspaceFromView(renamed);
       setWorkspaces((current) =>
         current.map((workspace) =>
           workspace.id === updated.id ? updated : workspace,
         ),
       );
-      setWorkspaceNameEditing(false);
+      if (generation === workspaceRenameGenerationRef.current) setWorkspaceNameEditing(false);
       setNotice(`Renamed workspace to ${updated.title}`);
     } catch (error) {
-      setWorkspaceNameError(
-        error instanceof Error ? error.message : "Workspace rename failed.",
-      );
+      if (workspaceRenameClientRef.current !== client) return;
+      const message = error instanceof Error ? error.message : "Workspace rename failed.";
+      if (generation === workspaceRenameGenerationRef.current) setWorkspaceNameError(message);
+      else setNotice(`${selectedWorkspace.key}: ${message}`, "error");
     } finally {
-      setWorkspaceNameSaving(false);
+      if (generation === workspaceRenameGenerationRef.current) {
+        workspaceRenamePendingRef.current = false;
+        setWorkspaceNameSaving(false);
+      }
     }
   };
+
+  useEffect(() => {
+    if (view !== "workbench" || !selectedId) return;
+    navigationCache.set(selectedId, { tab: activeTab, repositoryId: reviewRepositoryId });
+  }, [activeTab, navigationCache, reviewRepositoryId, selectedId, view]);
+
+  useLayoutEffect(() => {
+    const viewport = workbenchScrollRef.current;
+    if (view !== "workbench" || !selectedWorkspaceIsReady || !viewport) return;
+    const position = scrollCache.get(`${selectedId}\0${activeTab}`);
+    viewport.scrollTop = position?.top ?? 0;
+    viewport.scrollLeft = position?.left ?? 0;
+  }, [activeTab, scrollCache, selectedId, selectedWorkspaceIsReady, view]);
 
   const resetOperationalState = (workspace: Workspace) => {
     const cached = materializationCache.get(workspace.id) ?? null;
     workspaceActionGenerationRef.current += 1;
-    setReviewRepositoryId("");
+    setReviewRepositoryId(navigationCache.get(workspace.id)?.repositoryId ?? "");
     setWorkspaceCommandState("idle");
     setWorkspaceActionState(cached ? "materialized" : "idle");
     setWorkspacePreflight(null);
     setWorkspaceMaterialization(cached);
     setWorkspaceActionError("");
     materializationKeyRef.current = null;
-    setNotice(
-      cached
-        ? `${workspace.key} opened · checking for newer local evidence`
-        : `${workspace.key} plan loaded · workspace setup has not run`,
-    );
   };
 
   useEffect(() => {
@@ -12150,7 +6735,124 @@ export function LocalWorkspace({
     window.addEventListener("popstate", handleHistoryNavigation);
     return () =>
       window.removeEventListener("popstate", handleHistoryNavigation);
-  }, [workspaces]);
+  }, [materializationCache, navigationCache, workspaces]);
+
+  useEffect(() => {
+    let generation = 0;
+    let mounted = true;
+    let stopHighlight: (() => void) | undefined;
+    const openAgentWorkspace = (event: Event) => {
+      const detail = (event as CustomEvent<{ workspaceId: string; repositoryId: string; tab?: WorkbenchTab; selection?: FeedbackSelectionReturn }>).detail;
+      if (!detail || typeof detail.workspaceId !== "string" || !detail.workspaceId.trim() ||
+        typeof detail.repositoryId !== "string" || (!detail.repositoryId.trim() && !detail.selection && (!detail.tab || detail.tab === "changes"))) return;
+      const request = ++generation;
+      invalidateDeepLinkLookup();
+      const navigationGeneration = agentNavigationGenerationRef.current;
+      const open = (workspace: Workspace) => {
+        if (!mounted || request !== generation || navigationGeneration !== agentNavigationGenerationRef.current) return;
+        setWorkspaces((existing) => [...existing.filter((item) => item.id !== workspace.id), workspace]);
+        setSelectedId(workspace.id);
+        resetOperationalState(workspace);
+        setReviewRepositoryId(detail.repositoryId);
+        const tab = detail.tab ?? "changes";
+        setActiveTab(tab);
+        setView("workbench");
+        const query = detail.repositoryId && tab === "changes" ? `?repository=${encodeURIComponent(detail.repositoryId)}` : "";
+        pushNavigationPath(`/sessions/${encodeURIComponent(workspace.id)}${tab === "overview" ? "" : `/${tab}`}${query}`);
+        if (detail.selection) {
+          feedbackReturnNavigationRef.current = navigationGeneration;
+          setFeedbackSelectionReturn(detail.selection);
+          if (detail.selection.source.kind === "ui") {
+            stopHighlight?.();
+            stopHighlight = highlightFeedbackSelection(detail.selection.source.calloutId,
+              () => mounted && request === generation && navigationGeneration === agentNavigationGenerationRef.current,
+              () => setNotice("The original page is open, but the saved region is not visible. Its context remains in Agent feedback.", "info"));
+          }
+        }
+      };
+      const existing = agentNavigationWorkspacesRef.current.find((workspace) => workspace.id === detail.workspaceId);
+      if (existing) { open(existing); return; }
+      void client.getWorkspace(detail.workspaceId).then((result) => {
+        if (result.workspaceId !== detail.workspaceId) throw new Error("Unexpected workspace");
+        open(workspaceFromView(result));
+      }).catch(() => {
+        if (mounted && request === generation && navigationGeneration === agentNavigationGenerationRef.current) setNotice("WTS could not open the agent workspace. Select View local changes to try again.", "error");
+      });
+    };
+    const returnFeedbackSelection = (event: Event) => {
+      const detail = (event as CustomEvent<FeedbackSelectionReturn>).detail;
+      if (!detail || typeof detail.requestId !== "string" || !detail.source) return;
+      const source = detail.source;
+      stopHighlight?.();
+      closeCommandPalette();
+      setGuideOpen(false);
+      setSetupOpen(false);
+      setRemovalOpen(false);
+      if (source.kind === "workItem") {
+        invalidateDeepLinkLookup();
+        const request = ++generation;
+        const navigationGeneration = agentNavigationGenerationRef.current;
+        if (!client.getAgentConversation) {
+          setNotice("This host cannot read the original selection. Open the parent result in Agent feedback.", "error");
+          return;
+        }
+        void resolveFeedbackSelectionOrigin(source, id => client.getAgentConversation!(id)).then(origin => {
+          if (!mounted || request !== generation || navigationGeneration !== agentNavigationGenerationRef.current) return;
+          returnFeedbackSelection(new CustomEvent(RETURN_FEEDBACK_SELECTION_EVENT, { detail: { ...detail, source: origin } }));
+        }).catch(() => {
+          if (mounted && request === generation && navigationGeneration === agentNavigationGenerationRef.current) {
+            setNotice("WTS could not read the original selection. Open the parent result in Agent feedback and retry.", "error");
+          }
+        });
+        return;
+      }
+      if (source.kind === "gitlabDiscussion") {
+        openAgentWorkspace(new CustomEvent("wts:open-agent-workspace", { detail: {
+          workspaceId: source.workspaceId, repositoryId: source.repositoryId, selection: detail,
+        } }));
+        return;
+      }
+      if (source.kind !== "ui" || typeof source.route !== "string" || typeof source.calloutId !== "string") return;
+      const target = source.route.startsWith("/") && !source.route.startsWith("//") && !source.route.includes("\\")
+        ? source.route === "/sessions/new" ? { view: "board" as const } : historyNavigationTarget(source.route.split("?")[0]!) : null;
+      if (!target) {
+        setNotice("The saved selection does not have a supported WTS page. Its context remains in Agent feedback.", "error");
+        return;
+      }
+      if (target.view === "workbench") {
+        openAgentWorkspace(new CustomEvent("wts:open-agent-workspace", { detail: {
+          workspaceId: target.workspaceId, tab: target.tab,
+          repositoryId: new URLSearchParams(source.route.split("?")[1] ?? "").get("repository") ?? "",
+          selection: detail,
+        } }));
+      } else {
+        invalidateDeepLinkLookup();
+        const request = ++generation;
+        const navigationGeneration = agentNavigationGenerationRef.current;
+        setView(target.view);
+        pushNavigationPath(target.view === "board" ? "/" : `/${target.view}`);
+        feedbackReturnNavigationRef.current = navigationGeneration;
+        setFeedbackSelectionReturn(detail);
+        stopHighlight = highlightFeedbackSelection(source.calloutId,
+          () => mounted && request === generation && navigationGeneration === agentNavigationGenerationRef.current,
+          () => setNotice("The original page is open, but the saved region is not visible. Its context remains in Agent feedback.", "info"));
+      }
+      if (source.calloutId.startsWith("environment.")) setSetupOpen(true);
+      else if (source.calloutId.startsWith("guide.")) setGuideOpen(true);
+      else if (source.calloutId.startsWith("workspace-create.")) setCreateOpen(true);
+    };
+    const openAgentSettings = () => setSetupOpen(true);
+    window.addEventListener(RETURN_FEEDBACK_SELECTION_EVENT, returnFeedbackSelection);
+    window.addEventListener("wts:open-agent-workspace", openAgentWorkspace);
+    window.addEventListener("wts:open-agent-settings", openAgentSettings);
+    return () => {
+      mounted = false;
+      stopHighlight?.();
+      window.removeEventListener(RETURN_FEEDBACK_SELECTION_EVENT, returnFeedbackSelection);
+      window.removeEventListener("wts:open-agent-workspace", openAgentWorkspace);
+      window.removeEventListener("wts:open-agent-settings", openAgentSettings);
+    };
+  }, [client, materializationCache, navigationCache]);
 
   const openWorkspace = (workspaceId: string) => {
     const item = workspaces.find((workspace) => workspace.id === workspaceId);
@@ -12158,9 +6860,35 @@ export function LocalWorkspace({
     invalidateDeepLinkLookup();
     setSelectedId(workspaceId);
     resetOperationalState(item);
-    setActiveTab("overview");
+    const previousTab = navigationCache.get(workspaceId)?.tab ?? "overview";
+    setActiveTab(previousTab);
     setView("workbench");
-    pushNavigationPath(`/sessions/${encodeURIComponent(workspaceId)}`);
+    const suffix = previousTab === "overview" ? "" : `/${previousTab}`;
+    const repositoryId = navigationCache.get(workspaceId)?.repositoryId;
+    const query = previousTab === "changes" && repositoryId
+      ? `?repository=${encodeURIComponent(repositoryId)}` : "";
+    pushNavigationPath(`/sessions/${encodeURIComponent(workspaceId)}${suffix}${query}`);
+  };
+
+  const openAttentionItem = (item: WorkspaceAttentionItem) => {
+    const target = item.target;
+    if (target.kind === "agent") {
+      openAgentFeedbackResult({ conversationId: target.conversationId, requestId: target.requestId, messageId: target.messageId });
+    } else if (target.kind === "gitlab") {
+      returnToFeedbackSelection({ kind: "gitlabDiscussion", workspaceId: item.workspaceId,
+        repositoryId: target.repositoryId, iid: target.iid, discussionId: target.discussionId,
+        scopeId: target.scopeId, filePath: target.filePath, comments: [] });
+    } else {
+      const workspace = workspaces.find(candidate => candidate.id === item.workspaceId);
+      if (!workspace) { setNotice("This workspace is no longer available. Refresh the board.", "error"); return; }
+      invalidateDeepLinkLookup();
+      setSelectedId(workspace.id);
+      resetOperationalState(workspace);
+      setActiveTab("verification");
+      setVerificationSelection({ ...target, workspaceId: workspace.id, requestId: crypto.randomUUID() });
+      setView("workbench");
+      pushNavigationPath(`/sessions/${encodeURIComponent(workspace.id)}/verification`);
+    }
   };
 
   const focusWorkspaceInVscode = (workspaceId: string) => {
@@ -12228,6 +6956,12 @@ export function LocalWorkspace({
     setActiveTab("overview");
     pushNavigationPath(`/sessions/${encodeURIComponent(workspace.id)}`);
     setCreatePlanningEnabled(undefined);
+    if (resumedWorkspaceCreationId) {
+      setDeferredWorkspaceCreations((current) =>
+        current.filter((task) => task.id !== resumedWorkspaceCreationId),
+      );
+      setResumedWorkspaceCreationId("");
+    }
     setNotice(`${workspace.key} plan saved · no setup effects have run`);
   };
 
@@ -12237,6 +6971,8 @@ export function LocalWorkspace({
     const workspaceKey = selectedWorkspace.key;
     const actionGeneration = ++workspaceActionGenerationRef.current;
     setWorkspaceActionError("");
+    setWorkspaceActionErrorCode("");
+    setWorkspacePreflight(null);
     setWorkspaceActionState("checking");
     try {
       if (repositoryIdToRefresh) {
@@ -12277,8 +7013,43 @@ export function LocalWorkspace({
           ? error.message
           : "Workspace preflight could not be completed.",
       );
+      setWorkspaceActionErrorCode(error instanceof WorkspaceClientError ? error.code : "");
       setWorkspaceActionState("error");
       setNotice(`${workspaceKey} preflight failed`, "error");
+    }
+  };
+
+  const recoverSelectedWorkspaceSetup = async () => {
+    const recovery = workspacePreflight?.setupRecovery;
+    if (!selectedWorkspace || workspacePreflight?.workspaceId !== selectedWorkspace.id ||
+      !recovery?.ready || recovery.blockers.length > 0 || workspaceCommandState !== "idle" ||
+      setupRecoveryPendingRef.current.has(selectedWorkspace.id) || !nativePreviewAllowsCommand("recover_workspace_setup")) return;
+    const workspaceId = selectedWorkspace.id;
+    const workspaceKey = selectedWorkspace.key;
+    const actionGeneration = ++workspaceActionGenerationRef.current;
+    setupRecoveryPendingRef.current.add(workspaceId);
+    setWorkspaceCommandState("recoveringSetup");
+    setWorkspaceActionError("");
+    setWorkspaceActionErrorCode("");
+    setNotice(`${workspaceKey} · WTS checks and cleans the setup files`);
+    try {
+      const result = await client.recoverWorkspaceSetup(workspaceId, recovery.effectDigest);
+      if (actionGeneration !== workspaceActionGenerationRef.current) return;
+      if (result.workspaceId !== workspaceId) throw new Error("WTS returned setup effects for another workspace.");
+      setWorkspacePreflight(result);
+      setWorkspaceActionState(result.ready ? "ready" : "blocked");
+      materializationKeyRef.current = null;
+      setNotice(`${workspaceKey} · review the current setup before you create the workspace`);
+    } catch (error) {
+      if (actionGeneration !== workspaceActionGenerationRef.current) return;
+      setWorkspacePreflight(null);
+      setWorkspaceActionState("error");
+      setWorkspaceActionErrorCode(error instanceof WorkspaceClientError ? error.code : "");
+      setWorkspaceActionError(`${error instanceof Error ? error.message : "WTS could not confirm setup cleanup."} Review setup again before you clean files or create the workspace.`);
+      setNotice(`${workspaceKey} setup needs a fresh review`, "error");
+    } finally {
+      setupRecoveryPendingRef.current.delete(workspaceId);
+      if (actionGeneration === workspaceActionGenerationRef.current) setWorkspaceCommandState("idle");
     }
   };
 
@@ -12286,6 +7057,7 @@ export function LocalWorkspace({
     if (
       !selectedWorkspace ||
       !workspacePreflight?.ready ||
+      Boolean(workspacePreflight.setupRecovery) ||
       workspaceCommandState !== "idle"
     ) {
       return;
@@ -12337,6 +7109,7 @@ export function LocalWorkspace({
       setWorkspaceActionError(
         error instanceof Error ? error.message : "Workspace creation failed.",
       );
+      setWorkspaceActionErrorCode(error instanceof WorkspaceClientError ? error.code : "");
       setWorkspacePreflight(null);
       setWorkspaceActionState("error");
       setNotice(`${workspaceKey} was not created`, "error");
@@ -12535,6 +7308,7 @@ export function LocalWorkspace({
         error instanceof WorkspaceClientError ? error.code : "",
       );
       setNotice(`${workspaceKey} · re-index failed`);
+      return message;
     } finally {
       if (actionGeneration === workspaceActionGenerationRef.current) {
         setWorkspaceCommandState("idle");
@@ -12696,6 +7470,30 @@ export function LocalWorkspace({
     if (!selectedWorkspace || workspaceCommandState !== "idle") return;
     setRemovalOpen(true);
     void loadRemovalPreflight();
+  };
+
+  const registerChangesForRemoval = async () => {
+    if (!selectedWorkspace || removalState !== "ready" || workspaceCommandState !== "idle") return;
+    const workspaceId = selectedWorkspace.id;
+    const generation = ++removalGenerationRef.current;
+    removalKeyRef.current = null;
+    setRemovalState("repairing");
+    setRemovalError("");
+    const repairError = await reindexSelectedWorkspaceGraph();
+    if (generation !== removalGenerationRef.current) return;
+    const recheck = loadRemovalPreflight(workspaceId);
+    const recheckGeneration = removalGenerationRef.current;
+    await recheck;
+    if (repairError && recheckGeneration === removalGenerationRef.current) {
+      setRemovalError((current) => [repairError, current].filter(Boolean).join(" "));
+    }
+  };
+
+  const closeRemovalForRecovery = () => {
+    removalGenerationRef.current += 1;
+    setRemovalOpen(false);
+    setRemovalPreflight(null);
+    setRemovalError("");
   };
 
   const reviewWorkspaceRemoval = (workspaceId: string) => {
@@ -13054,6 +7852,11 @@ export function LocalWorkspace({
       );
       setSelectedId(nextWorkspace?.id ?? "");
       materializationCache.delete(workspaceId);
+      invalidateWorkspaceGitlabMergeRequests(client, workspaceId);
+      navigationCache.delete(workspaceId);
+      scrollCache.deletePrefix(`${workspaceId}\0`);
+      clearPlanningWorkspaceCache(client, workspaceId);
+      invalidateRepositoryReview(client, workspaceId);
       setWorkspaceMaterialization(null);
       setWorkspacePreflight(null);
       setWorkspaceActionState("idle");
@@ -13271,7 +8074,7 @@ export function LocalWorkspace({
             </Button>
           )}
         </SearchField>
-        {workspaces.length > 1 && (
+        {workspaceCounts.all > 1 && (
           <DropdownMenu.Root>
             <DropdownMenu.Trigger asChild>
               <button className={styles.filterMenuTrigger} type="button">
@@ -13317,7 +8120,7 @@ export function LocalWorkspace({
             className={styles.secondaryButton}
             onPress={() => {
               myReviews.refresh();
-              setBoardStatusRevision((revision) => revision + 1);
+              refreshAttention(true);
               setNotice("WTS refreshes review status");
             }}
           >
@@ -13341,6 +8144,7 @@ export function LocalWorkspace({
         </div>
       </div>
 
+      {registryState === "ready" && workspaces.length > 0 && <ConnectedBoardAttentionStatus store={attentionStore} />}
       {registryState === "loading" ? (
         <div className={styles.registryState}>
           <div
@@ -13415,6 +8219,9 @@ export function LocalWorkspace({
           >
           {visibleLanes.map((lane) => {
             const items = visibleByLane[lane];
+            const creationTasks = visibleDeferredWorkspaceCreations.filter(
+              (task) => workspaceCreationLane(task) === lane,
+            );
             const detail = laneDetails[lane];
             const laneHeadingId = `workspace-lane-${lane}`;
             return (
@@ -13426,6 +8233,13 @@ export function LocalWorkspace({
                   </span>
                 </header>
                 <div className={styles.laneCards}>
+                  {creationTasks.map((task) => (
+                    <WorkspaceCreationTaskCard
+                      key={task.id}
+                      onContinue={() => resumeWorkspaceCreation(task.id)}
+                      task={task}
+                    />
+                  ))}
                   {lane === "planned" &&
                     visibleAssignedGitlabReviews.map((review) => (
                       <AssignedReviewCard
@@ -13452,6 +8266,8 @@ export function LocalWorkspace({
                           : undefined
                       }
                       agent={workspaceAgents.get(workspace.id)}
+                      attention={<ConnectedWorkspaceAttentionCard store={attentionStore} workspaceId={workspace.id} workspaceLabel={workspace.key}
+                        onOpen={openAttentionItem} onRefresh={() => refreshAttention(true)} />}
                       mergeRequests={
                         workspaceGitlabInboxes.get(workspace.id)?.mergeRequests
                       }
@@ -13531,10 +8347,15 @@ export function LocalWorkspace({
                     />
                   ))}
                   {!items.length &&
-                    !(lane === "planned" && visibleAssignedGitlabReviews.length) &&
+                    !creationTasks.length &&
+                    !(
+                      lane === "planned" &&
+                      visibleAssignedGitlabReviews.length
+                    ) &&
                     (lane === visibleLanes[0] &&
                     visibleWorkspaces.length === 0 &&
-                    visibleAssignedGitlabReviews.length === 0 ? (
+                    visibleAssignedGitlabReviews.length === 0 &&
+                    visibleDeferredWorkspaceCreations.length === 0 ? (
                       <div
                         className={`${styles.emptyLane} ${styles.boardEmptyLane}`}
                       >
@@ -13615,6 +8436,13 @@ export function LocalWorkspace({
         myReviews.gitlabInbox?.reviews ?? [],
       )
     : undefined;
+  const gitlabConversations = useWorkspaceGitlabDiscussions({
+    client,
+    workspaceId: selectedWorkspace?.id,
+    materialization: workspaceMaterialization,
+    review: selectedGitlabReview,
+    enabled: view === "workbench" && Boolean(workspaceMaterialization),
+  });
   useEffect(() => {
     if (!selectedGitlabReview || activeTab !== "verification") return;
     const nextTab = workspaceMaterialization ? "changes" : "overview";
@@ -13830,6 +8658,16 @@ export function LocalWorkspace({
                 {workspaceMaterialization && (
                   <Tabs.Trigger value="changes">
                     {selectedGitlabReview ? "Code review" : "Changes"}
+                    {gitlabConversations.unreadCount > 0 && (
+                      <span
+                        className={styles.conversationBadge}
+                        aria-label={`${gitlabConversations.unreadCount} unread merge request ${gitlabConversations.unreadCount === 1 ? "comment" : "comments"}`}
+                        aria-live="polite"
+                        title="Unread MR comments and replies"
+                      >
+                        {gitlabConversations.unreadCount > 99 ? "99+" : gitlabConversations.unreadCount} unread
+                      </span>
+                    )}
                   </Tabs.Trigger>
                 )}
                 {!selectedGitlabReview && (
@@ -13891,7 +8729,15 @@ export function LocalWorkspace({
             </div>
           </div>
           <div
+            ref={workbenchScrollRef}
             className={styles.tabViewport}
+            onScroll={(event) => {
+              if (event.target !== event.currentTarget) return;
+              scrollCache.set(`${selectedId}\0${activeTab}`, {
+                top: event.currentTarget.scrollTop,
+                left: event.currentTarget.scrollLeft,
+              });
+            }}
             data-terminal={false}
             data-ui="workspace.tab-content"
             data-ui-label="Workspace content"
@@ -13906,6 +8752,7 @@ export function LocalWorkspace({
                 materialization={workspaceMaterialization}
                 repositoryCatalog={repositoryCatalog}
                 actionError={workspaceActionError}
+                actionErrorCode={workspaceActionErrorCode}
                 driftDetected={
                   workspaceActionErrorCode === "workspace_git_state_changed"
                 }
@@ -13928,6 +8775,10 @@ export function LocalWorkspace({
                 onReviewChanges={openRepositoryReview}
                 onOpenWorkspace={() => void openSelectedWorkspacePreferred()}
                 onNotice={setNotice}
+                onOpenIntegrations={() => setSetupOpen(true)}
+                onRefreshWorkspace={() => void refreshSelectedWorkspace()}
+                onReviewRemainingFiles={reviewSelectedWorkspaceRemoval}
+                onRecoverSetup={() => void recoverSelectedWorkspaceSetup()}
                 gitlabReview={selectedGitlabReview}
               />
             </Tabs.Content>
@@ -13963,26 +8814,28 @@ export function LocalWorkspace({
                 >
                   <RepositoryReviewScreen
                     client={client}
+                    onOpenIntegrations={() => setSetupOpen(true)}
+                    onOpenWorkspaceStatus={() => openWorkbenchTab("overview")}
+                    gitlabConversations={gitlabConversations}
+                    feedbackSelectionReturn={feedbackReturnNavigationRef.current === agentNavigationGenerationRef.current ? feedbackSelectionReturn : undefined}
                     gitlabReview={selectedGitlabReview}
                     initialRepositoryId={reviewRepositoryId}
                     materialization={workspaceMaterialization}
                     onOpenVerification={
                       selectedGitlabReview
                         ? undefined
-                        : () => {
-                            setActiveTab("verification");
-                            pushNavigationPath(
-                              `/sessions/${encodeURIComponent(selectedWorkspace.id)}/verification`,
-                            );
-                          }
+                        : () => openWorkbenchTab("verification")
                     }
-                    onRepositoryChange={(repositoryId) => {
+                    onRepositoryChange={(repositoryId, navigation) => {
+                      if (navigation === "user") invalidateDeepLinkLookup();
                       setReviewRepositoryId(repositoryId);
                       pushNavigationPath(
                         `/sessions/${encodeURIComponent(selectedWorkspace.id)}/changes?repository=${encodeURIComponent(repositoryId)}`,
                       );
                     }}
                     workspaceId={selectedWorkspace.id}
+                    workspaceKey={selectedWorkspace.key}
+                    onNotice={setNotice}
                   />
                 </Suspense>
               </Tabs.Content>
@@ -13991,6 +8844,7 @@ export function LocalWorkspace({
               <Tabs.Content value="verification">
                 <VerificationPanel
                   client={client}
+                  revealCheck={verificationSelection}
                   materialized={Boolean(workspaceMaterialization)}
                   onIndexGraph={indexSelectedWorkspaceGraph}
                   onNotice={setNotice}
@@ -14150,6 +9004,7 @@ export function LocalWorkspace({
     >
       <AgentSessionsPanel
         client={client}
+        onOpenIntegrations={() => setSetupOpen(true)}
         workspaceLabels={Object.fromEntries(
           workspaces.map((workspace) => [
             workspace.id,
@@ -14563,6 +9418,7 @@ export function LocalWorkspace({
           onOpenChange={(open) => {
             setCreateOpen(open);
             if (!open) {
+              setResumedWorkspaceCreationId("");
               setCreatePlanningEnabled(undefined);
             }
           }}
@@ -14579,6 +9435,11 @@ export function LocalWorkspace({
           }
           initialReviewWorkspace={reviewWorkspaceSeed ?? undefined}
           initialPlanningEnabled={createPlanningEnabled}
+          initialDeferredClone={deferredWorkspaceCreations.find(
+            (task) => task.id === resumedWorkspaceCreationId,
+          )}
+          onStartRepositoryClone={startRepositoryClone}
+          onDeferRepositoryClone={deferRepositoryClone}
         />
         {selectedWorkspace && (
           <AddWorkspaceRepositoryDialog
@@ -14610,6 +9471,27 @@ export function LocalWorkspace({
           state={removalState}
           error={removalError}
           onRetry={() => void loadRemovalPreflight()}
+          onRegisterChanges={() => void registerChangesForRemoval()}
+          onReviewChanges={removalPreflight?.kind === "materializedWorkspace" ? () => {
+            closeRemovalForRecovery();
+            openWorkbenchTab("changes");
+          } : undefined}
+          onOpenPlans={removalPreflight?.kind === "materializedWorkspace" ? () => {
+            closeRemovalForRecovery();
+            openWorkbenchTab("planning");
+          } : undefined}
+          onOpenWorkspace={() => {
+            closeRemovalForRecovery();
+            openWorkbenchTab("overview");
+          }}
+          onOpenVerification={removalPreflight?.kind === "materializedWorkspace" ? () => {
+            closeRemovalForRecovery();
+            openWorkbenchTab("verification");
+          } : undefined}
+          onOpenIntegrations={() => {
+            closeRemovalForRecovery();
+            setSetupOpen(true);
+          }}
           onConfirm={(deleteProtectedPaths) =>
             void removeSelectedWorkspace(deleteProtectedPaths)
           }

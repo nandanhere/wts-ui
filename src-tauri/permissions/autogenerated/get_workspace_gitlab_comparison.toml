@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-get-workspace-gitlab-comparison"
+description = "Enables the get_workspace_gitlab_comparison command without any pre-configured scope."
+commands.allow = ["get_workspace_gitlab_comparison"]
+
+[[permission]]
+identifier = "deny-get-workspace-gitlab-comparison"
+description = "Denies the get_workspace_gitlab_comparison command without any pre-configured scope."
+commands.deny = ["get_workspace_gitlab_comparison"]

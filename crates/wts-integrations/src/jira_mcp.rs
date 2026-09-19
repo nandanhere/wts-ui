@@ -2,6 +2,7 @@ use reqwest::Url;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{
+    borrow::Cow,
     collections::{BTreeMap, BTreeSet},
     fs,
     io::{BufRead, BufReader, Write},
@@ -16,6 +17,7 @@ const MAX_HOST_CONFIG_BYTES: u64 = 1024 * 1024;
 const MAX_MCP_MESSAGE_BYTES: usize = 2 * 1024 * 1024;
 const MAX_ISSUE_CONTENT_BYTES: usize = 512 * 1024;
 const MCP_TIMEOUT: Duration = Duration::from_secs(20);
+const MCP_STARTUP_TIMEOUT: Duration = Duration::from_secs(60);
 const MCP_PROTOCOL_VERSION: &str = "2025-11-25";
 const MCP_ATLASSIAN_IMAGE: &str = "ghcr.io/sooperset/mcp-atlassian";
 const MAX_TOOL_LIST_PAGES: usize = 32;
@@ -40,6 +42,44 @@ pub struct JiraIssue {
     pub status: Option<String>,
     pub content: String,
     pub browser_url: Option<String>,
+}
+
+impl JiraIssue {
+    /// Extracts display text without changing the saved provider response.
+    pub fn description(&self) -> Cow<'_, str> {
+        if self.content.len() > MAX_ISSUE_CONTENT_BYTES {
+            return Cow::Borrowed(&self.content);
+        }
+        let Ok(value) = serde_json::from_str::<Value>(&self.content) else {
+            return Cow::Borrowed(&self.content);
+        };
+        let key = value.get("key").or_else(|| value.get("issue_key"));
+        if key.and_then(Value::as_str) != Some(self.issue_key.as_str()) {
+            return Cow::Borrowed(&self.content);
+        }
+        if value
+            .get("key")
+            .is_some_and(|key| key.as_str() != Some(self.issue_key.as_str()))
+            || value
+                .get("issue_key")
+                .is_some_and(|key| key.as_str() != Some(self.issue_key.as_str()))
+        {
+            return Cow::Borrowed(&self.content);
+        }
+        let description = value
+            .get("fields")
+            .and_then(|fields| fields.get("description"))
+            .or_else(|| value.get("description"));
+        match description {
+            Some(Value::String(description)) if !description.trim().is_empty() => {
+                Cow::Owned(description.clone())
+            }
+            Some(Value::Null) | Some(Value::String(_)) => Cow::Borrowed(
+                "No Jira description was available when this planning home was created.",
+            ),
+            _ => Cow::Borrowed(&self.content),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -84,7 +124,7 @@ impl JiraMcpError {
                 "The Jira MCP registration uses a command or substitution WTS does not allow."
             }
             Self::ConfigurationInvalid => "The Jira MCP registration could not be read safely.",
-            Self::SpawnFailed => "WTS could not start its own Jira MCP process.",
+            Self::SpawnFailed => "WTS could not start Jira. Start Podman, then try again.",
             Self::ProtocolTimedOut => "The Jira MCP process did not answer before the timeout.",
             Self::ProtocolInvalid => "The Jira MCP process returned an invalid protocol message.",
             Self::IssueToolMissing => "The Jira MCP server does not expose jira_get_issue.",
@@ -363,7 +403,7 @@ fn load_vscode_registrations() -> Result<Vec<StdioRegistration>, JiraMcpError> {
             saw_candidate = true;
             match validate_registration(server) {
                 Ok(registration) => {
-                    let fallback = offline_uvx_fallback(&registration);
+                    let fallback = uvx_fallback(&registration);
                     registrations.push(registration);
                     if let Some(fallback) = fallback {
                         registrations.push(fallback);
@@ -382,7 +422,7 @@ fn load_vscode_registrations() -> Result<Vec<StdioRegistration>, JiraMcpError> {
     }
 }
 
-fn offline_uvx_fallback(registration: &StdioRegistration) -> Option<StdioRegistration> {
+fn uvx_fallback(registration: &StdioRegistration) -> Option<StdioRegistration> {
     let command = Path::new(&registration.command)
         .file_name()
         .and_then(|value| value.to_str())?;
@@ -396,7 +436,7 @@ fn offline_uvx_fallback(registration: &StdioRegistration) -> Option<StdioRegistr
     }
     let mut fallback = StdioRegistration {
         command: "uvx".to_owned(),
-        args: vec!["--offline".to_owned(), "mcp-atlassian".to_owned()],
+        args: vec!["mcp-atlassian".to_owned()],
         env: registration.env.clone(),
     };
     repair_cloud_api_token_environment(&mut fallback.env, git_identity_email().as_deref());
@@ -565,7 +605,7 @@ impl McpClient {
     }
 
     fn initialize(&mut self) -> Result<(String, String), JiraMcpError> {
-        let result = self.request_next(
+        let result = self.request_next_with_timeout(
             "initialize",
             json!({
                 "protocolVersion": MCP_PROTOCOL_VERSION,
@@ -575,6 +615,7 @@ impl McpClient {
                     "version": env!("CARGO_PKG_VERSION")
                 }
             }),
+            MCP_STARTUP_TIMEOUT,
         )?;
         self.notify("notifications/initialized", json!({}))?;
         let server = result.get("serverInfo").and_then(Value::as_object);
@@ -604,29 +645,44 @@ impl McpClient {
     }
 
     fn request_next(&mut self, method: &str, params: Value) -> Result<Value, JiraMcpError> {
+        self.request_next_with_timeout(method, params, MCP_TIMEOUT)
+    }
+
+    fn request_next_with_timeout(
+        &mut self,
+        method: &str,
+        params: Value,
+        timeout: Duration,
+    ) -> Result<Value, JiraMcpError> {
         let id = self.next_request_id;
         self.next_request_id = self
             .next_request_id
             .checked_add(1)
             .ok_or(JiraMcpError::ProtocolInvalid)?;
-        self.request(id, method, params)
+        self.request(id, method, params, timeout)
     }
 
-    fn request(&mut self, id: u64, method: &str, params: Value) -> Result<Value, JiraMcpError> {
+    fn request(
+        &mut self,
+        id: u64,
+        method: &str,
+        params: Value,
+        timeout: Duration,
+    ) -> Result<Value, JiraMcpError> {
         self.send(json!({
             "jsonrpc": "2.0",
             "id": id,
             "method": method,
             "params": params
         }))?;
-        let deadline = Instant::now() + MCP_TIMEOUT;
+        let deadline = Instant::now() + timeout;
         loop {
             let remaining = deadline.saturating_duration_since(Instant::now());
             let message = match self.messages.recv_timeout(remaining) {
                 Ok(message) => message?,
                 Err(RecvTimeoutError::Timeout) => return Err(JiraMcpError::ProtocolTimedOut),
                 Err(RecvTimeoutError::Disconnected) => {
-                    return Err(JiraMcpError::ProtocolInvalid);
+                    return Err(JiraMcpError::SpawnFailed);
                 }
             };
             if message.get("id").and_then(Value::as_u64) != Some(id) {
@@ -651,12 +707,11 @@ impl McpClient {
     }
 
     fn send(&mut self, message: Value) -> Result<(), JiraMcpError> {
-        serde_json::to_writer(&mut self.stdin, &message)
-            .map_err(|_| JiraMcpError::ProtocolInvalid)?;
+        serde_json::to_writer(&mut self.stdin, &message).map_err(|_| JiraMcpError::SpawnFailed)?;
         self.stdin
             .write_all(b"\n")
             .and_then(|_| self.stdin.flush())
-            .map_err(|_| JiraMcpError::ProtocolInvalid)
+            .map_err(|_| JiraMcpError::SpawnFailed)
     }
 }
 
@@ -756,10 +811,10 @@ fn extract_tool_text(result: &Value) -> Result<String, JiraMcpError> {
     let mut parts = Vec::new();
     if let Some(content) = result.get("content").and_then(Value::as_array) {
         for item in content {
-            if item.get("type").and_then(Value::as_str) == Some("text") {
-                if let Some(text) = item.get("text").and_then(Value::as_str) {
-                    parts.push(text);
-                }
+            if item.get("type").and_then(Value::as_str) == Some("text")
+                && let Some(text) = item.get("text").and_then(Value::as_str)
+            {
+                parts.push(text);
             }
         }
     }
@@ -854,7 +909,7 @@ mod tests {
     }
 
     #[test]
-    fn container_registration_gets_an_offline_uvx_fallback_with_the_same_environment() {
+    fn container_registration_gets_an_installing_uvx_fallback_with_the_same_environment() {
         let registration = StdioRegistration {
             command: "/opt/homebrew/bin/podman".to_owned(),
             args: vec![
@@ -865,12 +920,27 @@ mod tests {
             env: BTreeMap::from([("JIRA_URL".to_owned(), "https://jira.example".to_owned())]),
         };
 
-        let fallback = offline_uvx_fallback(&registration).expect("offline fallback");
+        let fallback = uvx_fallback(&registration).expect("uvx fallback");
 
         assert_eq!(fallback.command, "uvx");
-        assert_eq!(fallback.args, ["--offline", "mcp-atlassian"]);
+        assert_eq!(fallback.args, ["mcp-atlassian"]);
         assert_eq!(fallback.env, registration.env);
-        assert!(offline_uvx_fallback(&fallback).is_none());
+        assert!(uvx_fallback(&fallback).is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn process_exit_before_the_first_response_is_a_startup_failure() {
+        let registration = StdioRegistration {
+            command: "sh".to_owned(),
+            args: vec!["-c".to_owned(), "exit 7".to_owned()],
+            env: BTreeMap::new(),
+        };
+        let mut client = McpClient::start(&registration).expect("child process");
+
+        let _ = client.child.wait();
+
+        assert_eq!(client.initialize(), Err(JiraMcpError::SpawnFailed));
     }
 
     #[test]
@@ -1100,6 +1170,71 @@ mod tests {
                 .unwrap()
                 .contains("must not cross")
         );
+    }
+
+    #[test]
+    fn imported_issue_extracts_description_from_the_serialized_mcp_result_and_keeps_raw_evidence() {
+        let registration = StdioRegistration {
+            command: "mcp-atlassian".to_owned(),
+            args: Vec::new(),
+            env: BTreeMap::from([("JIRA_URL".to_owned(), "https://jira.example".to_owned())]),
+        };
+        let description = "Keep all steps.\n\n1. Select the repository.\n2. Retain the draft 🧪.\n\n`{\"description\":\"example\"}`";
+        for payload in [
+            json!({ "key": "PLATFORM-42", "summary": "Retain draft", "status": "Open", "description": description }),
+            json!({ "key": "PLATFORM-42", "fields": { "summary": "Retain draft", "status": { "name": "Open" }, "description": description } }),
+        ] {
+            let raw = payload.to_string();
+            let response = json!({ "content": [{ "type": "text", "text": raw }] });
+            let issue = jira_issue_from_registration(
+                &registration,
+                "PLATFORM-42",
+                extract_tool_text(&response).expect("MCP text"),
+            );
+            assert_eq!(issue.description(), description);
+            assert_eq!(issue.content, raw);
+            assert_eq!(issue.summary.as_deref(), Some("Retain draft"));
+            assert_eq!(issue.status.as_deref(), Some("Open"));
+            let serialized = serde_json::to_value(&issue).expect("serialized issue");
+            assert_eq!(serialized["content"], raw);
+        }
+    }
+
+    #[test]
+    fn issue_description_preserves_prose_unknown_json_and_mismatched_issue_keys() {
+        for content in [
+            "Read this code example: {\"description\":\"keep me\"}",
+            r#"{"description":"user-owned JSON example"}"#,
+            r#"{"key":"PLATFORM-42","summary":"No description field"}"#,
+            r#"{"key":"OTHER-99","description":"another issue"}"#,
+            r#"{"key":"PLATFORM-42","issue_key":"OTHER-99","description":"ambiguous issue"}"#,
+            r#"{"key":"PLATFORM-42","description":{"custom":"unknown format"}}"#,
+        ] {
+            let issue = JiraIssue {
+                issue_key: "PLATFORM-42".to_owned(),
+                summary: None,
+                status: None,
+                content: content.to_owned(),
+                browser_url: None,
+            };
+            assert_eq!(issue.description(), content);
+        }
+        for content in [
+            r#"{"key":"PLATFORM-42","description":null}"#,
+            r#"{"key":"PLATFORM-42","description":""}"#,
+        ] {
+            let issue = JiraIssue {
+                issue_key: "PLATFORM-42".to_owned(),
+                summary: None,
+                status: None,
+                content: content.to_owned(),
+                browser_url: None,
+            };
+            assert_eq!(
+                issue.description(),
+                "No Jira description was available when this planning home was created."
+            );
+        }
     }
 
     #[test]

@@ -1,0 +1,106 @@
+{
+  "before": {
+    "Conversations": {
+      "n": 15,
+      "medianMs": 100.6,
+      "p95Ms": 287.1,
+      "minMs": 86.9,
+      "maxMs": 287.1,
+      "samplesMs": [
+        287.1,
+        120.7,
+        94.9,
+        100.6,
+        96.1,
+        95.9,
+        105.8,
+        104.8,
+        103.3,
+        109.8,
+        95.7,
+        94.6,
+        120.8,
+        98.8,
+        86.9
+      ],
+      "source": "/tmp/wts-product-polish-before-timings/product-polish-fifteen-cac-1e5f0-urns-with-delayed-transport-chromium/product-evidence.json"
+    },
+    "Plans": {
+      "n": 15,
+      "medianMs": 162.4,
+      "p95Ms": 352.5,
+      "minMs": 150.3,
+      "maxMs": 352.5,
+      "samplesMs": [
+        301.8,
+        188.6,
+        165,
+        159.1,
+        158.5,
+        153.7,
+        181.5,
+        352.5,
+        171.1,
+        156.7,
+        173.6,
+        155.7,
+        162.4,
+        150.3,
+        151.8
+      ],
+      "source": "/tmp/wts-product-polish-before-timings/product-polish-fifteen-cac-c183c-urns-with-delayed-transport-chromium/product-evidence.json"
+    }
+  },
+  "after": {
+    "Conversations": {
+      "n": 15,
+      "medianMs": 103.4,
+      "p95Ms": 337.5,
+      "minMs": 94.1,
+      "maxMs": 337.5,
+      "samplesMs": [
+        337.5,
+        111.4,
+        96.1,
+        104.2,
+        96.6,
+        104.4,
+        96.3,
+        94.1,
+        111,
+        103.2,
+        111.5,
+        103.2,
+        103.4,
+        103.4,
+        99.9
+      ],
+      "source": "/tmp/wts-product-polish-after-timings/product-polish-fifteen-cac-1e5f0-urns-with-delayed-transport-chromium/product-evidence.json"
+    },
+    "Plans": {
+      "n": 15,
+      "medianMs": 160.8,
+      "p95Ms": 203.4,
+      "minMs": 142.7,
+      "maxMs": 203.4,
+      "samplesMs": [
+        178.9,
+        164.1,
+        188.6,
+        161.3,
+        203.4,
+        159.5,
+        166.5,
+        154.6,
+        171.2,
+        154.7,
+        160.8,
+        153.2,
+        153,
+        160.6,
+        142.7
+      ],
+      "source": "/tmp/wts-product-polish-after-timings/product-polish-fifteen-cac-c183c-urns-with-delayed-transport-chromium/product-evidence.json"
+    }
+  }
+}

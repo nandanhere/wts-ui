@@ -1,0 +1,11 @@
+
+Running 6 tests using 1 worker
+
+  ✓  1 [chromium] › e2e/dialog-motion.spec.ts:9:3 › New workspace fades at a fixed position and returns keyboard focus (5.8s)
+  ✓  2 [chromium] › e2e/dialog-motion.spec.ts:9:3 › Environment & integrations fades at a fixed position and returns keyboard focus (1.5s)
+  ✓  3 [chromium] › e2e/dialog-motion.spec.ts:9:3 › Commands fades at a fixed position and returns keyboard focus (1.4s)
+  ✓  4 [chromium] › e2e/dialog-motion.spec.ts:9:3 › How to use WTS fades at a fixed position and returns keyboard focus (1.6s)
+  ✓  5 [chromium] › e2e/product-motion.spec.ts:3:1 › reduced motion covers controls in feedback outside the workspace shell (2.1s)
+  ✓  6 [chromium] › e2e/product-motion.spec.ts:19:1 › menu entry and exit fade without moving the selectable options (767ms)
+
+  6 passed (16.3s)

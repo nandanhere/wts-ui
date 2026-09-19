@@ -1,12 +1,13 @@
-import { act, render, renderHook, screen } from "@testing-library/react";
+import { act, fireEvent, render, renderHook, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { App } from "../../App";
-import type { GithubReviewInbox } from "../../lib/wtsClient";
+import type { GithubReviewInbox, WorkspaceClient } from "../../lib/wtsClient";
 import { fakeWorkspaceClient } from "../../test/workspaceClientFake";
 import {
   REVIEW_INBOX_POLL_INTERVAL_MS,
   useGithubReviewInbox,
+  MyReviewsScreen,
 } from "./MyReviewsScreen";
 
 const reviewInbox: GithubReviewInbox = {
@@ -29,7 +30,45 @@ const reviewInbox: GithubReviewInbox = {
   detail: "GitHub returned the current individual review requests.",
 };
 
+function InboxHarness({ client, onOpenIntegrations = () => {} }: { client: WorkspaceClient; onOpenIntegrations?: () => void }) {
+  const { refresh, ...inbox } = useGithubReviewInbox(client);
+  return <MyReviewsScreen client={client} {...inbox} onRefresh={refresh} onOpenIntegrations={onOpenIntegrations} />;
+}
+
 describe("My reviews", () => {
+  it("shows the failed provider when only one inbox request fails", async () => {
+    const fake = fakeWorkspaceClient();
+    fake.getGithubReviewInbox.mockRejectedValueOnce(new Error("GitHub connection failed."));
+    render(<InboxHarness client={fake.client} />);
+    expect(await screen.findByRole("alert")).toHaveTextContent("GitHub connection failed.");
+    expect(screen.queryByText("GitHub and GitLab found no review requests or approved merge requests.")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Refresh GitHub reviews" }));
+    await waitFor(() => expect(fake.getGithubReviewInbox).toHaveBeenCalledTimes(2));
+  });
+
+  it.each(["GitHub", "GitLab"])("offers a connection route for %s while the other provider is ready", async (provider) => {
+    const fake = fakeWorkspaceClient();
+    const auth = { schemaVersion: 1 as const, state: "auth" as const, reviews: [], fetchedAtUnixMs: null, detail: `${provider} requires authentication.`, diagnosticCode: "authenticationRequired" as const };
+    if (provider === "GitHub") fake.getGithubReviewInbox.mockResolvedValue(auth);
+    else fake.getGitlabReviewInbox.mockResolvedValue(auth);
+    const onOpenIntegrations = vi.fn();
+    render(<InboxHarness client={fake.client} onOpenIntegrations={onOpenIntegrations} />);
+    fireEvent.click(await screen.findByRole("button", { name: `Connect ${provider}` }));
+    expect(onOpenIntegrations).toHaveBeenCalledOnce();
+    expect(screen.queryByRole("heading", { name: "No reviews to track" })).not.toBeInTheDocument();
+  });
+
+  it("retains saved reviews and shows a failed background provider read", async () => {
+    const fake = fakeWorkspaceClient();
+    fake.getGithubReviewInbox.mockResolvedValueOnce(reviewInbox).mockRejectedValue(new Error("GitHub timed out."));
+    render(<InboxHarness client={fake.client} />);
+    await screen.findByRole("heading", { name: "Keep retry keys stable" });
+    fireEvent(window, new Event("focus"));
+    expect(await screen.findByText("GitHub timed out.")).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Keep retry keys stable" })).toBeVisible();
+    expect(screen.getByText("Saved")).toBeVisible();
+  });
+
   it("refreshes assigned reviews in the background and when WTS regains focus", async () => {
     vi.useFakeTimers();
     try {
@@ -219,7 +258,7 @@ describe("My reviews", () => {
       },
     });
     render(<App initialPath="/reviews" workspaceClient={auth.client} />);
-    expect(await screen.findByRole("heading", { name: "Connect GitHub" })).toBeVisible();
+    expect(await screen.findByRole("heading", { name: "Connect GitHub and GitLab" })).toBeVisible();
     expect(screen.getByRole("button", { name: "Open integrations" })).toBeVisible();
   });
 
@@ -264,7 +303,7 @@ describe("My reviews", () => {
 
     render(<App initialPath="/reviews" workspaceClient={fake.client} />);
 
-    expect(await screen.findByRole("heading", { name: "GitHub reviews are unavailable" })).toBeVisible();
+    expect(await screen.findByRole("heading", { name: "Review providers are unavailable" })).toBeVisible();
     await user.click(screen.getByRole("button", { name: "Try again" }));
     expect(await screen.findByRole("heading", { name: "Keep retry keys stable" })).toBeVisible();
     expect(fake.getGithubReviewInbox).toHaveBeenCalledTimes(2);

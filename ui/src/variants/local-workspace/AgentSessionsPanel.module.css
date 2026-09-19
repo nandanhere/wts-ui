@@ -1034,3 +1034,6 @@
     transition: none;
   }
 }
+
+.manualCopy { display: grid; gap: 8px; padding: 12px; color: var(--wts-muted); font-size: 12px; }
+.manualCopy textarea { box-sizing: border-box; width: 100%; resize: vertical; padding: 10px; color: var(--wts-ink); background: var(--wts-surface); border: 1px solid var(--wts-line-strong); border-radius: var(--wts-radius-sm); font: 12px/1.5 var(--wts-font-mono); }

@@ -3,6 +3,7 @@ use crate::{
     SystemPathResolver,
 };
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
@@ -23,8 +24,10 @@ const MAX_REVIEW_COMMENT_CHARS: usize = 16_384;
 const MAX_REVIEW_COMMITS: usize = 50;
 const MAX_REVIEW_DISCUSSIONS: usize = 100;
 const MAX_REVIEW_DISCUSSION_COMMENTS: usize = 200;
+const DISCUSSIONS_PER_PAGE: usize = 50;
 const MAX_SAVED_REVIEW_PATCHES: usize = 64;
 const MAX_SAVED_REVIEW_CACHE_BYTES: u64 = 20 * 1024 * 1024;
+const WORKSPACE_REVIEW_CACHE_TTL_MS: u64 = 30_000;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -196,6 +199,16 @@ pub struct GitlabReviewDiscussion {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub line: Option<u32>,
     pub comments: Vec<GitlabReviewDiscussionComment>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub position: Option<GitlabReviewDiscussionPosition>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GitlabReviewDiscussionPosition {
+    pub base_commit_oid: String,
+    pub start_commit_oid: String,
+    pub head_commit_oid: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -205,6 +218,30 @@ pub struct GitlabReviewDiscussionComment {
     pub body: String,
     pub author_login: String,
     pub created_at: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GitlabDiscussions {
+    pub schema_version: u8,
+    pub repository_id: String,
+    pub iid: u64,
+    pub scope_id: String,
+    pub viewer_login: String,
+    pub discussions: Vec<GitlabReviewDiscussion>,
+    pub fetched_at_unix_ms: u64,
+    pub from_cache: bool,
+    pub truncated: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReplyGitlabDiscussionResult {
+    pub schema_version: u8,
+    pub repository_id: String,
+    pub iid: u64,
+    pub discussion_id: String,
+    pub comment: GitlabReviewDiscussionComment,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -229,6 +266,10 @@ pub struct GitlabReviewCommentRequest {
     pub side: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub line: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_position: Option<GitlabReviewDiscussionPosition>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_id: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -336,8 +377,35 @@ struct ReviewOpenTarget {
     origin: String,
 }
 
+struct DiscussionContext {
+    executable: PathBuf,
+    host: String,
+    project_path: String,
+    user: GitlabCurrentUser,
+}
+
+impl DiscussionContext {
+    fn endpoint(&self, iid: u64) -> String {
+        let project =
+            form_urlencoded::byte_serialize(self.project_path.as_bytes()).collect::<String>();
+        format!("/projects/{project}/merge_requests/{iid}")
+    }
+
+    fn scope_id(&self, iid: u64) -> String {
+        let identity = serde_json::to_vec(&(&self.host, &self.project_path, iid, self.user.id))
+            .expect("primitive identity serialization");
+        format!("{:x}", Sha256::digest(identity))
+    }
+}
+
 type ReviewTargetKey = (String, u64);
 type ReviewPatchKey = (String, u64, Option<String>);
+
+#[derive(Default)]
+struct DiscussionCache {
+    generation: u64,
+    entries: BTreeMap<(String, String), GitlabDiscussions>,
+}
 
 pub struct GitlabMergeRequestsAdapter<R = ProcessCommandRunner, P = SystemPathResolver> {
     runner: R,
@@ -346,6 +414,8 @@ pub struct GitlabMergeRequestsAdapter<R = ProcessCommandRunner, P = SystemPathRe
     review_cache: Arc<Mutex<BTreeMap<String, ReviewCacheEntry>>>,
     review_targets: Arc<Mutex<BTreeMap<ReviewTargetKey, ReviewOpenTarget>>>,
     review_patches: Arc<Mutex<BTreeMap<ReviewPatchKey, GitlabReviewPatch>>>,
+    workspace_review_patches: Arc<Mutex<BTreeMap<String, GitlabReviewPatch>>>,
+    discussions: Arc<Mutex<DiscussionCache>>,
     review_patch_cache_file: Option<PathBuf>,
 }
 
@@ -393,6 +463,8 @@ where
             review_cache: Arc::new(Mutex::new(BTreeMap::new())),
             review_targets: Arc::new(Mutex::new(BTreeMap::new())),
             review_patches: Arc::new(Mutex::new(review_patches)),
+            workspace_review_patches: Arc::new(Mutex::new(BTreeMap::new())),
+            discussions: Arc::new(Mutex::new(DiscussionCache::default())),
             review_patch_cache_file,
         }
     }
@@ -537,6 +609,53 @@ where
             None,
             "GitLab returned the current authored merge requests.",
         )
+    }
+
+    /// Re-fetch one authored, open merge request from the exact trusted project.
+    ///
+    /// This does not use the inbox cache. Publication callers use it as an
+    /// authorization boundary immediately before they update the source branch.
+    pub fn authored_open_merge_request(
+        &self,
+        repository: &GitlabTrustedRepository,
+        iid: u64,
+    ) -> Result<GitlabMergeRequest, String> {
+        if iid == 0 || iid > i64::MAX as u64 {
+            return Err("reviewNotFound".to_owned());
+        }
+        let executable = self
+            .resolver
+            .resolve("glab")
+            .ok()
+            .flatten()
+            .ok_or("glabMissing")?;
+        let username = self
+            .current_user(&executable, repository.host())
+            .map_err(|_| "providerFailed")?;
+        let endpoint = publication_merge_request_endpoint(repository, iid);
+        let output = self
+            .runner
+            .run(CommandProbe {
+                executable: &executable,
+                args: &["api", "--hostname", repository.host(), &endpoint],
+            })
+            .map_err(|_| "providerFailed")?;
+        let node: MergeRequestNode =
+            serde_json::from_slice(output.stdout()).map_err(|_| "providerResponseInvalid")?;
+        if node.iid != iid
+            || node.source_project_id.is_none()
+            || node.source_project_id != node.target_project_id
+        {
+            return Err("reviewNotFound".to_owned());
+        }
+        let merge_request = validated_merge_request(node, repository, &username)
+            .ok_or_else(|| "reviewNotFound".to_owned())?;
+        if merge_request.status != GitlabMergeRequestStatus::Open
+            || merge_request.source_head_commit_oid.is_none()
+        {
+            return Err("reviewNotFound".to_owned());
+        }
+        Ok(merge_request)
     }
 
     pub fn list_reviews(
@@ -757,6 +876,29 @@ where
             .map(|target| target.origin.clone())
     }
 
+    pub fn remember_review_repository(
+        &self,
+        repository: &GitlabReviewTrustedRepository,
+        iid: u64,
+    ) -> Result<(), String> {
+        if iid == 0 || iid > i64::MAX as u64 {
+            return Err("reviewNotFound".to_owned());
+        }
+        self.review_targets
+            .lock()
+            .map_err(|_| "cacheUnavailable")?
+            .insert(
+                (repository.repository_id.clone(), iid),
+                ReviewOpenTarget {
+                    origin: format!(
+                        "https://{}/{}.git",
+                        repository.host, repository.project_path
+                    ),
+                },
+            );
+        Ok(())
+    }
+
     pub fn review_patch(
         &self,
         repository_id: &str,
@@ -825,10 +967,8 @@ where
             .lock()
             .ok()
             .and_then(|patches| patches.get(&key).cloned());
-        if !refresh {
-            if let Some(patch) = cached_patch.clone() {
-                return Ok(patch);
-            }
+        if !refresh && let Some(patch) = cached_patch.clone() {
+            return Ok(patch);
         }
         let fetched = (|| -> Result<GitlabReviewPatch, String> {
             let executable = self
@@ -853,10 +993,10 @@ where
                 serde_json::from_slice::<Vec<ReviewCommitNode>>(commits_output.stdout())
                     .map_err(|_| "providerResponseInvalid")?,
             );
-            if let Some(selected) = selected_commit_oid.as_deref() {
-                if !commits.iter().any(|commit| commit.oid == selected) {
-                    return Err("invalidCommit".to_owned());
-                }
+            if let Some(selected) = selected_commit_oid.as_deref()
+                && !commits.iter().any(|commit| commit.oid == selected)
+            {
+                return Err("invalidCommit".to_owned());
             }
             let endpoint = if let Some(selected) = selected_commit_oid.as_deref() {
                 format!("/projects/{project}/repository/commits/{selected}/diff")
@@ -954,11 +1094,65 @@ where
         iid: u64,
         request: GitlabReviewCommentRequest,
     ) -> Result<PublishGitlabReviewCommentResult, String> {
+        let (host, project_path) = self.review_target_parts(repository_id, iid)?;
+        self.publish_review_comment_to_target(
+            repository_id,
+            iid,
+            &host,
+            &project_path,
+            request,
+            None,
+        )
+    }
+
+    pub fn publish_workspace_review_comment(
+        &self,
+        repository: &GitlabTrustedRepository,
+        iid: u64,
+        plan_base_branch: Option<&str>,
+        request: GitlabReviewCommentRequest,
+    ) -> Result<PublishGitlabReviewCommentResult, String> {
+        let patch = self.workspace_review_patch(repository, iid, plan_base_branch, true)?;
+        if patch.from_cache {
+            return Err("providerFailed".to_owned());
+        }
+        self.publish_review_comment_to_target(
+            repository.repository_id(),
+            iid,
+            repository.host(),
+            repository.project_path(),
+            request,
+            Some(patch),
+        )
+    }
+
+    fn publish_review_comment_to_target(
+        &self,
+        repository_id: &str,
+        iid: u64,
+        host: &str,
+        project_path: &str,
+        request: GitlabReviewCommentRequest,
+        verified_patch: Option<GitlabReviewPatch>,
+    ) -> Result<PublishGitlabReviewCommentResult, String> {
+        if request.workspace_id.is_some() {
+            return Err("invalidComment".to_owned());
+        }
+        if request.expected_position.as_ref().is_some_and(|position| {
+            [
+                &position.base_commit_oid,
+                &position.start_commit_oid,
+                &position.head_commit_oid,
+            ]
+            .iter()
+            .any(|oid| validated_oid(oid).is_none())
+        }) {
+            return Err("invalidComment".to_owned());
+        }
         let body = request.body.trim();
         if body.is_empty() || body.chars().count() > MAX_REVIEW_COMMENT_CHARS {
             return Err("invalidComment".to_owned());
         }
-        let (host, project_path) = self.review_target_parts(repository_id, iid)?;
         let executable = self
             .resolver
             .resolve("glab")
@@ -971,10 +1165,27 @@ where
                 let path = validated_file_path(&path).ok_or("invalidComment")?;
                 // GitLab binds inline discussions to the current diff refs. The cached
                 // patch can still be shown offline, but it must not authorize a write.
-                let patch =
-                    self.fetch_review_patch(repository_id, iid, &host, &project_path, None, true)?;
+                let patch = match verified_patch {
+                    Some(patch) => patch,
+                    None => {
+                        self.fetch_review_patch(repository_id, iid, host, project_path, None, true)?
+                    }
+                };
                 if patch.from_cache {
                     return Err("providerFailed".to_owned());
+                }
+                if request.expected_position.as_ref().is_some_and(|position| {
+                    !position
+                        .base_commit_oid
+                        .eq_ignore_ascii_case(&patch.base_commit_oid)
+                        || !position
+                            .start_commit_oid
+                            .eq_ignore_ascii_case(&patch.start_commit_oid)
+                        || !position
+                            .head_commit_oid
+                            .eq_ignore_ascii_case(&patch.head_commit_oid)
+                }) {
+                    return Err("reviewPositionChanged".to_owned());
                 }
                 let endpoint = format!("/projects/{project}/merge_requests/{iid}/discussions");
                 let body_field = format!("body={body}");
@@ -1000,7 +1211,7 @@ where
                         args: &[
                             "api",
                             "--hostname",
-                            &host,
+                            host,
                             "--method",
                             "POST",
                             &endpoint,
@@ -1013,6 +1224,9 @@ where
                     .map_err(|_| "providerFailed")?;
             }
             (None, None, None) => {
+                if request.expected_position.is_some() {
+                    return Err("invalidComment".to_owned());
+                }
                 let endpoint = format!("/projects/{project}/merge_requests/{iid}/notes");
                 let body_field = format!("body={body}");
                 self.runner
@@ -1021,7 +1235,7 @@ where
                         args: &[
                             "api",
                             "--hostname",
-                            &host,
+                            host,
                             "--method",
                             "POST",
                             &endpoint,
@@ -1039,6 +1253,430 @@ where
             iid,
             accepted: true,
         })
+    }
+
+    pub fn get_discussions(
+        &self,
+        repository_id: &str,
+        iid: u64,
+        workspace_repository: Option<&GitlabTrustedRepository>,
+    ) -> Result<GitlabDiscussions, String> {
+        let context = self.discussion_context(repository_id, iid, workspace_repository)?;
+        let scope_id = context.scope_id(iid);
+        let key = (scope_id.clone(), repository_id.to_owned());
+        let generation = self
+            .discussions
+            .lock()
+            .map_err(|_| "cacheUnavailable")?
+            .generation;
+        let fetched = self
+            .fetch_discussions(&context, iid)
+            .map(|(discussions, truncated)| GitlabDiscussions {
+                schema_version: SCHEMA_VERSION,
+                repository_id: repository_id.to_owned(),
+                iid,
+                scope_id,
+                viewer_login: context.user.username.clone(),
+                discussions,
+                fetched_at_unix_ms: now_ms(),
+                from_cache: false,
+                truncated,
+            });
+        match fetched {
+            Ok(result) => {
+                if let Ok(mut cache) = self.discussions.lock() {
+                    if cache.generation != generation {
+                        return Ok(result);
+                    }
+                    cache.entries.insert(key, result.clone());
+                    while cache.entries.len() > MAX_SAVED_REVIEW_PATCHES {
+                        let oldest = cache
+                            .entries
+                            .iter()
+                            .min_by_key(|(_, value)| value.fetched_at_unix_ms)
+                            .map(|(key, _)| key.clone());
+                        if let Some(oldest) = oldest {
+                            cache.entries.remove(&oldest);
+                        }
+                    }
+                }
+                Ok(result)
+            }
+            Err(error) => {
+                if let Some(mut cached) = self
+                    .discussions
+                    .lock()
+                    .ok()
+                    .and_then(|cache| cache.entries.get(&key).cloned())
+                {
+                    cached.from_cache = true;
+                    cached.viewer_login = context.user.username;
+                    return Ok(cached);
+                }
+                Err(error)
+            }
+        }
+    }
+
+    /// Read a thread from the exact project and branch verified for a workspace comparison.
+    pub fn workspace_comparison_discussions(
+        &self,
+        repository: &GitlabTrustedRepository,
+        iid: u64,
+        plan_base_branch: Option<&str>,
+    ) -> Result<GitlabDiscussions, String> {
+        let patch = self.workspace_review_patch(repository, iid, plan_base_branch, true)?;
+        if patch.from_cache {
+            return Err("providerFailed".to_owned());
+        }
+        let executable = self
+            .resolver
+            .resolve("glab")
+            .ok()
+            .flatten()
+            .ok_or("glabMissing")?;
+        let user = self
+            .current_user_identity(&executable, repository.host())
+            .map_err(|_| "providerFailed")?;
+        let context = DiscussionContext {
+            executable,
+            host: repository.host().to_owned(),
+            project_path: repository.project_path().to_owned(),
+            user,
+        };
+        let (discussions, truncated) = self.fetch_discussions(&context, iid)?;
+        Ok(GitlabDiscussions {
+            schema_version: SCHEMA_VERSION,
+            repository_id: repository.repository_id().to_owned(),
+            iid,
+            scope_id: context.scope_id(iid),
+            viewer_login: context.user.username,
+            discussions,
+            fetched_at_unix_ms: now_ms(),
+            from_cache: false,
+            truncated,
+        })
+    }
+
+    pub fn workspace_review_patch(
+        &self,
+        repository: &GitlabTrustedRepository,
+        iid: u64,
+        plan_base_branch: Option<&str>,
+        refresh: bool,
+    ) -> Result<GitlabReviewPatch, String> {
+        if iid == 0 || iid > i64::MAX as u64 {
+            return Err("reviewNotFound".to_owned());
+        }
+        let key = serde_json::to_string(&(
+            repository.repository_id(),
+            repository.host(),
+            repository.project_path(),
+            repository.source_branch(),
+            plan_base_branch,
+            iid,
+        ))
+        .map_err(|_| "reviewNotFound")?;
+        let cached = self
+            .workspace_review_patches
+            .lock()
+            .ok()
+            .and_then(|cache| cache.get(&key).cloned());
+        if !refresh
+            && let Some(cached) = cached.clone()
+            && now_ms().saturating_sub(cached.fetched_at_unix_ms) < WORKSPACE_REVIEW_CACHE_TTL_MS
+        {
+            return Ok(cached);
+        }
+        let fetched = (|| -> Result<GitlabReviewPatch, String> {
+            let executable = self
+                .resolver
+                .resolve("glab")
+                .ok()
+                .flatten()
+                .ok_or("glabMissing")?;
+            let user = self
+                .current_user_identity(&executable, repository.host())
+                .map_err(|_| "providerFailed")?;
+            let context = DiscussionContext {
+                executable,
+                host: repository.host().to_owned(),
+                project_path: repository.project_path().to_owned(),
+                user,
+            };
+            let endpoint = format!("{}/changes", context.endpoint(iid));
+            let output = self
+                .runner
+                .run(CommandProbe {
+                    executable: &context.executable,
+                    args: &["api", "--hostname", &context.host, &endpoint],
+                })
+                .map_err(|_| "providerFailed")?;
+            let metadata: MergeRequestNode =
+                serde_json::from_slice(output.stdout()).map_err(|_| "providerResponseInvalid")?;
+            if metadata.iid != iid {
+                return Err("reviewNotFound".to_owned());
+            }
+            let expected_repository = if metadata.source_branch == repository.source_branch() {
+                repository.clone()
+            } else if plan_base_branch == Some(metadata.source_branch.as_str()) {
+                GitlabTrustedRepository::from_origin(
+                    repository.repository_id(),
+                    &format!(
+                        "https://{}/{}.git",
+                        repository.host(),
+                        repository.project_path()
+                    ),
+                    &metadata.source_branch,
+                    repository.head_commit_oid(),
+                )
+                .ok_or("reviewNotFound")?
+            } else {
+                return Err("reviewNotFound".to_owned());
+            };
+            let author = metadata.author.username.clone();
+            let metadata = validated_merge_request(metadata, &expected_repository, &author)
+                .ok_or("reviewNotFound")?;
+            let response: ReviewChangesResponse =
+                serde_json::from_slice(output.stdout()).map_err(|_| "providerResponseInvalid")?;
+            let base = validated_oid(&response.diff_refs.base_sha)
+                .ok_or("providerResponseInvalid")?
+                .to_ascii_lowercase();
+            let start = validated_oid(&response.diff_refs.start_sha)
+                .ok_or("providerResponseInvalid")?
+                .to_ascii_lowercase();
+            let head = validated_oid(&response.diff_refs.head_sha)
+                .ok_or("providerResponseInvalid")?
+                .to_ascii_lowercase();
+            if metadata
+                .source_head_commit_oid
+                .is_some_and(|oid| oid != head)
+            {
+                return Err("providerResponseInvalid".to_owned());
+            }
+            let (patch, truncated) = review_changes_patch(response.changes)?;
+            Ok(GitlabReviewPatch {
+                schema_version: SCHEMA_VERSION,
+                repository_id: repository.repository_id().to_owned(),
+                iid,
+                base_commit_oid: base,
+                start_commit_oid: start,
+                head_commit_oid: head,
+                selected_commit_oid: None,
+                commits: Vec::new(),
+                discussions: Vec::new(),
+                patch,
+                patch_truncated: truncated || response.overflow,
+                from_cache: false,
+                fetched_at_unix_ms: now_ms(),
+            })
+        })();
+        match fetched {
+            Ok(result) => {
+                if let Ok(mut cache) = self.workspace_review_patches.lock() {
+                    cache.insert(key, result.clone());
+                    while cache.len() > MAX_SAVED_REVIEW_PATCHES {
+                        if let Some(oldest) = cache
+                            .iter()
+                            .min_by_key(|(_, patch)| patch.fetched_at_unix_ms)
+                            .map(|(key, _)| key.clone())
+                        {
+                            cache.remove(&oldest);
+                        }
+                    }
+                }
+                Ok(result)
+            }
+            Err(error)
+                if matches!(error.as_str(), "providerFailed" | "glabMissing")
+                    && cached.is_some() =>
+            {
+                let mut cached = cached.expect("cache checked");
+                cached.from_cache = true;
+                Ok(cached)
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    pub fn reply_discussion(
+        &self,
+        repository_id: &str,
+        iid: u64,
+        workspace_repository: Option<&GitlabTrustedRepository>,
+        discussion_id: &str,
+        body: &str,
+    ) -> Result<ReplyGitlabDiscussionResult, String> {
+        if body.contains('\r') {
+            return Err("invalidComment".to_owned());
+        }
+        let body = body.trim();
+        if !valid_discussion_id(discussion_id)
+            || body.is_empty()
+            || body.chars().count() > MAX_REVIEW_COMMENT_CHARS
+            || body.contains('\0')
+        {
+            return Err("invalidComment".to_owned());
+        }
+        let context = self.discussion_context(repository_id, iid, workspace_repository)?;
+        let endpoint = format!("{}/discussions/{discussion_id}", context.endpoint(iid));
+        let output = self
+            .runner
+            .run(CommandProbe {
+                executable: &context.executable,
+                args: &["api", "--hostname", &context.host, &endpoint],
+            })
+            .map_err(|_| "providerFailed")?;
+        let thread: ReviewDiscussionNode =
+            serde_json::from_slice(output.stdout()).map_err(|_| "providerResponseInvalid")?;
+        if thread.id != discussion_id || thread.notes.iter().all(|note| note.system) {
+            return Err("discussionNotFound".to_owned());
+        }
+        let endpoint = format!("{endpoint}/notes");
+        let body_field = format!("body={body}");
+        let output = self.runner.run(CommandProbe {
+            executable: &context.executable,
+            args: &[
+                "api",
+                "--hostname",
+                &context.host,
+                &endpoint,
+                "--method",
+                "POST",
+                "--raw-field",
+                &body_field,
+            ],
+        });
+        if let Ok(mut cache) = self.discussions.lock() {
+            let scope = context.scope_id(iid);
+            cache.generation = cache.generation.wrapping_add(1);
+            cache
+                .entries
+                .retain(|(cached_scope, _), _| cached_scope != &scope);
+        }
+        let output = output.map_err(|_| "providerFailed")?;
+        let note: ReviewDiscussionNoteNode =
+            serde_json::from_slice(output.stdout()).map_err(|_| "providerResponseInvalid")?;
+        let comment = validated_discussion_comment(note).ok_or("providerResponseInvalid")?;
+        if !comment
+            .author_login
+            .eq_ignore_ascii_case(&context.user.username)
+        {
+            return Err("providerResponseInvalid".to_owned());
+        }
+        Ok(ReplyGitlabDiscussionResult {
+            schema_version: SCHEMA_VERSION,
+            repository_id: repository_id.to_owned(),
+            iid,
+            discussion_id: discussion_id.to_owned(),
+            comment,
+        })
+    }
+
+    fn discussion_context(
+        &self,
+        repository_id: &str,
+        iid: u64,
+        workspace_repository: Option<&GitlabTrustedRepository>,
+    ) -> Result<DiscussionContext, String> {
+        if iid == 0 || iid > i64::MAX as u64 {
+            return Err("reviewNotFound".to_owned());
+        }
+        let (host, project_path) = match workspace_repository {
+            Some(repository) if repository.repository_id() == repository_id => {
+                (repository.host.clone(), repository.project_path.clone())
+            }
+            Some(_) => return Err("reviewNotFound".to_owned()),
+            None => {
+                let (host, project_path) = self.review_target_parts(repository_id, iid)?;
+                (
+                    validated_gitlab_host(&host).ok_or("reviewNotFound")?,
+                    validated_project_path(&project_path).ok_or("reviewNotFound")?,
+                )
+            }
+        };
+        let executable = self
+            .resolver
+            .resolve("glab")
+            .ok()
+            .flatten()
+            .ok_or("glabMissing")?;
+        let user = self
+            .current_user_identity(&executable, &host)
+            .map_err(|_| "providerFailed")?;
+        let context = DiscussionContext {
+            executable,
+            host,
+            project_path,
+            user,
+        };
+        if let Some(repository) = workspace_repository {
+            let endpoint = context.endpoint(iid);
+            let output = self
+                .runner
+                .run(CommandProbe {
+                    executable: &context.executable,
+                    args: &["api", "--hostname", &context.host, &endpoint],
+                })
+                .map_err(|_| "providerFailed")?;
+            let node: MergeRequestNode =
+                serde_json::from_slice(output.stdout()).map_err(|_| "providerResponseInvalid")?;
+            if node.iid != iid
+                || validated_merge_request(node, repository, &context.user.username).is_none()
+            {
+                return Err("reviewNotFound".to_owned());
+            }
+        }
+        Ok(context)
+    }
+
+    fn fetch_discussions(
+        &self,
+        context: &DiscussionContext,
+        iid: u64,
+    ) -> Result<(Vec<GitlabReviewDiscussion>, bool), String> {
+        let mut nodes = Vec::new();
+        let mut truncated = false;
+        for page in 1..=MAX_REVIEW_DISCUSSIONS / DISCUSSIONS_PER_PAGE {
+            let endpoint = format!(
+                "{}/discussions?per_page={DISCUSSIONS_PER_PAGE}&page={page}",
+                context.endpoint(iid)
+            );
+            let output = self
+                .runner
+                .run(CommandProbe {
+                    executable: &context.executable,
+                    args: &["api", "--hostname", &context.host, &endpoint],
+                })
+                .map_err(|_| "providerFailed")?;
+            let batch: Vec<ReviewDiscussionNode> =
+                serde_json::from_slice(output.stdout()).map_err(|_| "providerResponseInvalid")?;
+            if batch.len() > DISCUSSIONS_PER_PAGE
+                || batch.iter().any(|node| !valid_discussion_id(&node.id))
+            {
+                return Err("providerResponseInvalid".to_owned());
+            }
+            let complete = batch.len() < DISCUSSIONS_PER_PAGE;
+            nodes.extend(batch);
+            if complete {
+                break;
+            }
+            if nodes.len() >= MAX_REVIEW_DISCUSSIONS {
+                truncated = true;
+            }
+        }
+        let note_count = nodes
+            .iter()
+            .flat_map(|node| &node.notes)
+            .filter(|note| !note.system)
+            .count();
+        let discussions = validated_review_discussions(nodes);
+        truncated |= note_count
+            > discussions
+                .iter()
+                .map(|discussion| discussion.comments.len())
+                .sum::<usize>();
+        Ok((discussions, truncated))
     }
 
     pub fn publish_review_comment_for_origin(
@@ -1070,7 +1708,11 @@ where
         let origin = self
             .cached_review_origin(repository_id, iid)
             .ok_or("reviewNotFound")?;
-        origin_parts(&origin).ok_or_else(|| "reviewNotFound".to_owned())
+        let (host, project) = origin_parts(&origin).ok_or("reviewNotFound")?;
+        Ok((
+            validated_gitlab_host(&host).ok_or("reviewNotFound")?,
+            validated_project_path(&project).ok_or("reviewNotFound")?,
+        ))
     }
 
     fn review_failure(
@@ -1317,6 +1959,12 @@ fn merge_request_endpoint(repository: &GitlabTrustedRepository, username: &str) 
         .append_pair("per_page", &MAX_PER_REPOSITORY.to_string())
         .finish();
     format!("/projects/{project}/merge_requests?{query}")
+}
+
+fn publication_merge_request_endpoint(repository: &GitlabTrustedRepository, iid: u64) -> String {
+    let project =
+        form_urlencoded::byte_serialize(repository.project_path().as_bytes()).collect::<String>();
+    format!("/projects/{project}/merge_requests/{iid}")
 }
 
 fn review_endpoint(username: &str, approved_by_id: Option<u64>) -> String {
@@ -1761,6 +2409,28 @@ fn validated_review_commits(nodes: Vec<ReviewCommitNode>) -> Vec<GitlabReviewCom
         .collect()
 }
 
+fn valid_discussion_id(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 128
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+}
+
+fn validated_discussion_comment(
+    note: ReviewDiscussionNoteNode,
+) -> Option<GitlabReviewDiscussionComment> {
+    if note.id == 0 || note.system {
+        return None;
+    }
+    Some(GitlabReviewDiscussionComment {
+        id: note.id,
+        body: bounded_text(note.body, MAX_REVIEW_COMMENT_CHARS)?,
+        author_login: validated_username(&note.author.username)?.to_owned(),
+        created_at: bounded_text(note.created_at, MAX_TEXT_CHARS)?,
+    })
+}
+
 fn validated_review_discussions(nodes: Vec<ReviewDiscussionNode>) -> Vec<GitlabReviewDiscussion> {
     let mut comment_count = 0usize;
     nodes
@@ -1771,6 +2441,16 @@ fn validated_review_discussions(nodes: Vec<ReviewDiscussionNode>) -> Vec<GitlabR
                 return None;
             }
             let anchor = node.notes.iter().find_map(|note| note.position.as_ref());
+            let position = anchor.and_then(|position| {
+                Some(GitlabReviewDiscussionPosition {
+                    base_commit_oid: validated_oid(position.base_sha.as_deref()?)?
+                        .to_ascii_lowercase(),
+                    start_commit_oid: validated_oid(position.start_sha.as_deref()?)?
+                        .to_ascii_lowercase(),
+                    head_commit_oid: validated_oid(position.head_sha.as_deref()?)?
+                        .to_ascii_lowercase(),
+                })
+            });
             let (file_path, side, line) = anchor.map_or((None, None, None), |position| {
                 if let Some(line) = position.new_line {
                     (
@@ -1835,6 +2515,7 @@ fn validated_review_discussions(nodes: Vec<ReviewDiscussionNode>) -> Vec<GitlabR
                 side,
                 line,
                 comments,
+                position,
             })
         })
         .collect()
@@ -1867,6 +2548,8 @@ fn review_changes_patch(changes: Vec<ReviewChange>) -> Result<(String, bool), St
 #[derive(Deserialize)]
 struct ReviewChangesResponse {
     diff_refs: ReviewDiffRefs,
+    #[serde(default)]
+    overflow: bool,
     #[serde(default)]
     changes: Vec<ReviewChange>,
 }
@@ -1921,6 +2604,12 @@ struct ReviewDiscussionNoteNode {
 #[derive(Deserialize)]
 struct ReviewDiscussionPositionNode {
     #[serde(default)]
+    base_sha: Option<String>,
+    #[serde(default)]
+    start_sha: Option<String>,
+    #[serde(default)]
+    head_sha: Option<String>,
+    #[serde(default)]
     old_path: Option<String>,
     #[serde(default)]
     new_path: Option<String>,
@@ -1958,6 +2647,10 @@ struct MergeRequestNode {
     state: String,
     source_branch: String,
     #[serde(default)]
+    source_project_id: Option<u64>,
+    #[serde(default)]
+    target_project_id: Option<u64>,
+    #[serde(default)]
     sha: Option<String>,
     target_branch: String,
     author: GitlabUser,
@@ -1977,6 +2670,530 @@ mod tests {
     use super::*;
     use crate::ProbeOutput;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[cfg(unix)]
+    struct DiscussionProcessFixture {
+        root: tempfile::TempDir,
+        adapter: GitlabMergeRequestsAdapter<ProcessCommandRunner, DiscussionExecutable>,
+    }
+
+    #[cfg(unix)]
+    struct DiscussionExecutable(PathBuf);
+
+    #[cfg(unix)]
+    impl PathResolver for DiscussionExecutable {
+        fn resolve(&self, executable: &str) -> Result<Option<PathBuf>, ProbeFailure> {
+            assert_eq!(executable, "glab");
+            Ok(Some(self.0.clone()))
+        }
+    }
+
+    #[cfg(unix)]
+    impl DiscussionProcessFixture {
+        fn new() -> Self {
+            use std::os::unix::fs::PermissionsExt;
+            let root = tempfile::tempdir().unwrap();
+            let executable = root.path().join("glab");
+            let quoted_root = root.path().to_string_lossy().replace('\'', "'\\''");
+            fs::write(
+                &executable,
+                format!(
+                    r#"#!/bin/sh
+set -eu
+fixture='{quoted_root}'
+case "$4" in
+  --method) test "$5" = POST; printf 'post\n' >> "$fixture/posts"; printf '%s\0' "$@" >> "$fixture/args"; printf '{{}}' ;;
+  /user) cat "$fixture/user.json" ;;
+  */discussions/*/notes)
+    printf 'post\n' >> "$fixture/posts"
+    printf '%s\0' "$@" >> "$fixture/args"
+    test ! -f "$fixture/fail-post"
+    cat "$fixture/reply.json" ;;
+  */discussions\?*)
+    printf '%s\n' "$4" >> "$fixture/reads"
+    test ! -f "$fixture/fail-discussions"
+    if test -f "$fixture/hold-discussions"; then
+      cp "$fixture/page1.json" "$fixture/captured.json"
+      touch "$fixture/read-started"
+      while test ! -f "$fixture/release-read"; do sleep 0.01; done
+      cat "$fixture/captured.json"
+      exit 0
+    fi
+    case "$4" in
+      *page=1) cat "$fixture/page1.json" ;;
+      *page=2) cat "$fixture/page2.json" ;;
+      *) exit 21 ;;
+    esac ;;
+  */discussions/*) cat "$fixture/thread.json" ;;
+  */merge_requests/17/changes) test ! -f "$fixture/fail-comparison"; cat "$fixture/changes.json" ;;
+  */merge_requests/17) cat "$fixture/mr.json" ;;
+  *) exit 22 ;;
+esac
+"#
+                ),
+            )
+            .unwrap();
+            fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
+            let fixture = Self {
+                adapter: GitlabMergeRequestsAdapter::new(
+                    ProcessCommandRunner::new(Duration::from_secs(10), 1024 * 1024),
+                    DiscussionExecutable(executable),
+                ),
+                root,
+            };
+            fixture.write("user.json", serde_json::json!({"id":1,"username":"alice"}));
+            fixture.write("mr.json", serde_json::json!({"id":77,"iid":17,"title":"Change","web_url":"https://gitlab.example.com/acme/api/-/merge_requests/17","state":"opened","source_branch":"feat/delivery","target_branch":"main","author":{"username":"alice"},"updated_at":"2026-09-17T00:00:00Z"}));
+            let note = serde_json::json!({"id":91,"body":"Please explain.","author":{"username":"bob"},"created_at":"2026-09-17T00:00:00Z","system":false});
+            let discussion = serde_json::json!({"id":"thread-1","notes":[note]});
+            fixture.write("page1.json", serde_json::json!([discussion]));
+            fixture.write("page2.json", serde_json::json!([]));
+            fixture.write("thread.json", discussion);
+            fixture.write("reply.json", serde_json::json!({"id":92,"body":"Reply with $literal\ntext","author":{"username":"alice"},"created_at":"2026-09-17T00:01:00Z","system":false}));
+            fixture.adapter.review_targets.lock().unwrap().insert(
+                ("repo_api".to_owned(), 17),
+                ReviewOpenTarget {
+                    origin: "https://gitlab.example.com/acme/api.git".to_owned(),
+                },
+            );
+            fixture
+        }
+
+        fn write(&self, name: &str, value: serde_json::Value) {
+            fs::write(
+                self.root.path().join(name),
+                serde_json::to_vec(&value).unwrap(),
+            )
+            .unwrap();
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn discussion_process_read_preserves_stale_time_and_isolates_accounts() {
+        let fixture = DiscussionProcessFixture::new();
+        let fresh = fixture
+            .adapter
+            .get_discussions("repo_api", 17, None)
+            .unwrap();
+        assert_eq!(fresh.discussions[0].comments[0].id, 91);
+        assert!(!fresh.from_cache);
+        assert_eq!(fresh.scope_id.len(), 64);
+        let repository = GitlabTrustedRepository::from_origin(
+            "repo_api",
+            "https://gitlab.example.com/acme/api.git",
+            "feat/delivery",
+            &"a".repeat(40),
+        )
+        .unwrap();
+        let workspace = fixture
+            .adapter
+            .get_discussions("repo_api", 17, Some(&repository))
+            .unwrap();
+        assert_eq!(workspace.scope_id, fresh.scope_id);
+        let fresh = workspace;
+        fs::write(fixture.root.path().join("fail-discussions"), "").unwrap();
+        let stale = fixture
+            .adapter
+            .get_discussions("repo_api", 17, None)
+            .unwrap();
+        assert!(stale.from_cache);
+        assert_eq!(stale.fetched_at_unix_ms, fresh.fetched_at_unix_ms);
+        assert_eq!(stale.scope_id, fresh.scope_id);
+        fixture.write(
+            "user.json",
+            serde_json::json!({"id":1,"username":"alice-renamed"}),
+        );
+        let renamed = fixture
+            .adapter
+            .get_discussions("repo_api", 17, None)
+            .unwrap();
+        assert_eq!(renamed.scope_id, fresh.scope_id);
+        assert_eq!(renamed.viewer_login, "alice-renamed");
+        fixture.write("user.json", serde_json::json!({"message":"unauthorized"}));
+        assert!(
+            fixture
+                .adapter
+                .get_discussions("repo_api", 17, None)
+                .is_err()
+        );
+        fixture.write("user.json", serde_json::json!({"id":2,"username":"bob"}));
+        assert!(
+            fixture
+                .adapter
+                .get_discussions("repo_api", 17, None)
+                .is_err()
+        );
+        fs::remove_file(fixture.root.path().join("fail-discussions")).unwrap();
+        let other = fixture
+            .adapter
+            .get_discussions("repo_api", 17, None)
+            .unwrap();
+        assert_ne!(other.scope_id, fresh.scope_id);
+        assert_eq!(other.viewer_login, "bob");
+        fixture.adapter.review_targets.lock().unwrap().insert(
+            ("repo_api".to_owned(), 17),
+            ReviewOpenTarget {
+                origin: "https://gitlab.other.example.com/acme/api.git".to_owned(),
+            },
+        );
+        fs::write(fixture.root.path().join("fail-discussions"), "").unwrap();
+        assert!(
+            fixture
+                .adapter
+                .get_discussions("repo_api", 17, None)
+                .is_err()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn discussion_process_reply_keeps_literal_body_and_writes_only_once() {
+        let fixture = DiscussionProcessFixture::new();
+        let result = fixture
+            .adapter
+            .reply_discussion(
+                "repo_api",
+                17,
+                None,
+                "thread-1",
+                "Reply with $literal\ntext",
+            )
+            .unwrap();
+        assert_eq!(result.comment.id, 92);
+        assert_eq!(result.discussion_id, "thread-1");
+        let args = fs::read(fixture.root.path().join("args")).unwrap();
+        assert!(
+            args.split(|byte| *byte == 0)
+                .any(|arg| arg == b"body=Reply with $literal\ntext")
+        );
+        assert_eq!(
+            fs::read_to_string(fixture.root.path().join("posts")).unwrap(),
+            "post\n"
+        );
+        fs::write(fixture.root.path().join("fail-post"), "").unwrap();
+        assert!(
+            fixture
+                .adapter
+                .reply_discussion("repo_api", 17, None, "thread-1", "second")
+                .is_err()
+        );
+        assert_eq!(
+            fs::read_to_string(fixture.root.path().join("posts")).unwrap(),
+            "post\npost\n"
+        );
+        fs::remove_file(fixture.root.path().join("fail-post")).unwrap();
+        fixture.write(
+            "reply.json",
+            serde_json::json!({"message":"accepted without a note"}),
+        );
+        assert!(
+            fixture
+                .adapter
+                .reply_discussion("repo_api", 17, None, "thread-1", "third")
+                .is_err()
+        );
+        assert_eq!(
+            fs::read_to_string(fixture.root.path().join("posts")).unwrap(),
+            "post\npost\npost\n"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn discussion_process_caps_pages_and_reports_omitted_comments() {
+        let fixture = DiscussionProcessFixture::new();
+        let page = |start| {
+            (start..start+50).map(|id| serde_json::json!({
+            "id":format!("thread-{id}"),"notes":[{"id":id+1,"body":"Reply","author":{"username":"bob"},"created_at":"2026-09-17T00:00:00Z","system":false}]
+        })).collect::<Vec<_>>()
+        };
+        fixture.write("page1.json", serde_json::json!(page(0)));
+        fixture.write("page2.json", serde_json::json!(page(50)));
+        let result = fixture
+            .adapter
+            .get_discussions("repo_api", 17, None)
+            .unwrap();
+        assert_eq!(result.discussions.len(), 100);
+        assert!(result.truncated);
+        let reads = fs::read_to_string(fixture.root.path().join("reads")).unwrap();
+        assert_eq!(reads.lines().count(), 2);
+        assert!(reads.contains("per_page=50&page=2"));
+
+        let notes = (1..=201).map(|id| serde_json::json!({"id":id,"body":"Reply","author":{"username":"bob"},"created_at":"2026-09-17T00:00:00Z","system":false})).collect::<Vec<_>>();
+        fixture.write(
+            "page1.json",
+            serde_json::json!([{"id":"thread-1","notes":notes}]),
+        );
+        let result = fixture
+            .adapter
+            .get_discussions("repo_api", 17, None)
+            .unwrap();
+        assert_eq!(result.discussions[0].comments.len(), 200);
+        assert!(result.truncated);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn discussion_process_reply_prevents_older_reads_from_restoring_cache() {
+        let fixture = DiscussionProcessFixture::new();
+        fs::write(fixture.root.path().join("hold-discussions"), "").unwrap();
+        std::thread::scope(|scope| {
+            let pending = scope.spawn(|| fixture.adapter.get_discussions("repo_api", 17, None));
+            let started = std::time::Instant::now();
+            while !fixture.root.path().join("read-started").exists() {
+                assert!(started.elapsed() < Duration::from_secs(5));
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            fixture
+                .adapter
+                .reply_discussion("repo_api", 17, None, "thread-1", "reply")
+                .unwrap();
+            fs::write(fixture.root.path().join("release-read"), "").unwrap();
+            pending.join().unwrap().unwrap();
+        });
+        fs::write(fixture.root.path().join("fail-discussions"), "").unwrap();
+        assert!(
+            fixture
+                .adapter
+                .get_discussions("repo_api", 17, None)
+                .is_err()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn discussion_process_rejects_other_threads_and_workspace_branches_before_writes() {
+        let fixture = DiscussionProcessFixture::new();
+        assert!(
+            fixture
+                .adapter
+                .reply_discussion("repo_api", 17, None, "other-thread", "reply")
+                .is_err()
+        );
+        assert!(
+            fixture
+                .adapter
+                .reply_discussion("repo_api", 17, None, "../thread-1", "reply")
+                .is_err()
+        );
+        assert!(
+            fixture
+                .adapter
+                .reply_discussion("repo_api", 17, None, "thread-1", " \n ")
+                .is_err()
+        );
+        assert!(
+            fixture
+                .adapter
+                .reply_discussion("repo_api", 17, None, "thread-1", "bad\rtext")
+                .is_err()
+        );
+        let repository = GitlabTrustedRepository::from_origin(
+            "repo_api",
+            "https://gitlab.example.com/acme/api.git",
+            "different-branch",
+            &"a".repeat(40),
+        )
+        .unwrap();
+        assert!(
+            fixture
+                .adapter
+                .get_discussions("repo_api", 17, Some(&repository))
+                .is_err()
+        );
+        assert!(
+            fixture
+                .adapter
+                .reply_discussion("repo_api", 17, Some(&repository), "thread-1", "reply")
+                .is_err()
+        );
+        assert!(!fixture.root.path().join("posts").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn comparison_process_uses_one_verified_snapshot_and_scopes_cached_fallback() {
+        let fixture = DiscussionProcessFixture::new();
+        let mut changes: serde_json::Value =
+            serde_json::from_slice(&fs::read(fixture.root.path().join("mr.json")).unwrap())
+                .unwrap();
+        changes["sha"] = serde_json::json!("b".repeat(40));
+        changes["diff_refs"] = serde_json::json!({"base_sha":"a".repeat(40),"start_sha":"a".repeat(40),"head_sha":"b".repeat(40)});
+        changes["changes"] = serde_json::json!([{"old_path":"source.rs","new_path":"source.rs","diff":"@@ -1 +1 @@\n-base\n+published\n"}]);
+        fixture.write("changes.json", changes.clone());
+        let repository = GitlabTrustedRepository::from_origin(
+            "repo_api",
+            "https://gitlab.example.com/acme/api.git",
+            "feat/delivery",
+            &"c".repeat(40),
+        )
+        .unwrap();
+        let fresh = fixture
+            .adapter
+            .workspace_review_patch(&repository, 17, None, true)
+            .unwrap();
+        assert_eq!(fresh.base_commit_oid, "a".repeat(40));
+        assert_eq!(fresh.head_commit_oid, "b".repeat(40));
+        assert!(fresh.patch.contains("+published"));
+        assert!(!fresh.from_cache);
+        let current = fixture
+            .adapter
+            .workspace_review_patch(&repository, 17, None, false)
+            .unwrap();
+        assert!(!current.from_cache);
+        assert_eq!(current.fetched_at_unix_ms, fresh.fetched_at_unix_ms);
+        for value in fixture
+            .adapter
+            .workspace_review_patches
+            .lock()
+            .unwrap()
+            .values_mut()
+        {
+            value.fetched_at_unix_ms = 0;
+        }
+        changes["sha"] = serde_json::json!("d".repeat(40));
+        changes["diff_refs"]["head_sha"] = serde_json::json!("d".repeat(40));
+        fixture.write("changes.json", changes.clone());
+        let fresh = fixture
+            .adapter
+            .workspace_review_patch(&repository, 17, None, false)
+            .unwrap();
+        assert_eq!(fresh.head_commit_oid, "d".repeat(40));
+        changes["author"]["username"] = serde_json::json!("bob");
+        fixture.write("changes.json", changes.clone());
+        let reviewer_worktree = GitlabTrustedRepository::from_origin(
+            "repo_api",
+            "https://gitlab.example.com/acme/api.git",
+            "wts/review",
+            &"c".repeat(40),
+        )
+        .unwrap();
+        assert!(
+            fixture
+                .adapter
+                .workspace_review_patch(&reviewer_worktree, 17, None, true)
+                .is_err()
+        );
+        assert!(
+            fixture
+                .adapter
+                .workspace_review_patch(&reviewer_worktree, 17, Some("feat/delivery"), true)
+                .is_ok()
+        );
+        fs::write(fixture.root.path().join("fail-comparison"), "").unwrap();
+        let stale = fixture
+            .adapter
+            .workspace_review_patch(&repository, 17, None, true)
+            .unwrap();
+        assert!(stale.from_cache);
+        assert_eq!(stale.fetched_at_unix_ms, fresh.fetched_at_unix_ms);
+        let other = GitlabTrustedRepository::from_origin(
+            "repo_api",
+            "https://gitlab.example.com/other/api.git",
+            "feat/delivery",
+            &"c".repeat(40),
+        )
+        .unwrap();
+        assert!(
+            fixture
+                .adapter
+                .workspace_review_patch(&other, 17, None, true)
+                .is_err()
+        );
+        fs::remove_file(fixture.root.path().join("fail-comparison")).unwrap();
+        changes["source_branch"] = serde_json::json!("other-branch");
+        fixture.write("changes.json", changes);
+        assert!(
+            fixture
+                .adapter
+                .workspace_review_patch(&repository, 17, None, true)
+                .is_err()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn discussion_process_preserves_original_position_refs() {
+        let fixture = DiscussionProcessFixture::new();
+        let mut page = serde_json::json!([{"id":"thread-1","notes":[{"id":91,"body":"Explain this.","author":{"username":"bob"},"created_at":"2026-09-17T00:00:00Z","position":{"base_sha":"a".repeat(40),"start_sha":"b".repeat(40),"head_sha":"c".repeat(40),"new_path":"src/source.rs","new_line":7}}]}]);
+        fixture.write("page1.json", page.clone());
+        let result = fixture
+            .adapter
+            .get_discussions("repo_api", 17, None)
+            .unwrap();
+        let wire = serde_json::to_value(result).unwrap();
+        assert_eq!(
+            wire["discussions"][0]["position"]["headCommitOid"],
+            "c".repeat(40)
+        );
+        assert_eq!(wire["discussions"][0]["line"], 7);
+        page[0]["notes"][0]["position"]["base_sha"] = serde_json::json!("invalid");
+        fixture.write("page1.json", page);
+        let result = fixture
+            .adapter
+            .get_discussions("repo_api", 17, None)
+            .unwrap();
+        assert!(result.discussions[0].position.is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn comparison_process_rejects_stale_inline_coordinates_before_posting_to_trusted_project() {
+        let fixture = DiscussionProcessFixture::new();
+        let mut changes: serde_json::Value =
+            serde_json::from_slice(&fs::read(fixture.root.path().join("mr.json")).unwrap())
+                .unwrap();
+        changes["sha"] = serde_json::json!("b".repeat(40));
+        changes["diff_refs"] = serde_json::json!({"base_sha":"a".repeat(40),"start_sha":"a".repeat(40),"head_sha":"b".repeat(40)});
+        changes["changes"] = serde_json::json!([{"old_path":"source.rs","new_path":"source.rs","diff":"@@ -1 +1 @@\n-base\n+published\n"}]);
+        fixture.write("changes.json", changes);
+        fixture.adapter.review_targets.lock().unwrap().insert(
+            ("repo_api".to_owned(), 17),
+            ReviewOpenTarget {
+                origin: "https://gitlab.example.com/wrong/catalog.git".to_owned(),
+            },
+        );
+        let repository = GitlabTrustedRepository::from_origin(
+            "repo_api",
+            "https://gitlab.example.com/acme/api.git",
+            "feat/delivery",
+            &"c".repeat(40),
+        )
+        .unwrap();
+        let mut request = GitlabReviewCommentRequest {
+            body: "Explain this.".to_owned(),
+            file_path: Some("source.rs".to_owned()),
+            side: Some("additions".to_owned()),
+            line: Some(1),
+            expected_position: Some(GitlabReviewDiscussionPosition {
+                base_commit_oid: "a".repeat(40),
+                start_commit_oid: "a".repeat(40),
+                head_commit_oid: "c".repeat(40),
+            }),
+            workspace_id: None,
+        };
+        assert!(
+            fixture
+                .adapter
+                .publish_workspace_review_comment(&repository, 17, None, request.clone())
+                .is_err()
+        );
+        assert!(!fixture.root.path().join("posts").exists());
+        request.expected_position.as_mut().unwrap().head_commit_oid = "b".repeat(40);
+        fixture
+            .adapter
+            .publish_workspace_review_comment(&repository, 17, None, request)
+            .unwrap();
+        assert_eq!(
+            fs::read_to_string(fixture.root.path().join("posts")).unwrap(),
+            "post\n"
+        );
+        let args = fs::read(fixture.root.path().join("args")).unwrap();
+        assert!(
+            args.split(|byte| *byte == 0)
+                .any(|arg| arg == b"/projects/acme%2Fapi/merge_requests/17/discussions")
+        );
+    }
 
     struct FixedResolver;
     impl PathResolver for FixedResolver {
@@ -2242,6 +3459,8 @@ mod tests {
             title: "Review the delivery".to_owned(),
             web_url: "https://gitlab.example.com/acme/api/-/merge_requests/17".to_owned(),
             state: "opened".to_owned(),
+            source_project_id: None,
+            target_project_id: None,
             source_branch: "feat/delivery".to_owned(),
             sha: Some("cccccccccccccccccccccccccccccccccccccccc".to_owned()),
             target_branch: "develop".to_owned(),
@@ -2358,6 +3577,8 @@ mod tests {
                     file_path: Some("src/lib.rs".to_owned()),
                     side: Some("additions".to_owned()),
                     line: Some(2),
+                    expected_position: None,
+                    workspace_id: None,
                 },
             )
             .unwrap();
@@ -2402,6 +3623,8 @@ mod tests {
                     file_path: Some("src/lib.rs".to_owned()),
                     side: Some("additions".to_owned()),
                     line: Some(1),
+                    expected_position: None,
+                    workspace_id: None,
                 },
             )
             .unwrap();
@@ -2468,6 +3691,8 @@ mod tests {
                     file_path: Some("src/lib.rs".to_owned()),
                     side: Some("additions".to_owned()),
                     line: Some(2),
+                    expected_position: None,
+                    workspace_id: None,
                 },
             )
             .unwrap();

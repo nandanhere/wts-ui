@@ -1,0 +1,203 @@
+.card {
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+  background: var(--wts-surface, #fff);
+  border: 1px solid var(--wts-line, #e2e8f0);
+  border-radius: 6px;
+}
+
+.header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.headerText {
+  display: grid;
+  gap: 2px;
+}
+
+.headerText b {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--wts-ink, #0f172a);
+}
+
+.headerText small {
+  font-size: 12px;
+  color: var(--wts-muted, #64748b);
+}
+
+.controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.controlGroup {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--wts-text, #334155);
+}
+
+.controlGroup select {
+  font-size: 12px;
+  padding: 4px 8px;
+  border-radius: 4px;
+  border: 1px solid var(--wts-line, #cbd5e1);
+  background: var(--wts-surface, #fff);
+  color: var(--wts-ink, #0f172a);
+}
+
+.agentInput,
+.modelInput {
+  font-size: 12px;
+  padding: 4px 8px;
+  border-radius: 4px;
+  border: 1px solid var(--wts-line, #cbd5e1);
+  background: var(--wts-surface, #fff);
+  color: var(--wts-ink, #0f172a);
+  width: 140px;
+}
+
+.reviewMeta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--wts-muted, #64748b);
+  margin-bottom: 2px;
+}
+
+.reviewButton {
+  font-size: 12px;
+  font-weight: 600;
+  padding: 5px 12px;
+  border-radius: 4px;
+  background: var(--wts-accent, #2563eb);
+  color: #fff;
+  border: none;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.reviewButton:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.summaryBanner {
+  padding: 10px 14px;
+  background: var(--wts-surface-subtle, #f8fafc);
+  border: 1px solid var(--wts-line, #e2e8f0);
+  border-radius: 4px;
+  font-size: 13px;
+  color: var(--wts-text, #334155);
+  line-height: 1.5;
+}
+
+.findingsList {
+  display: grid;
+  gap: 8px;
+}
+
+.findingCard {
+  display: grid;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--wts-line, #e2e8f0);
+  border-radius: 4px;
+  background: var(--wts-surface, #fff);
+}
+
+.findingHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.findingTitle {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--wts-ink, #0f172a);
+}
+
+.severityTag {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  padding: 2px 6px;
+  border-radius: 3px;
+}
+
+.severityCritical {
+  background: var(--wts-red-soft, #fee2e2);
+  color: var(--wts-red, #dc2626);
+}
+
+.severityWarning {
+  background: var(--wts-amber-soft, #fef3c7);
+  color: var(--wts-amber, #d97706);
+}
+
+.severitySuggestion {
+  background: var(--wts-blue-soft, #dbeafe);
+  color: var(--wts-blue, #2563eb);
+}
+
+.findingLocation {
+  font-size: 12px;
+  color: var(--wts-muted, #64748b);
+  font-family: monospace;
+}
+
+.findingExplanation {
+  font-size: 12px;
+  color: var(--wts-text, #334155);
+  line-height: 1.4;
+}
+
+.patchBlock {
+  font-family: monospace;
+  font-size: 11px;
+  background: var(--wts-surface-subtle, #f8fafc);
+  border: 1px solid var(--wts-line, #e2e8f0);
+  padding: 8px;
+  border-radius: 4px;
+  overflow-x: auto;
+  white-space: pre;
+}
+
+.stepsList {
+  display: grid;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.stepItem {
+  display: flex;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--wts-text, #334155);
+}
+
+.stepNumber {
+  font-weight: 700;
+  color: var(--wts-ink, #0f172a);
+}
+
+.errorBanner {
+  font-size: 12px;
+  color: var(--wts-red, #dc2626);
+  background: var(--wts-red-soft, #fee2e2);
+  padding: 8px 10px;
+  border-radius: 4px;
+}

@@ -216,12 +216,43 @@ pub struct IntegrationSnapshot {
     pub blocking_for: Vec<BlockingCapability>,
 }
 
+/// A read-only check of the global Git OpenPGP signing configuration.
+///
+/// The snapshot reports booleans only. The configured key identifier and
+/// command output never cross the detector boundary.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GitSigningReadiness {
+    pub ready: bool,
+    pub commit_signing_enabled: bool,
+    pub signing_key_configured: bool,
+    pub gpg_available: bool,
+    pub private_key_available: bool,
+    pub detail: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub diagnostic_code: Option<GitSigningDiagnosticCode>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum GitSigningDiagnosticCode {
+    GitUnavailable,
+    CommitSigningDisabled,
+    SigningKeyNotConfigured,
+    GpgExecutableMissing,
+    PrivateKeyUnavailable,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SetupSnapshot {
     pub checked_at_unix_ms: u64,
     pub repository_count: u64,
     pub integrations: Vec<IntegrationSnapshot>,
+    /// Optional for wire compatibility with setup snapshots produced before
+    /// the Git signing check existed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub git_signing: Option<GitSigningReadiness>,
     /// Optional for wire compatibility with setup snapshots produced before
     /// local browser journeys existed. The WTS application service always
     /// populates it.

@@ -38,9 +38,27 @@ run_step \
   cargo run -p wts-app --example simultaneous_workspace_lab -- --copies 2
 run_step "Parallel-agent lab" cargo run -p wts-app --example parallel_agent_lab
 run_step \
-  "Real-backend critical browser flow" \
+  "Critical, responsive, and board browser flows" \
   npm --prefix ui exec -- playwright test critical-path.spec.ts \
+    responsive-polish.spec.ts workspace-board-dnd.spec.ts \
     --config ui/playwright.config.ts
+run_step \
+  "Directed feedback, results, alternatives, and recovery browser flows" \
+  npm --prefix ui exec -- playwright test \
+    --config ui/playwright.feedback.config.ts
+run_step \
+  "Workspace attention and recovery browser flows" \
+  npm --prefix ui exec -- playwright test \
+    --config ui/playwright.attention.config.ts
+run_step \
+  "Workspace request budgets and cached navigation" \
+  npm --prefix ui exec -- playwright test \
+    --config ui/playwright.performance.config.ts
+run_step \
+  "Rendered candidate preview and live module updates" \
+  cargo test --locked -p wts-app --lib \
+    installed_vite_serves_candidate_files_and_hot_updates \
+    -- --ignored --nocapture
 
 trap - ERR
 printf '\nWTS pull-request gate: PASSED (%ss)\n' "$((SECONDS - started_at))"

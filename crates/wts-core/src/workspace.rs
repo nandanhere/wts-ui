@@ -46,6 +46,7 @@ pub enum WorkspaceProvider {
     OpenCode,
     Hermes,
     VsCode,
+    Copilot,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -225,7 +226,7 @@ pub enum WorkspaceValidationError {
     MissingRepositorySetLabel,
     #[error("repository-set label exceeds {MAX_REPOSITORY_SET_LABEL_CHARS} characters")]
     RepositorySetLabelTooLong,
-    #[error("repository-set label contains control characters or path separators")]
+    #[error("repository-set label contains control characters or invalid path characters")]
     InvalidRepositorySetLabel,
     #[error("at least one repository request is required")]
     EmptyRepositories,
@@ -466,12 +467,22 @@ fn normalize_intent(intent: WorkspaceIntent) -> Result<WorkspaceIntent, Workspac
             if label.chars().count() > MAX_REPOSITORY_SET_LABEL_CHARS {
                 return Err(WorkspaceValidationError::RepositorySetLabelTooLong);
             }
-            if has_control_or_path_separator(&label) {
+            if invalid_repository_set_label(&label) {
                 return Err(WorkspaceValidationError::InvalidRepositorySetLabel);
             }
             Ok(WorkspaceIntent::RepositorySet { label })
         }
     }
+}
+
+fn invalid_repository_set_label(value: &str) -> bool {
+    value
+        .chars()
+        .any(|character| character.is_control() || character == '\\')
+        || value.split('/').any(|segment| {
+            let trimmed = segment.trim();
+            trimmed.is_empty() || trimmed == "." || trimmed == ".."
+        })
 }
 
 fn valid_issue_key(issue_key: &str) -> bool {
@@ -853,6 +864,50 @@ mod tests {
             path_like.normalize(),
             Err(WorkspaceValidationError::InvalidRepositoryLabel { index: 0 })
         );
+    }
+
+    #[test]
+    fn normalizes_repository_set_intent_and_rejects_invalid_labels() {
+        for valid_label in [
+            "Review sre-tools/zeno !40",
+            "sre-tools/zeno",
+            "zeno",
+            "  Review payments/checkout !12  ",
+        ] {
+            let mut request = request();
+            request.intent = WorkspaceIntent::RepositorySet {
+                label: valid_label.into(),
+            };
+            let normalized = request.normalize().expect("valid repository set label");
+            assert_eq!(
+                normalized.intent,
+                WorkspaceIntent::RepositorySet {
+                    label: valid_label.trim().into(),
+                }
+            );
+        }
+
+        for invalid_label in [
+            "",
+            "   ",
+            "/sre-tools/zeno",
+            "sre-tools/zeno/",
+            "sre-tools//zeno",
+            "../zeno",
+            "sre-tools/../zeno",
+            "sre-tools/./zeno",
+            "sre-tools\\zeno",
+            "sre-tools\0zeno",
+        ] {
+            let mut request = request();
+            request.intent = WorkspaceIntent::RepositorySet {
+                label: invalid_label.into(),
+            };
+            assert!(
+                request.normalize().is_err(),
+                "expected invalid label: {invalid_label:?}"
+            );
+        }
     }
 
     #[test]

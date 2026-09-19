@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-get-gitlab-discussions"
+description = "Enables the get_gitlab_discussions command without any pre-configured scope."
+commands.allow = ["get_gitlab_discussions"]
+
+[[permission]]
+identifier = "deny-get-gitlab-discussions"
+description = "Denies the get_gitlab_discussions command without any pre-configured scope."
+commands.deny = ["get_gitlab_discussions"]

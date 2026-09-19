@@ -1,0 +1,6 @@
+
+Running 1 test using 1 worker
+
+  ✓  1 [chromium] › e2e/product-polish.spec.ts:251:1 › short narrow review and feedback keep controls reachable (5.7s)
+
+  1 passed (7.3s)

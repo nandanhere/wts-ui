@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { useVisiblePolling } from "../../lib/useVisiblePolling";
+import { loadAgentSessions } from "../../lib/agentSessionDiscovery";
 import type {
   AgentProvider,
   AgentSession,
@@ -15,6 +16,7 @@ const providerLabels: Record<AgentProvider, string> = {
   codex: "Codex",
   openCode: "OpenCode",
   hermes: "Hermes",
+  copilot: "Copilot",
 };
 
 function heartbeatLabel(unixMs: number) {
@@ -123,11 +125,11 @@ export function AgentStatePrototype({
   const taskDisclosureId = useId();
   const generationRef = useRef(0);
 
-  const refresh = useCallback(async (showLoading = false) => {
+  const refresh = useCallback(async (showLoading = false, force = false) => {
     const generation = generationRef.current;
     if (showLoading) setBusy("loading");
     try {
-      const result = await client.listAgentSessions(workspaceId);
+      const result = await loadAgentSessions(client, workspaceId, { force });
       if (generation !== generationRef.current) return;
       setSessions(result.sessions);
       setObservedSessions(result.observedSessions ?? []);
@@ -262,7 +264,7 @@ export function AgentStatePrototype({
         </div>
         <button
           disabled={busy !== "idle"}
-          onClick={() => void refresh(true)}
+          onClick={() => void refresh(true, true)}
           type="button"
         >
           Refresh

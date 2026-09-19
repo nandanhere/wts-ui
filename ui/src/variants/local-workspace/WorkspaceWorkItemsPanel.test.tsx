@@ -8,6 +8,7 @@ import type {
   WorkspaceWorkItemRole,
 } from "../../lib/wtsClient";
 import { fakeWorkspaceClient } from "../../test/workspaceClientFake";
+import { WorkspaceClientError } from "../../lib/wtsClient";
 import { WorkspaceWorkItemsPanel } from "./WorkspaceWorkItemsPanel";
 
 const workspaceId = "11111111-1111-4111-8111-111111111111";
@@ -64,6 +65,101 @@ function deferred<T>() {
 }
 
 describe("WorkspaceWorkItemsPanel", () => {
+  it("offers Jira connection settings after a preview configuration failure", async () => {
+    const user = userEvent.setup();
+    const fake = fakeWorkspaceClient();
+    fake.previewWorkspaceJiraLink.mockRejectedValue(new WorkspaceClientError("Configure Jira MCP.", { code: "jira_mcp_configuration_invalid" }));
+    const onOpenIntegrations = vi.fn();
+    render(<WorkspaceWorkItemsPanel client={fake.client} workspaceId={workspaceId} workspaceKey={workspaceKey} onOpenIntegrations={onOpenIntegrations} />);
+    await user.click(screen.getByRole("button", { name: "Add Jira" }));
+    await user.type(screen.getByRole("textbox", { name: "Jira issue key" }), "PLATFORM-42");
+    await user.click(screen.getByRole("button", { name: "Preview Jira issue" }));
+    await user.click(await screen.findByRole("button", { name: "Check Jira connection" }));
+    expect(onOpenIntegrations).toHaveBeenCalledOnce();
+    expect(screen.getByRole("textbox", { name: "Jira issue key" })).toHaveValue("PLATFORM-42");
+  });
+
+  it("refreshes a stale link preview before another explicit link action", async () => {
+    const user = userEvent.setup();
+    vi.mocked(crypto.randomUUID).mockReturnValueOnce(idempotencyKey).mockReturnValueOnce("44444444-4444-4444-8444-444444444444");
+    const fake = fakeWorkspaceClient();
+    const latest = { ...jiraPreview(), previewDigest: `sha256:${"b".repeat(64)}` };
+    fake.previewWorkspaceJiraLink.mockResolvedValueOnce(jiraPreview()).mockResolvedValueOnce(latest);
+    fake.confirmWorkspaceJiraLink.mockRejectedValueOnce(new WorkspaceClientError("The issue changed.", { code: "stale_work_item_link_preview" })).mockResolvedValueOnce({ link: linkedItem(latest), replayed: false });
+    render(<WorkspaceWorkItemsPanel client={fake.client} workspaceId={workspaceId} workspaceKey={workspaceKey} />);
+    await user.click(screen.getByRole("button", { name: "Add Jira" }));
+    await user.type(screen.getByRole("textbox", { name: "Jira issue key" }), "PLATFORM-42");
+    await user.click(screen.getByRole("button", { name: "Preview Jira issue" }));
+    await user.click(await screen.findByRole("button", { name: "Link Jira issue" }));
+    await user.click(await screen.findByRole("button", { name: "Refresh Jira preview" }));
+    await waitFor(() => expect(fake.previewWorkspaceJiraLink).toHaveBeenCalledTimes(2));
+    expect(fake.confirmWorkspaceJiraLink).toHaveBeenCalledOnce();
+    await user.click(await screen.findByRole("button", { name: "Link Jira issue" }));
+    expect(fake.confirmWorkspaceJiraLink.mock.calls[1]?.[3]).toBe(latest.previewDigest);
+    expect(fake.confirmWorkspaceJiraLink.mock.calls[1]?.[4]).not.toBe(fake.confirmWorkspaceJiraLink.mock.calls[0]?.[4]);
+  });
+
+  it("refreshes an obsolete linked issue before another explicit open action", async () => {
+    const user = userEvent.setup();
+    const fake = fakeWorkspaceClient();
+    fake.listWorkspaceWorkItemLinks.mockResolvedValueOnce({ schemaVersion: 1, workspaceId, links: [linkedItem()] }).mockResolvedValueOnce({ schemaVersion: 1, workspaceId, links: [linkedItem(jiraPreview(), 8)] });
+    fake.openWorkspaceWorkItem.mockRejectedValueOnce(new WorkspaceClientError("The linked issue changed.", { code: "work_item_link_conflict" }));
+    render(<WorkspaceWorkItemsPanel client={fake.client} workspaceId={workspaceId} workspaceKey={workspaceKey} />);
+    await user.click(await screen.findByRole("link", { name: /^Open Jira issue PLATFORM-42:/ }));
+    await user.click(await screen.findByRole("button", { name: "Refresh linked issues" }));
+    await waitFor(() => expect(fake.listWorkspaceWorkItemLinks).toHaveBeenCalledTimes(2));
+    expect(fake.openWorkspaceWorkItem).toHaveBeenCalledOnce();
+    await user.click(screen.getByRole("link", { name: /^Open Jira issue PLATFORM-42:/ }));
+    expect(fake.openWorkspaceWorkItem).toHaveBeenLastCalledWith(workspaceId, linkId, 8);
+  });
+
+  it("refreshes after an unlink conflict without repeating the mutation", async () => {
+    const user = userEvent.setup();
+    const fake = fakeWorkspaceClient();
+    fake.listWorkspaceWorkItemLinks.mockResolvedValueOnce({ schemaVersion: 1, workspaceId, links: [linkedItem()] }).mockResolvedValueOnce({ schemaVersion: 1, workspaceId, links: [] });
+    fake.unlinkWorkspaceWorkItem.mockRejectedValue(new WorkspaceClientError("The linked issue changed.", { code: "work_item_link_conflict" }));
+    render(<WorkspaceWorkItemsPanel client={fake.client} workspaceId={workspaceId} workspaceKey={workspaceKey} />);
+    await user.click(await screen.findByRole("button", { name: "More actions for PLATFORM-42" }));
+    await user.click(await screen.findByRole("menuitem", { name: "Unlink Jira issue…" }));
+    await user.click(screen.getByRole("checkbox", { name: "I understand that this removes only the link." }));
+    await user.click(screen.getByRole("button", { name: "Unlink Jira" }));
+    await user.click(await screen.findByRole("button", { name: "Refresh linked issues" }));
+    expect(await screen.findByText("No Jira issue is linked to this workspace.")).toBeVisible();
+    expect(fake.unlinkWorkspaceWorkItem).toHaveBeenCalledOnce();
+  });
+
+  it("keeps a Jira proposal available for manual copy after clipboard failure", async () => {
+    const user = userEvent.setup();
+    const fake = fakeWorkspaceClient();
+    vi.spyOn(navigator.clipboard, "writeText").mockRejectedValue(new Error("Clipboard blocked"));
+    fake.proposeWorkspaceJiraIssue.mockResolvedValue({ schemaVersion: 1, workspaceId, summary: "Preserve this summary", description: "Preserve the reviewed requirements.", sourceDocumentSha256: `sha256:${"b".repeat(64)}`, canExecute: false, requiresExplicitApproval: true, detail: "Create this issue manually in Jira." });
+    render(<WorkspaceWorkItemsPanel client={fake.client} workspaceId={workspaceId} workspaceKey={workspaceKey} />);
+    await user.click(screen.getByRole("button", { name: "More work item actions" }));
+    await user.click(await screen.findByRole("menuitem", { name: "Draft a Jira issue…" }));
+    await user.click(screen.getByRole("button", { name: "Prepare draft" }));
+    await user.click(await screen.findByRole("button", { name: "Copy draft" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Clipboard access failed. Select and copy the summary and description below.");
+    expect(screen.getByRole("textbox", { name: "Summary" })).toHaveValue("Preserve this summary");
+    expect(screen.getByRole("textbox", { name: "Description" })).toHaveValue("Preserve the reviewed requirements.");
+    expect(fake.proposeWorkspaceJiraIssue).toHaveBeenCalledOnce();
+  });
+
+  it("refreshes a stale Jira preview without automatically opening or linking it", async () => {
+    const user = userEvent.setup();
+    const fake = fakeWorkspaceClient();
+    fake.previewWorkspaceJiraLink.mockResolvedValue(jiraPreview());
+    fake.openWorkspaceJiraPreview.mockRejectedValue(new WorkspaceClientError("The issue changed.", { code: "stale_work_item_link_preview" }));
+    render(<WorkspaceWorkItemsPanel client={fake.client} workspaceId={workspaceId} workspaceKey={workspaceKey} />);
+    await user.click(screen.getByRole("button", { name: "Add Jira" }));
+    await user.type(screen.getByRole("textbox", { name: "Jira issue key" }), "PLATFORM-42");
+    await user.click(screen.getByRole("button", { name: "Preview Jira issue" }));
+    await user.click(await screen.findByRole("link", { name: "Open Jira" }));
+    await user.click(await screen.findByRole("button", { name: "Refresh Jira preview" }));
+    await waitFor(() => expect(fake.previewWorkspaceJiraLink).toHaveBeenCalledTimes(2));
+    expect(fake.openWorkspaceJiraPreview).toHaveBeenCalledOnce();
+    expect(fake.confirmWorkspaceJiraLink).not.toHaveBeenCalled();
+  });
+
   it("shows workspace merge request delivery beside linked work item status", async () => {
     const fake = fakeWorkspaceClient();
     fake.listWorkspaceWorkItemLinks.mockResolvedValue({

@@ -203,6 +203,12 @@ export function fakeWorkspaceClient(options: {
   const publishGitlabReviewComment = vi
     .fn<WorkspaceClient["publishGitlabReviewComment"]>()
     .mockRejectedValue(new Error("Unexpected publishGitlabReviewComment call"));
+  const getGitlabDiscussions = vi
+    .fn<WorkspaceClient["getGitlabDiscussions"]>()
+    .mockRejectedValue(new Error("Unexpected getGitlabDiscussions call"));
+  const replyGitlabDiscussion = vi
+    .fn<WorkspaceClient["replyGitlabDiscussion"]>()
+    .mockRejectedValue(new Error("Unexpected replyGitlabDiscussion call"));
   const getGitlabMergeRequests = vi
     .fn<WorkspaceClient["getGitlabMergeRequests"]>()
     .mockResolvedValue(options.gitlabMergeRequestInbox ?? {
@@ -326,11 +332,29 @@ export function fakeWorkspaceClient(options: {
     .fn<WorkspaceClient["analyzeWorkspaceRuntime"]>()
     .mockResolvedValue(options.runtimeAnalysis ?? runtimeAnalysisFixture());
   const preflightWorkspace = vi.fn<WorkspaceClient["preflightWorkspace"]>();
+  const recoverWorkspaceSetup = vi.fn<WorkspaceClient["recoverWorkspaceSetup"]>().mockRejectedValue(new Error("Unexpected recoverWorkspaceSetup call"));
   const getWorkspaceMaterialization =
     vi.fn<WorkspaceClient["getWorkspaceMaterialization"]>();
   const getWorkspaceRepositoryDiff = vi
     .fn<WorkspaceClient["getWorkspaceRepositoryDiff"]>()
     .mockRejectedValue(new Error("Unexpected getWorkspaceRepositoryDiff call"));
+  const getWorkspaceGitlabComparison = vi.fn<WorkspaceClient["getWorkspaceGitlabComparison"]>().mockRejectedValue(new Error("Unexpected getWorkspaceGitlabComparison call"));
+  const preflightAgentWorkItemIntegration = vi.fn<NonNullable<WorkspaceClient["preflightAgentWorkItemIntegration"]>>().mockRejectedValue(new Error("This host cannot inspect integration."));
+  const integrateAgentWorkItem = vi.fn<NonNullable<WorkspaceClient["integrateAgentWorkItem"]>>().mockRejectedValue(new Error("This host cannot integrate candidates."));
+  const openAgentWorkItemPreview = vi.fn<NonNullable<WorkspaceClient["openAgentWorkItemPreview"]>>().mockRejectedValue(new Error("This host cannot open candidate previews."));
+  const createAgentWorkSet = vi.fn<NonNullable<WorkspaceClient["createAgentWorkSet"]>>().mockRejectedValue(new Error("This host cannot complete this task plan."));
+  const getAgentWorkSet = vi.fn<NonNullable<WorkspaceClient["getAgentWorkSet"]>>().mockRejectedValue(new Error("This host cannot complete this task plan."));
+  const listAgentWorkSets = vi.fn<NonNullable<WorkspaceClient["listAgentWorkSets"]>>().mockRejectedValue(new Error("This host cannot complete this task plan."));
+  const cancelAgentWorkItem = vi.fn<NonNullable<WorkspaceClient["cancelAgentWorkItem"]>>().mockRejectedValue(new Error("This host cannot complete this task plan."));
+  const getAgentTurnDecisions = vi.fn<NonNullable<WorkspaceClient["getAgentTurnDecisions"]>>().mockRejectedValue(new Error("This host cannot read or save task decisions."));
+  const recordAgentTurnDecision = vi.fn<NonNullable<WorkspaceClient["recordAgentTurnDecision"]>>().mockRejectedValue(new Error("This host cannot read or save task decisions."));
+  const getAgentTurnChecks = vi.fn<NonNullable<WorkspaceClient["getAgentTurnChecks"]>>().mockRejectedValue(new Error("This host cannot complete this task action."));
+  const runAgentTurnCheck = vi.fn<NonNullable<WorkspaceClient["runAgentTurnCheck"]>>().mockRejectedValue(new Error("This host cannot complete this task action."));
+  const preflightAgentTurnRestore = vi.fn<NonNullable<WorkspaceClient["preflightAgentTurnRestore"]>>().mockRejectedValue(new Error("This host cannot complete this task action."));
+  const restoreAgentTurn = vi.fn<NonNullable<WorkspaceClient["restoreAgentTurn"]>>().mockRejectedValue(new Error("This host cannot complete this task action."));
+  const getAgentTurnChanges = vi.fn<NonNullable<WorkspaceClient["getAgentTurnChanges"]>>().mockRejectedValue(new Error("No recorded changes are available for this task."));
+  const getWorkspaceRepositorySource = vi.fn<WorkspaceClient["getWorkspaceRepositorySource"]>().mockRejectedValue(new Error("Unexpected getWorkspaceRepositorySource call"));
+  const saveWorkspaceRepositorySource = vi.fn<WorkspaceClient["saveWorkspaceRepositorySource"]>().mockRejectedValue(new Error("Unexpected saveWorkspaceRepositorySource call"));
   const getWorkspaceRepositoryFileReview = vi
     .fn<WorkspaceClient["getWorkspaceRepositoryFileReview"]>()
     .mockRejectedValue(
@@ -407,6 +431,17 @@ export function fakeWorkspaceClient(options: {
     .mockResolvedValue(options.evidence ?? null);
   const runWorkspaceVerification = vi
     .fn<WorkspaceClient["runWorkspaceVerification"]>();
+  const runWorkspaceCodeReview = vi
+    .fn<NonNullable<WorkspaceClient["runWorkspaceCodeReview"]>>()
+    .mockResolvedValue({
+      workspaceId: "ws_01J_PERSISTED",
+      provider: "codex",
+      scope: "recentChanges",
+      summary: "Review completed with 0 warnings.",
+      findings: [],
+      actionableSteps: [],
+      reviewedAtUnixMs: 1_726_000_000_000,
+    });
   const promoteAgentVerificationCheck = vi
     .fn<WorkspaceClient["promoteAgentVerificationCheck"]>()
     .mockRejectedValue(
@@ -629,6 +664,8 @@ export function fakeWorkspaceClient(options: {
     getGitlabReviewInbox,
     getGitlabReviewPatch,
     publishGitlabReviewComment,
+    getGitlabDiscussions,
+    replyGitlabDiscussion,
     prepareGitlabReviewRepository,
     listWorkspaces,
     getWorkspace,
@@ -657,9 +694,27 @@ export function fakeWorkspaceClient(options: {
     importCodeWorkspaceFile,
     analyzeWorkspaceRuntime,
     preflightWorkspace,
+    recoverWorkspaceSetup,
     getWorkspaceMaterialization,
     getWorkspaceRepositoryDiff,
     getWorkspaceRepositoryFileReview,
+    getWorkspaceGitlabComparison,
+    getAgentTurnChanges,
+    getAgentTurnChecks,
+    getAgentTurnDecisions,
+    preflightAgentWorkItemIntegration,
+    integrateAgentWorkItem,
+    openAgentWorkItemPreview,
+    createAgentWorkSet,
+    getAgentWorkSet,
+    listAgentWorkSets,
+    cancelAgentWorkItem,
+    recordAgentTurnDecision,
+    runAgentTurnCheck,
+    preflightAgentTurnRestore,
+    restoreAgentTurn,
+    getWorkspaceRepositorySource,
+    saveWorkspaceRepositorySource,
     getWorkspaceRepositoryReviewGraph,
     syncWorkspaceRepository,
     preflightWorkspaceRepositoryAddition,
@@ -690,6 +745,7 @@ export function fakeWorkspaceClient(options: {
     getWorkspaceEvidence,
     promoteAgentVerificationCheck,
     runWorkspaceVerification,
+    runWorkspaceCodeReview,
     listWorkspaceTestRuns,
     getWorkspaceTestRun,
     runWorkspaceTestJourney,
@@ -717,6 +773,8 @@ export function fakeWorkspaceClient(options: {
     getGitlabReviewInbox,
     getGitlabReviewPatch,
     publishGitlabReviewComment,
+    getGitlabDiscussions,
+    replyGitlabDiscussion,
     prepareGitlabReviewRepository,
     listWorkspaces,
     getWorkspace,
@@ -745,9 +803,27 @@ export function fakeWorkspaceClient(options: {
     importCodeWorkspaceFile,
     analyzeWorkspaceRuntime,
     preflightWorkspace,
+    recoverWorkspaceSetup,
     getWorkspaceMaterialization,
     getWorkspaceRepositoryDiff,
     getWorkspaceRepositoryFileReview,
+    getWorkspaceGitlabComparison,
+    getAgentTurnChanges,
+    getAgentTurnChecks,
+    getAgentTurnDecisions,
+    preflightAgentWorkItemIntegration,
+    integrateAgentWorkItem,
+    openAgentWorkItemPreview,
+    createAgentWorkSet,
+    getAgentWorkSet,
+    listAgentWorkSets,
+    cancelAgentWorkItem,
+    recordAgentTurnDecision,
+    runAgentTurnCheck,
+    preflightAgentTurnRestore,
+    restoreAgentTurn,
+    getWorkspaceRepositorySource,
+    saveWorkspaceRepositorySource,
     getWorkspaceRepositoryReviewGraph,
     syncWorkspaceRepository,
     preflightWorkspaceRepositoryAddition,
@@ -778,6 +854,7 @@ export function fakeWorkspaceClient(options: {
     getWorkspaceEvidence,
     promoteAgentVerificationCheck,
     runWorkspaceVerification,
+    runWorkspaceCodeReview,
     listWorkspaceTestRuns,
     getWorkspaceTestRun,
     runWorkspaceTestJourney,

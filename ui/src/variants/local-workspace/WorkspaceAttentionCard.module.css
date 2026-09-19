@@ -1,0 +1,64 @@
+.overview {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 20px;
+  padding: 0 24px 14px;
+  font-size: 12px;
+  color: var(--wts-muted);
+}
+.overview b { color: var(--wts-ink); font-weight: 600; }
+.overview b span { margin-left: 5px; color: var(--wts-blue); }
+.overview small { margin-left: auto; }
+.card {
+  padding: 0 14px 10px;
+  color: var(--wts-ink);
+  border-top: 1px solid var(--wts-line);
+  font-size: 12px;
+}
+.items, .history ul, .status ul { list-style: none; margin: 0; padding: 0; }
+.items li { display: flex; align-items: flex-start; gap: 4px; border-bottom: 1px solid var(--wts-line); }
+.items li:last-child { border-bottom: 0; }
+.open {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+  padding: 12px 0;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  color: var(--wts-ink);
+  cursor: pointer;
+}
+.open > svg { flex-shrink: 0; margin-top: 2px; color: var(--wts-blue); }
+.open > span:not(.count) { min-width: 0; }
+.open b { display: block; font-size: 12px; font-weight: 600; line-height: 1.45; overflow-wrap: anywhere; }
+.open small { display: block; margin-top: 2px; color: var(--wts-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 220px; }
+.open:hover b { color: var(--wts-blue); }
+.count { flex-shrink: 0; padding: 1px 6px; margin-left: auto; border-radius: 12px; color: var(--wts-blue); background: var(--wts-blue-soft); font-size: 11px; }
+.reviewed, .more, .failure button {
+  border: 0;
+  padding: 5px 0;
+  background: transparent;
+  color: var(--wts-blue);
+  cursor: pointer;
+  font: inherit;
+}
+.reviewed { margin-top: 7px; display: flex; align-items: center; gap: 3px; }
+.reviewed span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+.reviewed:hover, .reviewed:focus-visible { color: var(--wts-ink); }
+.more { padding: 7px 0; }
+.footer { display: flex; flex-wrap: wrap; gap: 8px 16px; padding-top: 9px; font-size: 10px; color: var(--wts-muted); }
+.footer details { min-width: 0; }
+.footer summary { cursor: pointer; }
+.footer details[open] { width: 100%; }
+.status li { display: grid; gap: 4px; padding: 7px 0; }
+.status p { margin: 0; overflow-wrap: anywhere; }
+.history button { padding: 7px 0; display: grid; gap: 3px; text-align: left; border: 0; background: transparent; color: var(--wts-ink); cursor: pointer; font: inherit; }
+.history button small { color: var(--wts-muted); }
+.failure { margin: 9px 0 0; color: var(--wts-amber); font-size: 11px; line-height: 1.5; }
+.failure button { display: block; }
+.card button:focus-visible, .card summary:focus-visible { outline: 2px solid var(--wts-blue); outline-offset: 3px; border-radius: 3px; }
+@media (max-width: 600px) { .overview { padding-inline: 16px; } }

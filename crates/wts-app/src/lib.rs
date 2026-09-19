@@ -8,10 +8,12 @@ mod adapter;
 mod agent_observation;
 mod agent_session_details;
 mod agent_sessions;
+mod code_review;
 mod code_workspace;
 mod collaboration;
 mod copilot_observation;
 mod evidence;
+mod generated_files;
 mod launcher;
 mod model;
 mod process;
@@ -21,6 +23,11 @@ mod service;
 mod testing;
 mod time_review;
 mod verification;
+
+pub use model::{
+    WorkspaceGitlabComparison, WorkspaceGitlabComparisonStatus, WorkspaceRepositorySource,
+    WorkspaceRepositorySourceSaveRequest,
+};
 
 pub use adapter::{AdapterFailure, ProcessCollaborationAdapter, ProcessWorkspaceAdapter};
 pub use agent_observation::{
@@ -37,6 +44,11 @@ pub use agent_sessions::{
     AGENT_SESSION_SCHEMA_VERSION, AgentChangeRequestProposal, AgentChangeRequestVerification,
     AgentChangeRequestVerificationStatus, AgentSession, AgentSessionCategory, AgentSessionFailure,
     AgentSessionList, AgentSessionStatus,
+};
+pub use code_review::{
+    CodeReviewActionableStep, CodeReviewFinding, CodeReviewFindingSeverity, CodeReviewScope,
+    RunWorkspaceCodeReviewRequest, WorkspaceCodeReviewResult, build_code_review_prompt,
+    parse_code_review_outcome,
 };
 pub use collaboration::{
     CollaborationAdapter, CollaborationAdapterFailure, CollaborationAdapterOutcome,
@@ -57,7 +69,7 @@ pub use evidence::{
     VerificationCheckResult, VerificationCheckStatus, VerificationStatus,
     WORKSPACE_EVIDENCE_SCHEMA_VERSION, WorkspaceAgentReport, WorkspaceEvidence,
     WorkspaceEvidenceContext, WorkspaceGraphEvidenceStatus, WorkspaceGraphManifest,
-    WorkspaceVerificationPlan, WorkspaceVerificationResult, publish_agent_report,
+    WorkspaceVerificationPlan, WorkspaceVerificationResult, WorkspaceVerificationSummary, publish_agent_report,
 };
 pub use launcher::{
     ChangeRequestDraftTarget, ExternalLauncher, GithubReviewTarget, GitlabMergeRequestTarget,
@@ -82,23 +94,24 @@ pub use model::{
     PreviewWorkspaceJiraLinkRequest, PublishWorkspaceChangeRequestBranch,
     RefreshRepositoryBranchesRequest, RefreshRepositoryBranchesResult, RemovalBlocker,
     RemovalBlockerCode, RemovalProtectedFilePreview, RemovalProtectedPath, RemovalWorktreeSummary,
-    RemoveWorkspaceResult, RepositoryAvailableBranch, RepositoryBranchSummary, RepositoryCatalog,
-    RepositoryForge, RepositoryRecommendation, RepositoryRecommendationSource, RepositorySummary,
-    ResolveWorkspaceReviewThreadRequest, ReviewAnchorState, ReviewAuthor, ReviewCodeSide,
-    ReviewComment, ReviewTarget, ReviewThreadState, TerminalProvider,
-    UnlinkWorkspaceWorkItemRequest, UpdateWorkspacePlanningDocumentRequest,
-    WorkspaceAgentBriefResult, WorkspaceBranchPublicationResult, WorkspaceChangeRequestDraft,
-    WorkspaceCliLaunchResult, WorkspaceMaterialization, WorkspacePlanningDocument,
-    WorkspacePlanningDocumentDescriptor, WorkspacePlanningDocumentId,
-    WorkspacePlanningDocumentList, WorkspacePreflight, WorkspaceRemovalKind,
-    WorkspaceRemovalPreflight, WorkspaceRepositoryAdditionPreflight,
+    RemoveWorkspaceResult, ReplyGitlabDiscussionRequest, RepositoryAvailableBranch,
+    RepositoryBranchSummary, RepositoryCatalog, RepositoryForge, RepositoryRecommendation,
+    RepositoryRecommendationSource, RepositorySummary, ResolveWorkspaceReviewThreadRequest,
+    ReviewAnchorState, ReviewAuthor, ReviewCodeSide, ReviewComment, ReviewTarget,
+    ReviewThreadState, TerminalProvider, UnlinkWorkspaceWorkItemRequest,
+    UpdateWorkspacePlanningDocumentRequest, WorkspaceAgentBriefResult,
+    WorkspaceBranchPublicationResult, WorkspaceChangeRequestDraft, WorkspaceCliLaunchResult,
+    WorkspaceMaterialization, WorkspacePlanningDocument, WorkspacePlanningDocumentDescriptor,
+    WorkspacePlanningDocumentId, WorkspacePlanningDocumentList, WorkspacePreflight,
+    WorkspaceRemovalKind, WorkspaceRemovalPreflight, WorkspaceRepositoryAdditionPreflight,
     WorkspaceRepositoryAdditionResult, WorkspaceRepositoryAlignmentPreflight,
     WorkspaceRepositoryAlignmentResult, WorkspaceRepositoryDiff, WorkspaceRepositoryFileReview,
     WorkspaceRepositoryRemovalResult, WorkspaceRepositoryReviewGraph,
     WorkspaceRepositoryReviewLink, WorkspaceRepositoryReviewNode, WorkspaceRepositorySyncResult,
-    WorkspaceReviewThread, WorkspaceReviewThreadList, WorkspaceWorkItemLink,
-    WorkspaceWorkItemLinkList, WorkspaceWorkItemLinkPreview, WorkspaceWorkItemProvider,
-    WorkspaceWorkItemRole, WorkspaceWorkItemSnapshot, WorkspaceWorkItemUnlinkResult,
+    WorkspaceReviewThread, WorkspaceReviewThreadList, WorkspaceSetupRecovery,
+    WorkspaceWorkItemLink, WorkspaceWorkItemLinkList, WorkspaceWorkItemLinkPreview,
+    WorkspaceWorkItemProvider, WorkspaceWorkItemRole, WorkspaceWorkItemSnapshot,
+    WorkspaceWorkItemUnlinkResult,
 };
 pub use runtime::{
     RuntimeEndpoint, RuntimeError, RuntimeHealthCheck, RuntimeLimits, RuntimeServiceRequest,
@@ -110,7 +123,25 @@ pub use runtime_analysis::{
     RuntimeConfidence, RuntimeEvidence, RuntimeGraphAnalysis, RuntimeGraphStatus,
     RuntimePortCandidate, RuntimeServiceCandidate,
 };
-pub use service::{LocalWtsError, LocalWtsService};
+pub use service::{
+    AgentConversation, AgentConversationCapture, AgentConversationList, AgentConversationMessage,
+    AgentConversationMessageRole, AgentConversationMessageStatus, AgentConversationPreview,
+    AgentConversationSource, AgentTurnChangedFile, AgentTurnChanges, AgentTurnChangesObservation,
+    AgentTurnChangesState, AgentTurnCheck, AgentTurnCheckRun, AgentTurnCheckStatus,
+    AgentTurnCheckpoint, AgentTurnChecks, AgentTurnChecksState, AgentTurnDecision,
+    AgentTurnDecisionCheck, AgentTurnDecisionKind, AgentTurnDecisions, AgentTurnDecisionsState,
+    AgentTurnFileStatus, AgentTurnRestoreAction, AgentTurnRestoreBlocker, AgentTurnRestoreFile,
+    AgentTurnRestorePreflight, AgentTurnRestorePreflightState, AgentTurnRestoreRequest,
+    AgentTurnRestoreResult, AgentTurnRestoreResultState, AgentWorkItem, AgentWorkItemCancelRequest,
+    AgentWorkItemIntegrationBlocker, AgentWorkItemIntegrationFile,
+    AgentWorkItemIntegrationPreflight, AgentWorkItemIntegrationPreflightState,
+    AgentWorkItemIntegrationResult, AgentWorkItemIntegrationResultState, AgentWorkItemPreview,
+    AgentWorkItemPreviewState, AgentWorkItemRequest, AgentWorkItemState, AgentWorkSet,
+    AgentWorkSetKind, AgentWorkSetList, CancelAgentConversationMessageRequest,
+    CreateAgentConversationRequest, CreateAgentWorkSetRequest, IntegrateAgentWorkItemRequest,
+    LocalWtsError, LocalWtsService, RecordAgentTurnDecisionRequest, RunAgentTurnCheckRequest,
+    SendAgentConversationMessageRequest, UpdateAgentConversationMessageRequest,
+};
 pub use testing::{
     ArtifactKind, ArtifactMetadata, BrowserJourneyAdapter, BrowserJourneyFailure,
     ConsoleErrorSummary, FailureCapsule, JourneyAction, JourneyKey, JourneyPlan, JourneyPlanError,
@@ -127,9 +158,10 @@ pub use time_review::{
 };
 pub use wts_integrations::{
     GithubReview, GithubReviewDiagnosticCode, GithubReviewInbox, GithubReviewInboxState,
-    GitlabMergeRequest, GitlabMergeRequestDiagnosticCode, GitlabMergeRequestInbox,
-    GitlabMergeRequestInboxState, GitlabMergeRequestStatus, GitlabReview,
+    GitlabDiscussions, GitlabMergeRequest, GitlabMergeRequestDiagnosticCode,
+    GitlabMergeRequestInbox, GitlabMergeRequestInboxState, GitlabMergeRequestStatus, GitlabReview,
     GitlabReviewCommentRequest, GitlabReviewCommit, GitlabReviewDiscussion,
-    GitlabReviewDiscussionComment, GitlabReviewInbox, GitlabReviewPatch, GitlabReviewState,
-    PublishGitlabReviewCommentResult,
+    GitlabReviewDiscussionComment, GitlabReviewDiscussionPosition, GitlabReviewInbox,
+    GitlabReviewPatch, GitlabReviewState, PublishGitlabReviewCommentResult,
+    ReplyGitlabDiscussionResult,
 };
