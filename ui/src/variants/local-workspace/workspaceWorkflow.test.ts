@@ -100,6 +100,17 @@ describe("workspace workflow projection", () => {
     };
 
     expect(gitlabReviewForWorkspace(workspace, [review])).toEqual(review);
+    // Real review workspaces keep a short label and a full-path title.
+    expect(
+      gitlabReviewForWorkspace(
+        {
+          ...workspace,
+          intent: { type: "repositorySet", label: "Review apex-api !9" },
+          title: "Review devtools/apex-api !9",
+        },
+        [review],
+      ),
+    ).toEqual(review);
     expect(
       gitlabReviewForWorkspace(
         {
@@ -135,6 +146,21 @@ describe("workspace workflow projection", () => {
       repository: "devtools/apex-api",
       number: 9,
     });
+    expect(
+      gitlabReviewTargetForWorkspace(
+        {
+          ...workspace,
+          intent: { type: "repositorySet", label: "Local repositories · apex-api" },
+          title: "Review devtools/apex-api !9",
+          repositoryPlans: [{ repositoryId: "local_clone_apex_api", label: "apex-api", baseRef: "DEVTOOLS-6349" }],
+        },
+        [],
+        [
+          { id: "8", repositoryId: "local_clone_apex_api", projectPath: "devtools/apex-api", webUrl: "https://gitlab.example/8", iid: 8, title: "Other", sourceBranch: "x", targetBranch: "main", authorUsername: "frank", updatedAt: "2026-09-01T00:00:00Z", draft: false, status: "open" },
+          { id: "9", repositoryId: "local_clone_apex_api", projectPath: "devtools/apex-api", webUrl: "https://gitlab.example/9", iid: 9, title: "Add retries", sourceBranch: "DEVTOOLS-6349", targetBranch: "main", authorUsername: "frank", updatedAt: "2026-09-02T00:00:00Z", draft: false, status: "merged" },
+        ],
+      ),
+    ).toMatchObject({ number: 9, status: "merged", title: "Add retries" });
     expect(
       gitlabReviewForWorkspace(
         {

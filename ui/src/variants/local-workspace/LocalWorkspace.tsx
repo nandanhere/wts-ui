@@ -1,6 +1,7 @@
 import { useWorkspaceAttention } from "./useWorkspaceAttention";
 import { openAgentFeedbackResult } from "../../lib/agentFeedbackEvents";
 import { loadAgentSessions } from "../../lib/agentSessionDiscovery";
+import type { AgentMrLinkProposal } from "../../lib/wtsClient";
 import { returnToFeedbackSelection } from "../../lib/agentFeedbackNavigation";
 import { getWorkspaceAttentionStore, type WorkspaceAttentionItem } from "./workspaceAttention";
 import { ConnectedWorkspaceAttentionCard, ConnectedBoardAttentionStatus } from "./WorkspaceAttentionCard";
@@ -14,6 +15,7 @@ import {
   lazy,
   Suspense,
   type FormEvent,
+  type ReactNode,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -83,6 +85,14 @@ import {
 import { useTheme } from "../../theme";
 import { useVisiblePolling } from "../../lib/useVisiblePolling";
 import { useWorkspaceGitlabDiscussions } from "./gitlabDiscussions";
+import { reviewSession } from "./workingChangesState";
+import {
+  ReviewAttentionStrip,
+  ReviewHomePanel,
+  unreadHumanThreads,
+  useSavedCodeReview,
+  type ReviewThreadSummary,
+} from "./ReviewHomePanel";
 import { SelectMenu } from "../../components/SelectMenu";
 import { SetupSheet } from "./SetupSheet";
 import { VerificationPanel, type VerificationAttentionSelection } from "./VerificationPanel";
@@ -956,6 +966,9 @@ function AddWorkspaceRepositoryDialog({
   workspace: Workspace;
   repositoryCatalog: RepositoryCatalog | null;
 }) {
+  const [clonedRepositories, setClonedRepositories] = useState<RepositoryCatalog["repositories"]>([]);
+  const [remoteUrl, setRemoteUrl] = useState("");
+  const [cloning, setCloning] = useState(false);
   const availableRepositories = useMemo(() => {
     const currentIds = new Set(
       workspace.repositoryPlans.flatMap((repository) =>
@@ -965,12 +978,17 @@ function AddWorkspaceRepositoryDialog({
     const currentLabels = new Set(
       workspace.repositoryPlans.map((repository) => repository.label.toLowerCase()),
     );
-    return (repositoryCatalog?.repositories ?? []).filter(
+    const catalog = repositoryCatalog?.repositories ?? [];
+    const catalogIds = new Set(catalog.map((repository) => repository.id));
+    return [
+      ...catalog,
+      ...clonedRepositories.filter((repository) => !catalogIds.has(repository.id)),
+    ].filter(
       (repository) =>
         !currentIds.has(repository.id) &&
         !currentLabels.has(repository.label.toLowerCase()),
     );
-  }, [repositoryCatalog, workspace.repositoryPlans]);
+  }, [repositoryCatalog, clonedRepositories, workspace.repositoryPlans]);
   const [repositoryId, setRepositoryId] = useState("");
   const [baseRef, setBaseRef] = useState("");
   const [preflight, setPreflight] =
@@ -983,13 +1001,45 @@ function AddWorkspaceRepositoryDialog({
 
   useEffect(() => {
     if (!open) return;
-    const repository = availableRepositories[0];
-    setRepositoryId(repository?.id ?? "");
-    setBaseRef(repository?.defaultBranch.name ?? "");
+    setRepositoryId((current) => {
+      const kept = availableRepositories.find((repository) => repository.id === current);
+      const repository = kept ?? availableRepositories[0];
+      if (!kept) setBaseRef(repository?.defaultBranch.name ?? "");
+      return repository?.id ?? "";
+    });
     setPreflight(null);
     setState("idle");
     setError("");
   }, [open, availableRepositories]);
+
+  useEffect(() => {
+    if (!open) {
+      setRemoteUrl("");
+      setRepositoryId("");
+    }
+  }, [open]);
+
+  const cloneFromUrl = async () => {
+    const url = remoteUrl.trim();
+    if (!url || cloning || state !== "idle") return;
+    setCloning(true);
+    setError("");
+    try {
+      const result = await client.cloneRepository({ remoteUrl: url });
+      const repository = result.repository;
+      setClonedRepositories((current) => [
+        ...current.filter((item) => item.id !== repository.id),
+        repository,
+      ]);
+      setRepositoryId(repository.id);
+      setBaseRef(result.selectedBaseRef ?? repository.defaultBranch.name);
+      setRemoteUrl("");
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "WTS could not clone this repository.");
+    } finally {
+      setCloning(false);
+    }
+  };
 
   const review = async () => {
     if (!repositoryId || !baseRef || state !== "idle") return;
@@ -1087,6 +1137,38 @@ function AddWorkspaceRepositoryDialog({
                   </SelectMenu>
                 </div>
               </div>
+              <div className={styles.field}>
+                <Label htmlFor="add-workspace-repository-url">Or clone from URL</Label>
+                <div
+                  className={styles.inputWithIcon}
+                  data-ui="workspace.add-repository-url"
+                  data-ui-label="Repository URL"
+                >
+                  <Glyph name="branch" size={16} />
+                  <input
+                    aria-label="Repository URL"
+                    disabled={cloning || state !== "idle"}
+                    id="add-workspace-repository-url"
+                    onChange={(event) => setRemoteUrl(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") {
+                        event.preventDefault();
+                        void cloneFromUrl();
+                      }
+                    }}
+                    placeholder="https://gitlab.example.com/group/repo.git"
+                    type="url"
+                    value={remoteUrl}
+                  />
+                  <Button
+                    className={styles.secondaryButton}
+                    isDisabled={!remoteUrl.trim() || cloning || state !== "idle"}
+                    onPress={() => void cloneFromUrl()}
+                  >
+                    {cloning ? "Cloning…" : "Clone"}
+                  </Button>
+                </div>
+              </div>
               {selectedRepository && (
                 <dl className={styles.repositoryIdentityReview}>
                   <div><dt>Namespace</dt><dd>{repositoryCatalogIdentity(selectedRepository)}</dd></div>
@@ -1123,7 +1205,7 @@ function AddWorkspaceRepositoryDialog({
                   <small>New managed worktree · {preflight.branchName}</small>
                 </div>
               )}
-              {availableRepositories.length === 0 && <p>No additional local repositories are available.</p>}
+              {availableRepositories.length === 0 && <p>No additional local repositories are available. Enter a URL to clone one.</p>}
               {error && <p className={styles.sourceImportMessage} data-error>{error}</p>}
             </form>
           </div>
@@ -1958,6 +2040,10 @@ function DraftOverviewPanel({
   onReviewRemainingFiles,
   onRecoverSetup,
   gitlabReview,
+  onRetryReviewStatus,
+  reviewInboxFresh = false,
+  reviewInboxLoading = false,
+  reviewAttention,
 }: {
   client: WorkspaceClient;
   workspace: Workspace;
@@ -1992,6 +2078,13 @@ function DraftOverviewPanel({
   onReviewRemainingFiles: () => void;
   onRecoverSetup: () => void;
   gitlabReview?: GitlabReviewTarget & Partial<GitlabReview>;
+  onRetryReviewStatus?: () => void;
+  /** True when GitLab answered the review inbox read. A missing MR is then not an error. */
+  reviewInboxFresh?: boolean;
+  /** True while the first review inbox read waits for GitLab. */
+  reviewInboxLoading?: boolean;
+  /** Review counts and the next review step. It shows below the MR summary. */
+  reviewAttention?: ReactNode;
 }) {
   type GitlabInboxView =
     | { state: "loading" }
@@ -2053,6 +2146,31 @@ function DraftOverviewPanel({
   gitlabHandoffRef.current = gitlabHandoff;
   const [openingGitlabMergeRequestId, setOpeningGitlabMergeRequestId] =
     useState<string | null>(null);
+  const [linkingMergeRequestWorktree, setLinkingMergeRequestWorktree] =
+    useState<MaterializedWorktree | null>(null);
+  const [mergeRequestHint, setMergeRequestHint] = useState("");
+  const [mergeRequestLinkError, setMergeRequestLinkError] = useState("");
+  const [openBranchNoteId, setOpenBranchNoteId] = useState<string | null>(null);
+  const [linkingMergeRequest, setLinkingMergeRequest] = useState(false);
+  const [agentMrHints, setAgentMrHints] = useState<AgentMrLinkProposal[]>([]);
+  useEffect(() => {
+    let active = true;
+    const refresh = () => {
+      void loadAgentSessions(client, workspace.id).then((list: AgentSessionList) => {
+        if (!active) return;
+        setAgentMrHints([
+          ...list.sessions.filter((session) => session.workspaceId === workspace.id),
+          ...(list.observedSessions ?? []).filter((session) => session.workspaceId === workspace.id),
+        ].sort((left, right) =>
+          ("lastEventAtUnixMs" in right ? right.lastEventAtUnixMs : right.lastHeartbeatAtUnixMs)
+          - ("lastEventAtUnixMs" in left ? left.lastEventAtUnixMs : left.lastHeartbeatAtUnixMs)
+        ).flatMap((session) => session.mrLinkProposals ?? []));
+      }, () => { if (active) setAgentMrHints([]); });
+    };
+    refresh();
+    const timer = window.setInterval(refresh, 10_000);
+    return () => { active = false; window.clearInterval(timer); };
+  }, [client, workspace.id]);
   const [alignmentOpen, setAlignmentOpen] = useState(false);
   const [alignmentRepositoryId, setAlignmentRepositoryId] = useState<string | null>(null);
   const alignmentGeneration = useRef(0);
@@ -2117,7 +2235,11 @@ function DraftOverviewPanel({
     : undefined;
   const reviewStatusLabel = gitlabReview
     ? !gitlabReview.status
-      ? "Status unavailable"
+      ? reviewInboxFresh
+        ? "Not in your reviews"
+        : reviewInboxLoading
+          ? "Checking status"
+          : "Status unavailable"
       : gitlabReview.status === "merged"
       ? "Merged"
       : gitlabReview.status === "closed"
@@ -2132,7 +2254,11 @@ function DraftOverviewPanel({
     : "";
   const reviewStatusDetail = gitlabReview
     ? !gitlabReview.status
-      ? "GitLab no longer returns the current review status."
+      ? reviewInboxFresh
+        ? "GitLab no longer asks you to review this MR. It can be approved, merged, or given to another reviewer. Open the MR in GitLab to see its state."
+        : reviewInboxLoading
+          ? "WTS reads the MR status from GitLab. You can review the changes now."
+          : "WTS cannot read the current status of this MR from GitLab. Retry the status check or open the MR in GitLab."
       : gitlabReview.status === "merged"
       ? "GitLab merged this change. No review action remains."
       : gitlabReview.status === "closed"
@@ -2188,7 +2314,12 @@ function DraftOverviewPanel({
   const workspaceMergeRequests =
     gitlabInbox.state === "ready"
       ? gitlabInbox.inbox.mergeRequests.filter(
-          (mergeRequest) => mergeRequest.status === "open",
+          (mergeRequest) =>
+            mergeRequest.status === "open" &&
+            materialization?.worktrees.some((worktree) =>
+              worktree.repositoryId === mergeRequest.repositoryId &&
+              worktree.branchName === mergeRequest.sourceBranch
+            ),
         )
       : [];
   const workItemDeliveryLabel =
@@ -2360,6 +2491,87 @@ function DraftOverviewPanel({
       );
     } finally {
       setOpeningGitlabMergeRequestId(null);
+    }
+  };
+  const linkExistingMergeRequest = async (
+    created: MaterializedWorktree, iid: number, fromDialog = false,
+  ) => {
+    if (linkingMergeRequest) return;
+    setLinkingMergeRequest(true);
+    setMergeRequestLinkError("");
+    const workspaceId = workspace.id;
+    try {
+      const linked = await client.linkWorkspaceGitlabMergeRequest(
+        workspaceId, created.repositoryId, iid,
+      );
+      if (linked.repositoryId !== created.repositoryId || linked.iid !== iid) {
+        throw new Error("WTS returned a different merge request.");
+      }
+      if (alignmentWorkspaceId.current !== workspaceId) return;
+      setGitlabInbox((current) => {
+        const inbox = current.state === "ready"
+          ? current.inbox
+          : {
+              schemaVersion: 1 as const,
+              state: "stale" as const,
+              mergeRequests: [],
+              fetchedAtUnixMs: null,
+              detail: "WTS linked the MR. Other MR status is not current.",
+            };
+        return {
+          state: "ready",
+          inbox: {
+            ...inbox,
+            mergeRequests: [
+              ...inbox.mergeRequests.filter((item) =>
+                item.repositoryId !== linked.repositoryId ||
+                item.sourceBranch === created.branchName
+              ),
+              linked,
+            ],
+          },
+        };
+      });
+      setLinkingMergeRequestWorktree(null);
+      setMergeRequestHint("");
+      setRepositoryNotice(`${created.label} · MR !${iid} linked. The local branch did not change.`);
+      setRepositoryNoticeError(false);
+      invalidateWorkspaceGitlabMergeRequests(client, workspaceId);
+      void loadWorkspaceGitlabMergeRequests(client, workspaceId, { force: true }).then(
+        (inbox) => {
+          if (alignmentWorkspaceId.current !== workspaceId) return;
+          setGitlabInbox({
+            state: "ready",
+            inbox: {
+              ...inbox,
+              mergeRequests: inbox.mergeRequests.some((item) =>
+                item.repositoryId === linked.repositoryId && item.iid === linked.iid
+              ) ? inbox.mergeRequests : [
+                ...inbox.mergeRequests.filter((item) =>
+                  item.repositoryId !== linked.repositoryId ||
+                  item.sourceBranch === created.branchName
+                ),
+                linked,
+              ],
+            },
+          });
+        },
+        () => {
+          if (alignmentWorkspaceId.current !== workspaceId) return;
+          setRepositoryNotice(
+            `${created.label} · MR !${iid} linked. WTS could not refresh other MRs.`,
+          );
+        },
+      );
+    } catch (cause) {
+      const detail = cause instanceof Error ? cause.message : "WTS could not link this merge request.";
+      if (fromDialog) setMergeRequestLinkError(detail);
+      else {
+        setRepositoryNotice(detail);
+        setRepositoryNoticeError(true);
+      }
+    } finally {
+      setLinkingMergeRequest(false);
     }
   };
   const prepareChangeRequest = async (
@@ -2726,6 +2938,18 @@ function DraftOverviewPanel({
               )}
             </div>
             <div className={styles.reviewWorkspaceActions}>
+              {!gitlabReview.status && !reviewInboxFresh && !reviewInboxLoading && onRetryReviewStatus && (
+                <button
+                  className={styles.reviewWorkspaceSecondaryAction}
+                  data-ui="workspace-overview.review-retry"
+                  data-ui-label="Retry MR status"
+                  onClick={onRetryReviewStatus}
+                  type="button"
+                >
+                  <Glyph name="refresh" size={12} />
+                  Retry status
+                </button>
+              )}
               <button
                 className={styles.reviewWorkspaceSecondaryAction}
                 disabled={openingGitlabMergeRequestId !== null}
@@ -2754,6 +2978,7 @@ function DraftOverviewPanel({
             </div>
           </section>
         )}
+        {gitlabReview && reviewWorktree && reviewAttention}
         {gitlabReview && reviewWorktree ? (
           <>
             {suggestedJiraIssueKey && (
@@ -2956,9 +3181,10 @@ function DraftOverviewPanel({
                       )}
                     </span>
                     <span className={styles.repoBase} role="cell">
-                      <code>{repository.baseRef}</code>
-                      {created && (
-                        <span className={styles.repoBaseMeta}>
+                      <span className={styles.repoBaseMeta}>
+                        <code>{repository.baseRef}</code>
+                        {created && (
+                          <>
                           <small>{created.baseCommitOid.slice(0, 8)}</small>
                           <InfoTooltip
                             content={
@@ -2988,29 +3214,33 @@ function DraftOverviewPanel({
                                 : "Sync"}
                             </Button>
                           </InfoTooltip>
-                        </span>
-                      )}
+                          </>
+                        )}
+                      </span>
                     </span>
-                    <span className={styles.repoWorkCell} role="cell">
-                      {created?.activity && workSummary !== "Clean" ? (
-                        <button
-                          aria-label={`Review changes in ${repository.label}: ${workSummary}`}
-                          className={styles.repoChangesLink}
-                          onClick={() => void reviewRepositoryChanges(created)}
-                          type="button"
-                        >
-                          <StateDot state="attention" />
-                          {workSummary}
-                          <Glyph name="arrow" size={11} />
-                        </button>
-                      ) : (
-                        <span className={styles.repoSignal}>
-                          <StateDot
-                            state={created?.activity ? "active" : "planned"}
-                          />
-                          {workSummary}
-                        </span>
-                      )}
+                    <div className={styles.repoWorkCell} role="cell">
+                      <div className={styles.repoLocalWork} role="group" aria-label={`Local work in ${repository.label}`}>
+                        <span className={styles.repoWorkLabel}>Local</span>
+                        {created?.activity && workSummary !== "Clean" ? (
+                          <button
+                            aria-label={`Review changes in ${repository.label}: ${workSummary}`}
+                            className={styles.repoChangesLink}
+                            onClick={() => void reviewRepositoryChanges(created)}
+                            type="button"
+                          >
+                            <StateDot state="attention" />
+                            {workSummary}
+                            <Glyph name="arrow" size={11} />
+                          </button>
+                        ) : (
+                          <span className={styles.repoSignal}>
+                            <StateDot
+                              state={created?.activity ? "active" : "planned"}
+                            />
+                            {workSummary}
+                          </span>
+                        )}
+                      </div>
                       {created && reviewForRepository ? (
                         <span className={styles.repoReviewLinks}>
                           <button
@@ -3105,72 +3335,134 @@ function DraftOverviewPanel({
                               WTS checks GitLab
                             </span>
                           ) : mergeRequests.length > 0 ? (
-                            <span className={styles.repoDeliveryFallback}>
+                            <div className={styles.repoDeliveryFallback}>
                               {mergeRequests.map((mergeRequest) => {
                                 const hasNewLocalWork = Boolean(
+                                  mergeRequest.sourceBranch === created.branchName &&
                                   mergeRequest.sourceHeadCommitOid &&
-                                    created.gitState?.headCommitOid &&
-                                    mergeRequest.sourceHeadCommitOid !==
-                                      created.gitState.headCommitOid,
+                                  created.gitState?.headCommitOid &&
+                                  mergeRequest.sourceHeadCommitOid !==
+                                    created.gitState.headCommitOid,
                                 );
                                 return (
-                                  <a
-                                    aria-label={`Open ${repository.label} merge request !${mergeRequest.iid} on GitLab: ${mergeRequest.title}`}
-                                    className={styles.repoDeliveryLink}
-                                    aria-disabled={
-                                      commandBusy || openingGitlabMergeRequestId !== null
-                                    }
-                                    data-status={mergeRequest.status}
-                                    href={mergeRequest.webUrl}
+                                  <div
+                                    aria-label={`Linked MR !${mergeRequest.iid} for ${repository.label}`}
+                                    className={styles.repoLinkedMr}
                                     key={mergeRequest.id}
-                                    onClick={(event) => {
-                                      event.preventDefault();
-                                      if (
-                                        commandBusy ||
-                                        openingGitlabMergeRequestId !== null
-                                      ) return;
-                                      void openGitlabMergeRequest(created, mergeRequest);
-                                    }}
-                                    rel="noreferrer"
-                                    target="_blank"
+                                    role="group"
                                   >
-                                    <Glyph name="external" size={11} />
-                                    {openingGitlabMergeRequestId ===
-                                    created.repositoryId
-                                      ? "Opening MR…"
-                                      : `${mergeRequest.draft ? "Draft " : ""}MR !${mergeRequest.iid} · ${
-                                          mergeRequest.status === "merged"
-                                            ? "Merged"
-                                            : mergeRequest.status === "closed"
-                                              ? "Closed"
-                                              : "Open"
-                                        }`}
-                                    {hasNewLocalWork ? " · New local work" : ""}
-                                  </a>
+                                    <span className={styles.repoWorkLabel}>Linked MR</span>
+                                    <a
+                                      aria-label={`Open ${repository.label} merge request !${mergeRequest.iid} on GitLab: ${mergeRequest.title}`}
+                                      className={styles.repoDeliveryLink}
+                                      aria-disabled={commandBusy || openingGitlabMergeRequestId !== null}
+                                      data-status={mergeRequest.status}
+                                      href={mergeRequest.webUrl}
+                                      onClick={(event) => {
+                                        event.preventDefault();
+                                        if (commandBusy || openingGitlabMergeRequestId !== null) return;
+                                        void openGitlabMergeRequest(created, mergeRequest);
+                                      }}
+                                      rel="noreferrer"
+                                      target="_blank"
+                                    >
+                                      <Glyph name="external" size={11} />
+                                      {openingGitlabMergeRequestId === created.repositoryId
+                                        ? "Opening MR…"
+                                        : `${mergeRequest.draft ? "Draft " : ""}MR !${mergeRequest.iid} · ${
+                                            mergeRequest.status === "merged"
+                                              ? "Merged"
+                                              : mergeRequest.status === "closed"
+                                                ? "Closed"
+                                                : "Open"
+                                          }`}
+                                      {hasNewLocalWork ? " · New local work" : ""}
+                                    </a>
+                                    {mergeRequest.sourceBranch !== created.branchName && (
+                                      <button
+                                        aria-controls={`branch-note-${mergeRequest.id}`}
+                                        aria-expanded={openBranchNoteId === mergeRequest.id}
+                                        className={styles.repoMrBranchToggle}
+                                        data-ui="workspace.repo-branch-mismatch"
+                                        data-ui-label="Different branches"
+                                        onClick={() =>
+                                          setOpenBranchNoteId((current) =>
+                                            current === mergeRequest.id ? null : mergeRequest.id,
+                                          )
+                                        }
+                                        type="button"
+                                      >
+                                        Different branches
+                                        <Glyph name="chevron" size={9} />
+                                      </button>
+                                    )}
+                                    {mergeRequest.sourceBranch !== created.branchName &&
+                                      openBranchNoteId === mergeRequest.id && (
+                                        <div
+                                          className={styles.repoMrBranchDetails}
+                                          id={`branch-note-${mergeRequest.id}`}
+                                        >
+                                          <p>WTS does not compare or publish this MR from this worktree.</p>
+                                          <dl>
+                                            <dt>MR</dt>
+                                            <dd><code title={mergeRequest.sourceBranch}>{mergeRequest.sourceBranch}</code></dd>
+                                            <dt>Local</dt>
+                                            <dd><code title={created.branchName}>{created.branchName}</code></dd>
+                                          </dl>
+                                          <button
+                                            className={styles.repoDeliveryLink}
+                                            disabled={commandBusy || linkingMergeRequest}
+                                            onClick={() => {
+                                              setLinkingMergeRequestWorktree(created);
+                                              setMergeRequestHint("");
+                                              setMergeRequestLinkError("");
+                                            }}
+                                            type="button"
+                                          >
+                                            Change MR link
+                                          </button>
+                                        </div>
+                                    )}
+                                  </div>
                                 );
                               })}
-                            </span>
-                          ) : workSummary !== "Clean" &&
+                            </div>
+                          ) : (workSummary !== "Clean" || agentMrHints.some((proposal) => proposal.repositoryId === created.repositoryId)) &&
                             gitlabInbox.state === "ready" &&
                             gitlabInbox.inbox.state === "fresh" ? (
-                            <button
-                              className={styles.repoDeliveryLink}
-                              disabled={
-                                commandBusy ||
-                                preparingChangeRequestId !== null ||
-                                openingChangeRequest
-                              }
-                              onClick={() => void prepareChangeRequest(created)}
-                              type="button"
-                            >
-                              <Glyph name="branch" size={11} />
-                              {preparingChangeRequestId === created.repositoryId
-                                ? "Checking…"
-                                : "Prepare MR"}
-                            </button>
+                            <span className={styles.repoDeliveryActions}>
+                              <button
+                                className={styles.repoDeliveryLink}
+                                disabled={
+                                  commandBusy ||
+                                  preparingChangeRequestId !== null ||
+                                  openingChangeRequest
+                                }
+                                onClick={() => void prepareChangeRequest(created)}
+                                type="button"
+                              >
+                                <Glyph name="branch" size={11} />
+                                {preparingChangeRequestId === created.repositoryId
+                                  ? "Checking…"
+                                  : "Prepare MR"}
+                              </button>
+                              {agentMrHints.filter((proposal) =>
+                                proposal.repositoryId === created.repositoryId
+                              ).slice(0, 1).map((proposal) => (
+                                <button
+                                  className={styles.repoDeliveryLink}
+                                  disabled={commandBusy || linkingMergeRequest}
+                                  key={`${proposal.repositoryId}:${proposal.iid}`}
+                                  onClick={() => void linkExistingMergeRequest(created, proposal.iid)}
+                                  type="button"
+                                >
+                                  {linkingMergeRequest ? "Checking MR…" : `Link agent MR !${proposal.iid}`}
+                                </button>
+                              ))}
+                            </span>
                           ) : null
                         ) : null}
-                    </span>
+                    </div>
                   </div>
                 );
               })(),
@@ -3309,6 +3601,64 @@ function DraftOverviewPanel({
         onRequestVerification={() => void requestChangeRequestVerification()}
         onSubmit={(title, body) => void openChangeRequest(title, body)}
       />
+      <Dialog.Root
+        open={linkingMergeRequestWorktree !== null}
+        onOpenChange={(open) => {
+          if (!open && !linkingMergeRequest) {
+            setLinkingMergeRequestWorktree(null);
+            setMergeRequestLinkError("");
+          }
+        }}
+      >
+        <Dialog.Portal>
+          <Dialog.Overlay className={styles.dialogOverlay} />
+          <Dialog.Content
+            className={`${styles.portalSurface} ${styles.existingMergeRequestDialog}`}
+            data-ui="workspace.link-merge-request-dialog"
+            data-ui-label="Link merge request dialog"
+          >
+            <Dialog.Title>Find existing MR for {linkingMergeRequestWorktree?.label}</Dialog.Title>
+            <Dialog.Description>
+              WTS checks this MR in GitLab. This does not change the local branch or worktree.
+            </Dialog.Description>
+            <form onSubmit={(event) => {
+              event.preventDefault();
+              const input = mergeRequestHint.trim();
+              const iid = Number(input);
+              if (!/^[1-9]\d*$/.test(input) || !Number.isSafeInteger(iid)) {
+                setMergeRequestLinkError("Enter a valid MR number.");
+                return;
+              }
+              if (linkingMergeRequestWorktree) {
+                void linkExistingMergeRequest(linkingMergeRequestWorktree, iid, true);
+              }
+            }}>
+              <label htmlFor="existing-merge-request-hint">MR number</label>
+              <input
+                autoCapitalize="none"
+                autoComplete="off"
+                autoFocus
+                id="existing-merge-request-hint"
+                inputMode="numeric"
+                maxLength={16}
+                onChange={(event) => {
+                  setMergeRequestHint(event.target.value);
+                  setMergeRequestLinkError("");
+                }}
+                placeholder="43"
+                value={mergeRequestHint}
+              />
+              {mergeRequestLinkError && <p role="alert">{mergeRequestLinkError}</p>}
+              <div className={styles.dialogActions}>
+                <Dialog.Close className={styles.secondaryButton} disabled={linkingMergeRequest}>Cancel</Dialog.Close>
+                <button className={styles.primaryButton} disabled={linkingMergeRequest || !mergeRequestHint.trim()} type="submit">
+                  {linkingMergeRequest ? "Checking MR…" : "Link MR"}
+                </button>
+              </div>
+            </form>
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
     </div>
   );
 }
@@ -4594,6 +4944,8 @@ export function LocalWorkspace({
   const [setupError, setSetupError] = useState("");
   const [setupRevision, setSetupRevision] = useState(0);
   const [activeTab, setActiveTab] = useState<WorkbenchTab>(initialWorkbenchTab);
+  // The Changes view puts the MR title and selectors here when the workspace reviews an MR.
+  const [identitySlot, setIdentitySlot] = useState<HTMLElement | null>(null);
   const [reviewRepositoryId, setReviewRepositoryId] = useState(
     () => new URLSearchParams(globalThis.location?.search ?? "").get("repository") ?? "",
   );
@@ -8144,7 +8496,7 @@ export function LocalWorkspace({
         </div>
       </div>
 
-      {registryState === "ready" && workspaces.length > 0 && <ConnectedBoardAttentionStatus store={attentionStore} />}
+      {registryState === "ready" && workspaces.length > 0 && <ConnectedBoardAttentionStatus store={attentionStore} onRefresh={() => refreshAttention(true)} />}
       {registryState === "loading" ? (
         <div className={styles.registryState}>
           <div
@@ -8209,6 +8561,34 @@ export function LocalWorkspace({
           onDragStart={handleWorkspaceDragStart}
           sensors={boardSensors}
         >
+          {visibleLanes.length > 1 && (
+            <nav
+              aria-label="Jump to a column"
+              className={styles.laneJumpBar}
+              data-ui="spaces.lane-jump"
+              data-ui-label="Column jump bar"
+            >
+              {visibleLanes.map((lane) => (
+                <a
+                  className={styles.laneJumpLink}
+                  data-tone={laneDetails[lane].tone}
+                  href={`#workspace-lane-${lane}`}
+                  key={lane}
+                  onClick={(event) => {
+                    event.preventDefault();
+                    document
+                      .getElementById(`workspace-lane-${lane}`)
+                      ?.closest("section")
+                      ?.scrollIntoView({ block: "nearest", inline: "start", behavior: "smooth" });
+                  }}
+                >
+                  <StateDot state={lane} />
+                  {laneDetails[lane].label}
+                  <b>{visibleByLane[lane].length + (lane === "planned" ? visibleAssignedGitlabReviews.length : 0)}</b>
+                </a>
+              ))}
+            </nav>
+          )}
           <section
             className={styles.kanban}
             data-ui="spaces.lanes"
@@ -8230,6 +8610,12 @@ export function LocalWorkspace({
                   <span>
                     <StateDot state={lane} />
                     <h2 id={laneHeadingId}>{detail.label}</h2>
+                    <span
+                      aria-label={`${items.length + (lane === "planned" ? visibleAssignedGitlabReviews.length : 0)} items`}
+                      className={styles.laneCount}
+                    >
+                      {items.length + (lane === "planned" ? visibleAssignedGitlabReviews.length : 0)}
+                    </span>
                   </span>
                 </header>
                 <div className={styles.laneCards}>
@@ -8434,6 +8820,7 @@ export function LocalWorkspace({
     ? gitlabReviewTargetForWorkspace(
         selectedWorkspace,
         myReviews.gitlabInbox?.reviews ?? [],
+        workspaceGitlabInboxes.get(selectedWorkspace.id)?.mergeRequests,
       )
     : undefined;
   const gitlabConversations = useWorkspaceGitlabDiscussions({
@@ -8443,6 +8830,32 @@ export function LocalWorkspace({
     review: selectedGitlabReview,
     enabled: view === "workbench" && Boolean(workspaceMaterialization),
   });
+  const savedCodeReview = useSavedCodeReview(
+    client,
+    selectedWorkspace?.id ?? "",
+    view === "workbench" && Boolean(selectedGitlabReview),
+    activeTab,
+  );
+  const reviewThreads = unreadHumanThreads(gitlabConversations);
+  const [openAiReviewRequest, setOpenAiReviewRequest] = useState(0);
+  const openReviewCode = (showAiReview: boolean) => {
+    if (!selectedWorkspace || !workspaceMaterialization) return;
+    if (showAiReview) setOpenAiReviewRequest((value) => value + 1);
+    reviewSession(client, selectedWorkspace.id).mode = "code";
+    openWorkbenchTab("changes");
+  };
+  const openReviewThread = (thread?: ReviewThreadSummary) => {
+    if (!selectedWorkspace || !workspaceMaterialization) return;
+    const session = reviewSession(client, selectedWorkspace.id);
+    session.mode = "conversations";
+    if (thread) {
+      session.targets[thread.worktreeRepositoryId] = thread.targetKey;
+      session.discussions[JSON.stringify([thread.targetKey, thread.scopeId])] = thread.id;
+      if (thread.filePath) session.files[`${thread.worktreeRepositoryId}:${thread.targetKey}`] = thread.filePath;
+      setReviewRepositoryId(thread.worktreeRepositoryId);
+    }
+    openWorkbenchTab("changes");
+  };
   useEffect(() => {
     if (!selectedGitlabReview || activeTab !== "verification") return;
     const nextTab = workspaceMaterialization ? "changes" : "overview";
@@ -8513,8 +8926,12 @@ export function LocalWorkspace({
   const selectedPrimaryOpenLabel = selectedPreferredAgent
     ? `Open ${selectedPreferredProviderName} in ${terminalNames[selectedPreferredTerminal]}`
     : "Open in VS Code";
+  const workspaceDriftDetected =
+    workspaceActionErrorCode === "workspace_git_state_changed";
   const workbenchPrimaryActionLabel = workspaceMaterialization
     ? selectedPrimaryOpenLabel
+    : workspaceDriftDetected
+      ? "Register changes & re-index"
     : workspaceActionState === "ready"
       ? "Create workspace"
       : workspaceActionState === "checking"
@@ -8531,6 +8948,10 @@ export function LocalWorkspace({
   const runWorkbenchPrimaryAction = () => {
     if (workspaceActionState === "ready") {
       void materializeSelectedWorkspace();
+      return;
+    }
+    if (workspaceDriftDetected) {
+      void reindexSelectedWorkspaceGraph();
       return;
     }
     void reviewWorkspaceSetup();
@@ -8642,6 +9063,9 @@ export function LocalWorkspace({
                   </span>
                 )}
               </span>
+              {activeTab === "changes" && workspaceMaterialization && (
+                <div className={styles.identitySlot} ref={setIdentitySlot} />
+              )}
             </div>
             <div
               className={styles.workspaceInlineViews}
@@ -8650,7 +9074,7 @@ export function LocalWorkspace({
             >
               <Tabs.List aria-label="Workspace views">
                 <Tabs.Trigger value="overview">
-                  {selectedGitlabReview ? "Review" : "Workspace"}
+                  {selectedGitlabReview ? "Overview" : "Workspace"}
                 </Tabs.Trigger>
                 <Tabs.Trigger value="planning">
                   {selectedGitlabReview ? "Agent review" : "Plans"}
@@ -8665,7 +9089,7 @@ export function LocalWorkspace({
                         aria-live="polite"
                         title="Unread MR comments and replies"
                       >
-                        {gitlabConversations.unreadCount > 99 ? "99+" : gitlabConversations.unreadCount} unread
+                        {gitlabConversations.unreadCount > 99 ? "99+" : gitlabConversations.unreadCount}
                       </span>
                     )}
                   </Tabs.Trigger>
@@ -8753,9 +9177,7 @@ export function LocalWorkspace({
                 repositoryCatalog={repositoryCatalog}
                 actionError={workspaceActionError}
                 actionErrorCode={workspaceActionErrorCode}
-                driftDetected={
-                  workspaceActionErrorCode === "workspace_git_state_changed"
-                }
+                driftDetected={workspaceDriftDetected}
                 onReview={() => void reviewWorkspaceSetup()}
                 onFetchBranches={(repositoryId) =>
                   void reviewWorkspaceSetup(repositoryId)
@@ -8780,6 +9202,22 @@ export function LocalWorkspace({
                 onReviewRemainingFiles={reviewSelectedWorkspaceRemoval}
                 onRecoverSetup={() => void recoverSelectedWorkspaceSetup()}
                 gitlabReview={selectedGitlabReview}
+                onRetryReviewStatus={myReviews.refresh}
+                reviewInboxFresh={myReviews.gitlabInbox?.state === "fresh"}
+                reviewInboxLoading={!myReviews.gitlabInbox && myReviews.state === "loading"}
+                reviewAttention={
+                  selectedGitlabReview && workspaceMaterialization ? (
+                    <ReviewAttentionStrip
+                      onOpenAgentReview={() => openWorkbenchTab("planning")}
+                      onOpenCode={() => openReviewCode(false)}
+                      onOpenConversations={() => openReviewThread(reviewThreads[0])}
+                      review={savedCodeReview}
+                      threads={reviewThreads}
+                      finished={selectedGitlabReview.status === "merged" || selectedGitlabReview.status === "closed"}
+                      threadsLoading={gitlabConversations.entries.length === 0 || gitlabConversations.entries.some((entry) => entry.state === "loading" && !entry.snapshot)}
+                    />
+                  ) : undefined
+                }
               />
             </Tabs.Content>
             <Tabs.Content value="planning">
@@ -8792,13 +9230,35 @@ export function LocalWorkspace({
                   </div>
                 }
               >
-                <PlanningDocumentsPanel
-                  client={client}
-                  onCreatePlanningHome={createPlanningHome}
-                  onNotice={setNotice}
-                  workspaceId={selectedWorkspace.id}
-                  workspaceKey={selectedWorkspace.key}
-                />
+                {selectedGitlabReview && workspaceMaterialization ? (
+                  <ReviewHomePanel
+                    finished={selectedGitlabReview.status === "merged" || selectedGitlabReview.status === "closed"}
+                    onOpenFindings={() => openReviewCode(true)}
+                    onOpenThread={openReviewThread}
+                    onRunReview={() => openReviewCode(true)}
+                    planning={
+                      <PlanningDocumentsPanel
+                        client={client}
+                        onCreatePlanningHome={createPlanningHome}
+                        onNotice={setNotice}
+                        workspaceId={selectedWorkspace.id}
+                        workspaceKey={selectedWorkspace.key}
+                        workspaceTitle={selectedWorkspace.title}
+                      />
+                    }
+                    review={savedCodeReview}
+                    threads={reviewThreads}
+                  />
+                ) : (
+                  <PlanningDocumentsPanel
+                    client={client}
+                    onCreatePlanningHome={createPlanningHome}
+                    onNotice={setNotice}
+                    workspaceId={selectedWorkspace.id}
+                    workspaceKey={selectedWorkspace.key}
+                    workspaceTitle={selectedWorkspace.title}
+                  />
+                )}
               </Suspense>
             </Tabs.Content>
             {workspaceMaterialization && (
@@ -8836,6 +9296,8 @@ export function LocalWorkspace({
                     workspaceId={selectedWorkspace.id}
                     workspaceKey={selectedWorkspace.key}
                     onNotice={setNotice}
+                    identitySlot={identitySlot}
+                    openAiReviewRequest={openAiReviewRequest}
                   />
                 </Suspense>
               </Tabs.Content>

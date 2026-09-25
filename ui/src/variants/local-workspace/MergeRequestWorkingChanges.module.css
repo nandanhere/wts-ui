@@ -33,6 +33,14 @@
 .emptyActions > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sidePanel { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; border-left: 1px solid var(--wts-line); background: var(--wts-surface); }
 .empty { align-self: center; margin: auto; max-width: 480px; padding: 32px; color: var(--wts-muted); line-height: 1.6; text-align: center; }
+.loading { display: flex; flex-direction: column; gap: 10px; padding: 20px 24px; color: var(--wts-muted); }
+.loading p { margin: 0 0 6px; font-size: 13px; }
+.loading > span { display: block; height: 14px; border-radius: 4px; background: linear-gradient(90deg, var(--wts-surface-subtle), var(--wts-line), var(--wts-surface-subtle)); background-size: 200% 100%; animation: comparisonShimmer 1.4s ease-in-out infinite; }
+.loading > span:nth-of-type(1) { width: 62%; }
+.loading > span:nth-of-type(2) { width: 84%; }
+.loading > span:nth-of-type(3) { width: 48%; }
+@keyframes comparisonShimmer { to { background-position: -200% 0; } }
+@media (prefers-reduced-motion: reduce) { .loading > span { animation: none; } }
 .notice, .error { flex: 0 0 auto; margin: 0; padding: 8px 16px; line-height: 1.5; border-bottom: 1px solid var(--wts-line); }
 .notice { color: var(--wts-muted); background: var(--wts-surface-subtle); }
 .error { color: var(--wts-red); background: var(--wts-red-soft); }
@@ -57,4 +65,14 @@
   .fileName b { flex: 0 1 auto; }
   .fileName small { flex: 1; }
   .sidePanel { width: 100%; }
+}
+
+.fileAi {
+  flex: 0 0 auto;
+  padding: 1px 5px;
+  border-radius: 999px;
+  color: var(--wts-violet, var(--wts-blue));
+  background: color-mix(in srgb, var(--wts-violet, var(--wts-blue)) 14%, transparent);
+  font-size: 11px;
+  font-weight: 650;
 }

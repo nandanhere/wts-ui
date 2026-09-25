@@ -34,7 +34,9 @@ export const test = base.extend<{}, { productOrigin: string }>({
 });
 
 export interface RequestRecord { path: string; method: string; startedAt: number; completedAt?: number; fixtureDelayMs: number; failed: boolean }
-export async function mountProduct(page: Page, origin: string, options: { theme?: "light" | "dark"; path?: string; delayMs?: number; services?: "empty" | "one"; feedbackQueue?: boolean; longConversationPath?: string } = {}) {
+/** Opt-in AI review routes. The fixture records each run and each GitLab comment. */
+export interface CodeReviewFixture { review: (request: Record<string, unknown>) => unknown; runs: Array<Record<string, unknown>>; posted: Array<{ path: string; body: Record<string, unknown> }> }
+export async function mountProduct(page: Page, origin: string, options: { theme?: "light" | "dark"; path?: string; delayMs?: number; services?: "empty" | "one"; feedbackQueue?: boolean; longConversationPath?: string; codeReview?: CodeReviewFixture } = {}) {
   const workspaceRecords = structuredClone(workspaces);
   const requests: RequestRecord[] = []; const unexpected: string[] = []; const errors: string[] = [];
   const delays = new Map<string, number>(); const failures = new Map<string, number>();
@@ -69,9 +71,25 @@ export async function mountProduct(page: Page, origin: string, options: { theme?
       workspace.workflow = { state: request.state, revision: request.expectedRevision + 1, updatedAtUnixMs: now };
       return sendJson(route, workspace.workflow);
     }
+    const review = options.codeReview;
+    if (review && method === "POST" && /^\/api\/v1\/workspaces\/[^/]+\/code-review\/run$/.test(path)) {
+      const request = route.request().postDataJSON(); review.runs.push(request);
+      return sendJson(route, review.review(request));
+    }
+    const comment = path.match(/^\/api\/v1\/reviews\/gitlab\/([^/]+)\/(\d+)\/comments$/);
+    if (review && method === "POST" && comment) {
+      review.posted.push({ path, body: route.request().postDataJSON() });
+      return sendJson(route, { schemaVersion: 1, repositoryId: decodeURIComponent(comment[1]), iid: Number(comment[2]), accepted: true });
+    }
     if (method !== "GET") { unexpected.push(`${method} ${path}`); return sendJson(route, { error: { code: "fixture_write_blocked", message: "This browser fixture does not send or change provider data.", retryable: false } }, 403); }
     if (path === "/api/v1/bootstrap") return sendJson(route, { apiVersion: "v1", origin, sessionToken: "product-polish-fixture" });
     expect(route.request().headers()["x-wts-session"]).toBe("product-polish-fixture");
+    if (review && path === "/api/v1/agent-models") return sendJson(route, { raptikSkillLoaded: true, defaultReviewSkill: "raptik-review",
+      reviewSkills: [{ id: "raptik-review", label: "Raptik rules", reviewer: "Pratik", source: "~/.codex/skills/raptik-review", hasManifest: true, precedentCount: 120, sizeGateLines: 500 }, { id: "team-review", label: "Team rules", source: "~/.agents/skills/team-review", hasManifest: true, precedentCount: 0 }],
+      providers: [{ provider: "codex", installed: true, defaultModel: "gpt-5.5", defaultSource: "~/.codex/config.toml", models: ["gpt-5.5", "gpt-5.4-mini"], modelSelectable: true }] });
+    // The Changes view reads the saved AI review. No saved review exists in this fixture.
+    if (/^\/api\/v1\/workspaces\/[^/]+\/code-review(\/trace)?$/.test(path)) return sendJson(route, null);
+    if (/^\/api\/v1\/workspaces\/[^/]+\/verification\/summary$/.test(path)) return sendJson(route, null);
     if (path === "/api/v1/workspaces") return sendJson(route, { workspaceRootId: "root_local", workspaceRootDisplayPath: "/fixture/workspaces", workspaces: workspaceRecords });
     if (path === "/api/v1/setup") return sendJson(route, setupFixture());
     if (path === "/api/v1/repositories") {

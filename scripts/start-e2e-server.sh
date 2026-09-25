@@ -37,6 +37,14 @@ export WTS_DATA_DIR="$data_root"
 export WTS_ADDR="$address"
 export WTS_UI_DIR="$project_root/ui/dist"
 export WTS_BROWSER_DRIVER="$project_root/scripts/wts-browser-driver.mjs"
+# The AI code review uses a fixture Raptik skill and a fake Codex CLI.
+export WTS_RAPTIK_SKILL_DIR="$project_root/ui/e2e/fixtures/raptik-review"
+export WTS_CODEX_EXECUTABLE="$project_root/ui/e2e/fixtures/bin/fake-codex-review"
+export WTS_E2E_AGENT_RECORD_DIR="$runtime_root"
+export CODEX_HOME="$runtime_root/codex-home"
+mkdir -p "$CODEX_HOME"
+printf 'model = "gpt-e2e-review"\n' > "$CODEX_HOME/config.toml"
+printf '%s\n' '{"models":[{"slug":"gpt-e2e-review","visibility":"list"},{"slug":"gpt-e2e-mini","visibility":"list"}]}' > "$CODEX_HOME/models_cache.json"
 
 cd "$project_root"
 cargo run --quiet -p wts-server

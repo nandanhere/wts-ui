@@ -58,7 +58,12 @@
 .status p { margin: 0; overflow-wrap: anywhere; }
 .history button { padding: 7px 0; display: grid; gap: 3px; text-align: left; border: 0; background: transparent; color: var(--wts-ink); cursor: pointer; font: inherit; }
 .history button small { color: var(--wts-muted); }
-.failure { margin: 9px 0 0; color: var(--wts-amber); font-size: 11px; line-height: 1.5; }
-.failure button { display: block; }
+.failure { display: flex; align-items: center; gap: 6px; margin: 8px 0 0; color: var(--wts-amber); font-size: 12px; line-height: 1.4; }
+.failure span { min-width: 0; flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.failure button { flex: 0 0 auto; }
+.boardFailure { display: flex; align-items: center; gap: 8px; flex-basis: 100%; margin: 0; padding: 7px 12px; color: var(--wts-amber); background: var(--wts-surface); border: 1px solid var(--wts-line); border-radius: 6px; }
+.boardFailure span { flex: 1 1 auto; }
+.boardFailure button { padding: 0; color: var(--wts-blue); background: transparent; border: 0; font: inherit; font-weight: 600; cursor: pointer; }
+.boardFailure button:focus-visible { outline: 2px solid var(--wts-blue); outline-offset: 3px; border-radius: 3px; }
 .card button:focus-visible, .card summary:focus-visible { outline: 2px solid var(--wts-blue); outline-offset: 3px; border-radius: 3px; }
 @media (max-width: 600px) { .overview { padding-inline: 16px; } }

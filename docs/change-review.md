@@ -36,7 +36,17 @@ The context rail also shows related changed tests.
 
 Open **Changes → Conversations** to read the GitLab comments for a workspace repository. Select the merge request when the repository has several matches. Conversations remain available when the local diff is empty.
 
-The MR heading shows its title, status, and branches above the Code and Conversations tabs.
+The workspace header shows the MR title, status, branches, and repository. One
+bar below it holds the Code and Conversations tabs, the **AI review** button,
+and the unread comments. Select **Open next unread** to go to the first unread
+thread. WTS marks a thread as read when you open it.
+
+## AI code review
+
+Select **AI review** to run a review agent on the changes. The agent uses a
+review skill, for example Raptik. In an MR workspace, the agent reviews the
+published MR code, and you can post each finding to GitLab. See
+[Review skills](review-skills.md) for the skill contract.
 
 Conversations appear as a thread feed. Long automated comments stay collapsed until you select **Show automated comment**.
 

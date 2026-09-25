@@ -12,6 +12,7 @@ import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import {
   parsePatchFiles,
   type CodeViewItem,
+  type DiffLineAnnotation,
   type FileDiffMetadata,
 } from "@pierre/diffs";
 import {
@@ -22,19 +23,82 @@ import {
 import type { ResolvedTheme } from "../../theme";
 import type {
   CodeChangeReviewTarget,
+  CodeReviewFinding,
   GitlabReviewDiscussion,
   WorkspaceClient,
+  WorkspaceCodeReviewResult,
   WorkspaceRepositoryFileReview,
   WorkspaceRepositoryReviewGraph,
 } from "../../lib/wtsClient";
 import { CodeReviewFeedbackPanel } from "./CodeReviewFeedbackPanel";
+import {
+  CodeReviewFindingBody,
+  codeReviewLabelText,
+  findingLabel,
+  labelClass,
+  reviewerName,
+  reviewRulesLabel,
+} from "./WorkspaceCodeReviewCard";
 import { openAgentFeedback } from "../../lib/agentFeedbackEvents";
 import { Glyph } from "./Glyph";
+import { RepositoryMarkdownPreview } from "./RepositoryMarkdownPreview";
 import styles from "./RepositoryPatchViewer.module.css";
 
 type DiffStyle = "unified" | "split";
 type FileFilter = "code" | "tests" | "all";
-type ContextMode = "tests" | "references" | "feedback";
+type ContextMode = "tests" | "references" | "feedback" | "aiReview";
+
+export interface AiReviewFocusRequest {
+  requestId: number;
+  findingId?: string;
+}
+
+/** The findings of one review that belong to one repository patch. */
+export function aiReviewFindingsForPatch(
+  review: WorkspaceCodeReviewResult | null | undefined,
+  repositoryId: string | undefined,
+  files: PatchFile[],
+) {
+  if (!review) return [];
+  const reviewedHere = !repositoryId || !review.repositories?.length ||
+    review.repositories.some((repository) => repository.repositoryId === repositoryId);
+  if (!reviewedHere) return [];
+  return review.findings.flatMap((finding) => {
+    if (repositoryId && finding.repositoryId && finding.repositoryId !== repositoryId) return [];
+    const file = files.find((candidate) =>
+      candidate.fileDiff.name === finding.filePath || candidate.fileDiff.prevName === finding.filePath);
+    const anchor = file && finding.anchored && finding.line && finding.side
+      ? { fileId: file.id, lineNumber: finding.line, side: finding.side }
+      : undefined;
+    return [{ finding, fileId: file?.id, anchor }];
+  });
+}
+
+/** Diff annotations for the anchored findings, grouped by file ID. */
+export function aiReviewAnnotations(
+  findings: ReturnType<typeof aiReviewFindingsForPatch>,
+): Map<string, DiffLineAnnotation<CodeReviewFinding>[]> {
+  const annotations = new Map<string, DiffLineAnnotation<CodeReviewFinding>[]>();
+  for (const { finding, anchor } of findings) {
+    if (!anchor) continue;
+    const list = annotations.get(anchor.fileId) ?? [];
+    list.push({ side: anchor.side, lineNumber: anchor.lineNumber, metadata: finding });
+    annotations.set(anchor.fileId, list);
+  }
+  return annotations;
+}
+
+const aiReviewVersions = new WeakMap<WorkspaceCodeReviewResult, number>();
+let nextAiReviewVersion = 1;
+
+function aiReviewVersion(review: WorkspaceCodeReviewResult | null | undefined): number {
+  if (!review) return 0;
+  const existing = aiReviewVersions.get(review);
+  if (existing) return existing;
+  const version = nextAiReviewVersion++;
+  aiReviewVersions.set(review, version);
+  return version;
+}
 
 const REVIEW_LAYOUT_STORAGE_KEY = "wts.repository-review-layout.v1";
 const FILE_RAIL_DEFAULT = 244;
@@ -44,6 +108,19 @@ const CONTEXT_RAIL_DEFAULT = 320;
 const CONTEXT_RAIL_MIN = 240;
 const CONTEXT_RAIL_MAX = 480;
 const RESIZE_STEP = 24;
+const TEXT_ZOOM_STORAGE_KEY = "wts.repository-text-zoom.v1";
+const MIN_TEXT_ZOOM = 70;
+const MAX_TEXT_ZOOM = 200;
+
+function loadTextZoom() {
+  try {
+    const value = Number(globalThis.localStorage?.getItem(TEXT_ZOOM_STORAGE_KEY) ?? 100);
+    return Number.isFinite(value) && value >= MIN_TEXT_ZOOM && value <= MAX_TEXT_ZOOM
+      ? Math.round(value / 10) * 10 : 100;
+  } catch {
+    return 100;
+  }
+}
 const WTS_DIFF_SURFACE_CSS = `:host {
   --diffs-bg: var(--wts-surface);
   --diffs-fg: var(--wts-ink);
@@ -488,6 +565,9 @@ export function RepositoryPatchViewer({
   singleFileActions,
   disableFullFile = false,
   calloutPrefix,
+  aiReview,
+  aiReviewFocus,
+  aiReviewStale = false,
 }: {
   feedback?: PatchReviewFeedbackIdentity;
   patch: string;
@@ -499,6 +579,12 @@ export function RepositoryPatchViewer({
   singleFileActions?: ReactNode;
   disableFullFile?: boolean;
   calloutPrefix?: { id: string; label: string };
+  /** An AI code review. Its anchored findings show on their changed lines. */
+  aiReview?: WorkspaceCodeReviewResult | null;
+  /** Opens the AI review panel. A finding ID also reveals that line. */
+  aiReviewFocus?: AiReviewFocusRequest;
+  /** True when the code changed after the review. */
+  aiReviewStale?: boolean;
 }) {
   const calloutId = (name: string) => `${calloutPrefix?.id ?? "changes"}.${name}`;
   const calloutLabel = (label: string) => calloutPrefix ? `${calloutPrefix.label}: ${label}` : label;
@@ -506,7 +592,7 @@ export function RepositoryPatchViewer({
   const gitlabLineComments = Boolean(
     feedback?.gitlabReview && lineCommentProvider,
   );
-  const viewRefs = useRef(new Map<string, CodeViewHandle<undefined>>());
+  const viewRefs = useRef(new Map<string, CodeViewHandle<CodeReviewFinding>>());
   const fileBlockRefs = useRef(new Map<string, HTMLDivElement>());
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
@@ -530,6 +616,18 @@ export function RepositoryPatchViewer({
   const [selectedFileId, setSelectedFileId] = useState(initialSelectedFileId);
   const [diffStyle, setDiffStyle] = useState<DiffStyle>("unified");
   const [wrapLines, setWrapLines] = useState(false);
+  const [textZoom, setTextZoom] = useState(loadTextZoom);
+  const changeTextZoom = (delta: number) => setTextZoom((current) =>
+    Math.min(MAX_TEXT_ZOOM, Math.max(MIN_TEXT_ZOOM, current + delta)));
+  useEffect(() => {
+    try {
+      globalThis.localStorage?.setItem(TEXT_ZOOM_STORAGE_KEY, String(textZoom));
+    } catch {
+      // Text zoom also works without browser storage.
+    }
+  }, [textZoom]);
+  const [markdownPreviews, setMarkdownPreviews] = useState<Set<string>>(new Set());
+  useEffect(() => setMarkdownPreviews(new Set()), [patch, feedback?.workspaceId, feedback?.repositoryId, feedback?.patchSha256]);
   const [contextOpen, setContextOpen] = useState(gitlabLineComments && !singleFile);
   const [contextMode, setContextMode] = useState<ContextMode>(
     gitlabLineComments ? "feedback" : "tests",
@@ -699,6 +797,13 @@ export function RepositoryPatchViewer({
     () => patchChangeTargets(summary.files),
     [summary.files],
   );
+  const aiFindings = useMemo(
+    () => aiReviewFindingsForPatch(aiReview, feedback?.repositoryId, summary.files),
+    [aiReview, feedback?.repositoryId, summary.files],
+  );
+  const aiAnnotations = useMemo(() => aiReviewAnnotations(aiFindings), [aiFindings]);
+  const aiVersion = aiReviewVersion(aiReview);
+  const [activeAiFindingId, setActiveAiFindingId] = useState<string>();
   const searchMatches = useMemo(
     () => findPatchSearchMatches(reviewFiles, searchQuery),
     [reviewFiles, searchQuery],
@@ -926,6 +1031,44 @@ export function RepositoryPatchViewer({
     );
   };
 
+  const revealAiFinding = (findingId: string) => {
+    const entry = aiFindings.find((candidate) => candidate.finding.findingId === findingId);
+    if (!entry) return;
+    setActiveAiFindingId(findingId);
+    if (!entry.fileId) return;
+    const fileId = entry.fileId;
+    setActiveChangeIndex(-1);
+    setSearchQuery("");
+    setFileFilter("all");
+    setSelectedFileId(fileId);
+    setExpandedFileIds((current) => new Set(current).add(fileId));
+    window.requestAnimationFrame(() => {
+      scrollFileIntoReview(fileId, "auto");
+      if (!entry.anchor) return;
+      const anchor = entry.anchor;
+      window.requestAnimationFrame(() => {
+        const view = viewRefs.current.get(fileId);
+        const navigation = patchSearchNavigation({
+          fileId,
+          fileName: entry.finding.filePath,
+          lineNumber: anchor.lineNumber,
+          side: anchor.side,
+        });
+        view?.setSelectedLines(navigation.selection);
+        view?.scrollTo(navigation.scrollTarget);
+      });
+    });
+  };
+  const revealAiFindingRef = useRef(revealAiFinding);
+  revealAiFindingRef.current = revealAiFinding;
+
+  useEffect(() => {
+    if (!aiReviewFocus) return;
+    setContextOpen(true);
+    setContextMode("aiReview");
+    if (aiReviewFocus.findingId) revealAiFindingRef.current(aiReviewFocus.findingId);
+  }, [aiReviewFocus?.requestId]);
+
   useEffect(() => {
     const navigateChanges = (event: KeyboardEvent) => {
       if (
@@ -959,7 +1102,7 @@ export function RepositoryPatchViewer({
     revealSearchMatch(0);
   }, [normalizedSearchQuery]);
 
-  const options = useMemo<CodeViewReactOptions>(
+  const options = useMemo<CodeViewReactOptions<CodeReviewFinding>>(
     () => ({
       diffIndicators: "bars" as const,
       diffStyle,
@@ -973,7 +1116,9 @@ export function RepositoryPatchViewer({
       overflow: wrapLines ? ("wrap" as const) : ("scroll" as const),
       stickyHeaders: false,
       themeType: theme,
-      unsafeCSS: WTS_DIFF_SURFACE_CSS,
+      itemMetrics: { lineHeight: 20 * textZoom / 100 },
+      unsafeCSS: `${WTS_DIFF_SURFACE_CSS}
+:host { --diffs-font-size: ${13 * textZoom / 100}px; --diffs-line-height: ${20 * textZoom / 100}px; }`,
       onTokenEnter: (token, event) => {
         if (/^[A-Za-z_$][\w$]*$/.test(token.tokenText)) {
           token.tokenElement.title = `${navigator.platform.includes("Mac") ? "Command" : "Control"}-click to find changed references`;
@@ -993,7 +1138,7 @@ export function RepositoryPatchViewer({
         setContextMode(action.contextMode);
       },
     }),
-    [diffStyle, lineCommentProvider, singleFile, theme, wrapLines],
+    [diffStyle, lineCommentProvider, singleFile, theme, wrapLines, textZoom],
   );
 
   const contextToggle = (
@@ -1029,8 +1174,19 @@ export function RepositoryPatchViewer({
       data-ui={calloutId("viewer")}
       data-ui-label={calloutLabel("Code changes viewer")}
       ref={viewerRef}
+      onKeyDownCapture={(event) => {
+        if (!(event.metaKey || event.ctrlKey) || event.altKey || event.nativeEvent.isComposing) return;
+        if (event.nativeEvent.composedPath().some((target) => target instanceof HTMLElement &&
+          (target.matches("input, textarea, select") || target.isContentEditable))) return;
+        if (!["+", "=", "-", "0"].includes(event.key)) return;
+        event.preventDefault();
+        event.stopPropagation();
+        if (event.key === "0") setTextZoom(100);
+        else changeTextZoom(event.key === "-" ? -10 : 10);
+      }}
       style={
         {
+          "--review-text-size": `${14 * textZoom / 100}px`,
           "--files-width": `${layoutWidths.files}px`,
           "--context-width": `${layoutWidths.context}px`,
         } as CSSProperties
@@ -1227,6 +1383,14 @@ export function RepositoryPatchViewer({
             </button>
           </div>
           </>}
+          <div className={`${styles.segmented} ${styles.textZoom}`} aria-label="Text size">
+            <button type="button" aria-label="Decrease text size" title="Decrease text size (⌘− / Ctrl−)"
+              disabled={textZoom === MIN_TEXT_ZOOM} onClick={() => changeTextZoom(-10)}>A−</button>
+            <button type="button" aria-label="Reset text size" title="Reset text size (⌘0 / Ctrl0)"
+              onClick={() => setTextZoom(100)}>{textZoom}%</button>
+            <button type="button" aria-label="Increase text size" title="Increase text size (⌘+ / Ctrl+)"
+              disabled={textZoom === MAX_TEXT_ZOOM} onClick={() => changeTextZoom(10)}>A+</button>
+          </div>
           <div className={styles.segmented} aria-label="Diff layout">
             <button
               aria-pressed={diffStyle === "unified"}
@@ -1284,6 +1448,14 @@ export function RepositoryPatchViewer({
         </div>
         <div
           className={styles.codeView}
+          tabIndex={0}
+          aria-label="Changed code text"
+          onPointerDownCapture={(event) => {
+            const interactive = event.nativeEvent.composedPath().some((target) =>
+              target instanceof HTMLElement && (target.matches("button, a, input, textarea, select, [tabindex]") &&
+                target !== event.currentTarget || target.isContentEditable));
+            if (!interactive) event.currentTarget.focus({ preventScroll: true });
+          }}
           data-history-swipe-block
           data-ui={calloutId("code")}
           data-ui-label={calloutLabel("Changed code")}
@@ -1385,16 +1557,79 @@ export function RepositoryPatchViewer({
                         <i>-{file.deletions}</i>
                       </span>
                     </button>
+                    {/\.(md|markdown)$/i.test(file.fileDiff.name) && (
+                      <button
+                        type="button"
+                        className={styles.previewToggle}
+                        aria-label={`Preview Markdown for ${file.fileDiff.name}`}
+                        aria-pressed={markdownPreviews.has(file.id)}
+                        onClick={() => {
+                          setExpandedFileIds((current) => new Set(current).add(file.id));
+                          setMarkdownPreviews((current) => {
+                            const next = new Set(current);
+                            if (next.has(file.id)) next.delete(file.id);
+                            else next.add(file.id);
+                            return next;
+                          });
+                        }}
+                      >{markdownPreviews.has(file.id) ? "Show diff" : "Preview"}</button>
+                    )}
                     {singleFile && singleFileActions && <div className={styles.fileActions}>{singleFileActions}</div>}
                     </div>
                     {isExpanded && (
                       <div className={styles.diffBody} id={domId(`diff-body-${file.id}`)}>
-                        <CodeView
+                        {markdownPreviews.has(file.id) ? (
+                          <RepositoryMarkdownPreview
+                            key={`${file.id}:${feedback?.patchSha256 ?? patch}`}
+                            file={file.fileDiff}
+                            feedback={disableFullFile ? undefined : feedback}
+                          />
+                        ) : <CodeView
                           ref={(handle) => {
                             if (handle) viewRefs.current.set(file.id, handle);
                             else viewRefs.current.delete(file.id);
                           }}
-                          items={[{ id: file.id, type: "diff", fileDiff: file.fileDiff, version: fileDiffVersion(file.fileDiff) }]}
+                          items={[{
+                            id: file.id,
+                            type: "diff",
+                            fileDiff: file.fileDiff,
+                            version: fileDiffVersion(file.fileDiff) * 10_000 + aiVersion,
+                            ...(aiAnnotations.get(file.id) ? { annotations: aiAnnotations.get(file.id) } : {}),
+                          }]}
+                          renderAnnotation={(annotation) => {
+                            const finding = annotation.metadata;
+                            if (!finding) return null;
+                            const label = findingLabel(finding);
+                            return (
+                              <div
+                                className={styles.aiAnnotation}
+                                data-active={activeAiFindingId === finding.findingId || undefined}
+                                data-label={label}
+                                data-stale={aiReviewStale || undefined}
+                                data-ui={calloutId("ai-review-annotation")}
+                                data-ui-label={calloutLabel("AI review comment")}
+                                role="note"
+                                aria-label={`AI review: ${codeReviewLabelText(label)}, ${finding.title}`}
+                              >
+                                <div className={styles.aiAnnotationHeader}>
+                                  <span className={`${styles.aiLabel} ${labelClass(label)}`}>{codeReviewLabelText(label)}</span>
+                                  <b>{finding.title}</b>
+                                  <button
+                                    className={styles.aiAnnotationOpen}
+                                    onClick={() => {
+                                      setActiveAiFindingId(finding.findingId);
+                                      setContextOpen(true);
+                                      setContextMode("aiReview");
+                                    }}
+                                    type="button"
+                                  >
+                                    Show in panel
+                                  </button>
+                                </div>
+                                <CodeReviewFindingBody finding={finding} reviewer={reviewerName(aiReview)} />
+                              </div>
+                            );
+                          }}
                           renderGutterUtility={(getHoveredLine, item) => {
                             const line = getHoveredLine();
                             if (
@@ -1447,7 +1682,7 @@ export function RepositoryPatchViewer({
                             }
                           }}
                           options={options}
-                        />
+                        />}
                       </div>
                     )}
                   </div>
@@ -1514,6 +1749,17 @@ export function RepositoryPatchViewer({
                 Feedback
               </button>
             )}
+            {aiReview && (
+              <button
+                aria-pressed={contextMode === "aiReview"}
+                data-ui={calloutId("ai-review-tab")}
+                data-ui-label={calloutLabel("AI review tab")}
+                onClick={() => setContextMode("aiReview")}
+                type="button"
+              >
+                AI review{aiFindings.length ? <span className={styles.tabCount}>{aiFindings.length}</span> : null}
+              </button>
+            )}
             <button
               aria-label="Close review context"
               className={styles.contextClose}
@@ -1523,7 +1769,61 @@ export function RepositoryPatchViewer({
               Close
             </button>
           </div>
-          {contextMode === "feedback" && feedback ? (
+          {contextMode === "aiReview" && aiReview ? (
+            <div
+              className={`${styles.contextBody} ${styles.aiReviewBody}`}
+              data-ui={calloutId("ai-review-panel")}
+              data-ui-label={calloutLabel("AI review panel")}
+            >
+              <small>AI REVIEW</small>
+              <b>{reviewRulesLabel(aiReview)} · {aiFindings.length} {aiFindings.length === 1 ? "finding" : "findings"}</b>
+              {aiReviewStale && (
+                <p className={styles.aiStale} role="status">The code changed after this review. Some lines can be different.</p>
+              )}
+              {aiFindings.length ? (
+                <ul aria-label="AI review findings">
+                  {aiFindings.map(({ finding, anchor, fileId }) => {
+                    const label = findingLabel(finding);
+                    return (
+                      <li key={finding.findingId}>
+                        <button
+                          aria-current={activeAiFindingId === finding.findingId || undefined}
+                          className={styles.aiFindingButton}
+                          disabled={!fileId}
+                          onClick={() => revealAiFinding(finding.findingId)}
+                          type="button"
+                        >
+                          <span className={styles.aiFindingTitle}>
+                            <i className={`${styles.aiLabel} ${labelClass(label)}`}>{codeReviewLabelText(label)}</i>
+                            {finding.title}
+                          </span>
+                          <small>
+                            {finding.filePath || "No file"}
+                            {finding.line ? `:${finding.line}` : ""}
+                            {fileId && !anchor ? " · not on a changed line" : ""}
+                            {!fileId && finding.filePath ? " · not in this patch" : ""}
+                          </small>
+                        </button>
+                        {activeAiFindingId === finding.findingId && (
+                          <div className={styles.aiFindingDetail}>
+                            <CodeReviewFindingBody finding={finding} reviewer={reviewerName(aiReview)} />
+                          </div>
+                        )}
+                      </li>
+                    );
+                  })}
+                </ul>
+              ) : (
+                <p>{aiReview.outcome === "sizeGateStopped"
+                  ? "The size gate stopped this review. Split the change or select Review anyway."
+                  : "The review found no problems in this repository."}</p>
+              )}
+              <footer data-ready={aiReview.mode === "raptik" || aiReview.mode === "skill" || undefined}>
+                <span />
+                {aiReview.summary || "The review has no summary."}
+              </footer>
+            </div>
+          ) : contextMode === "feedback" && feedback ? (
             <CodeReviewFeedbackPanel
               client={feedback.client}
               repositoryId={feedback.repositoryId}

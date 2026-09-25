@@ -8,6 +8,9 @@ use planning_documents::{
 #[path = "verification_summary.rs"]
 mod verification_summary;
 
+#[path = "workspace_code_review.rs"]
+mod workspace_code_review;
+
 #[cfg(test)]
 #[path = "materialization_rollback_tests.rs"]
 mod materialization_rollback_tests;
@@ -110,7 +113,7 @@ use wts_git::{
 use wts_integrations::{
     ActivityWatchConnector, ActivityWatchDailyReview, ActivityWatchError, ActivityWatchReviewError,
     ActivityWatchStatus, GithubReviewInbox, GithubReviewsAdapter, GithubTrustedRepository,
-    GitlabDiscussions, GitlabIntegrationStatus, GitlabMergeRequestInbox,
+    GitlabDiscussions, GitlabIntegrationStatus, GitlabMergeRequest, GitlabMergeRequestInbox,
     GitlabMergeRequestsAdapter, GitlabReviewCommentRequest, GitlabReviewInbox, GitlabReviewPatch,
     GitlabReviewTrustedRepository, GitlabTrustedRepository, IntegrationDetector,
     JiraActiveIssueList, JiraIssue, JiraMcpAdapter, JiraMcpError, JiraMcpVerification,
@@ -142,6 +145,7 @@ const WTS_MANAGED_COPILOT_MARKER: &str = "<!-- managed-by-wts: workspace-copilot
 const MATERIALIZATION_MANIFEST_FILE: &str = ".wts-workspace.json";
 const WORK_ITEMS_FILE: &str = "work-items.json";
 const REVIEW_INBOX_FILE: &str = "review-inbox.json";
+const LINKED_GITLAB_MRS_FILE: &str = "linked-gitlab-merge-requests.json";
 const REVIEW_INBOX_SCHEMA_VERSION: u32 = 1;
 const MAX_REVIEW_INBOX_THREADS: usize = 64;
 const MAX_REVIEW_INBOX_BYTES: usize = 240 * 1024;
@@ -277,6 +281,8 @@ pub enum LocalWtsError {
         "WTS could not load the merge request comparison. Refresh the merge request and check the local branch."
     )]
     GitlabComparisonUnavailable,
+    #[error("WTS could not verify this merge request in the trusted GitLab project.")]
+    GitlabMergeRequestLinkUnavailable,
     #[error("the Git remote URL is invalid or unsupported")]
     InvalidRepositoryRemote,
     #[error("the repository clone target already exists")]
@@ -491,6 +497,8 @@ struct ServiceInner {
     agent_session_details: AgentSessionDetailStore,
     agent_observer: CodexSessionObserver,
     copilot_observer: CopilotSessionObserver,
+    agent_model_catalog_cache: Mutex<Option<(Instant, crate::AgentModelCatalog)>>,
+    code_review_traces: crate::review_trace::CodeReviewTraceStore,
 }
 
 #[derive(Clone)]
@@ -753,6 +761,8 @@ impl LocalWtsService {
                 agent_session_details: AgentSessionDetailStore::default(),
                 agent_observer: CodexSessionObserver::from_environment(),
                 copilot_observer: CopilotSessionObserver::from_environment(),
+                agent_model_catalog_cache: Mutex::new(None),
+                code_review_traces: crate::review_trace::CodeReviewTraceStore::default(),
             }),
         };
         service.start_agent_conversation_queue()?;
@@ -848,7 +858,55 @@ impl LocalWtsService {
         workspace_id: Uuid,
     ) -> Result<GitlabMergeRequestInbox, LocalWtsError> {
         let repositories = self.gitlab_trusted_repositories(workspace_id)?;
-        Ok(self.inner.gitlab_merge_requests.list(&repositories))
+        let (workspace_path, materialization) = self.read_materialization_receipt(workspace_id)?;
+        let links = read_linked_gitlab_mrs(&workspace_path)?;
+        let trusted_ids = materialization.worktrees.iter()
+            .map(|worktree| worktree.repository_id.as_str())
+            .collect::<BTreeSet<_>>();
+        if links.keys().any(|id| !trusted_ids.contains(id.as_str())) {
+            return Err(LocalWtsError::InvalidMaterializationManifest);
+        }
+        Ok(self.inner.gitlab_merge_requests.list_with_links(&repositories, &links))
+    }
+
+    /// Link one provider-verified MR without changing a worktree or its branch.
+    pub fn link_workspace_gitlab_merge_request(
+        &self,
+        workspace_id: Uuid,
+        repository_id: &str,
+        iid: u64,
+    ) -> Result<GitlabMergeRequest, LocalWtsError> {
+        if iid == 0 || iid > i64::MAX as u64 || repository_id.is_empty() || repository_id.len() > 512 {
+            return Err(LocalWtsError::GitlabMergeRequestLinkUnavailable);
+        }
+        let _guard = self.inner.materialization_lock.lock()
+            .map_err(|_| LocalWtsError::GitlabMergeRequestLinkUnavailable)?;
+        self.ensure_repository_operation_idle(workspace_id)?;
+        let repository = self.gitlab_trusted_repositories(workspace_id)?
+            .into_iter()
+            .find(|repository| repository.repository_id() == repository_id)
+            .ok_or(LocalWtsError::RepositoryForgeUnsupported)?;
+        let (workspace_path, materialization) = self.read_materialization_receipt(workspace_id)?;
+        let mut links = read_linked_gitlab_mrs(&workspace_path)?;
+        let trusted_ids = materialization.worktrees.iter()
+            .map(|worktree| worktree.repository_id.as_str())
+            .collect::<BTreeSet<_>>();
+        if links.keys().any(|id| !trusted_ids.contains(id.as_str())) {
+            return Err(LocalWtsError::InvalidMaterializationManifest);
+        }
+        let linked = self.inner.gitlab_merge_requests
+            .linked_merge_request(&repository, iid)
+            .map_err(|_| LocalWtsError::GitlabMergeRequestLinkUnavailable)?;
+        links.insert(repository_id.to_owned(), iid);
+        let path = linked_gitlab_mrs_path(&workspace_path)?;
+        match path.symlink_metadata() {
+            Ok(metadata) if metadata.is_file() && !metadata.file_type().is_symlink()
+                && metadata.len() <= 4096 => atomic_replace_json(&path, &links)?,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound =>
+                atomic_write_json(&path, &links)?,
+            _ => return Err(LocalWtsError::InvalidMaterializationManifest),
+        };
+        Ok(linked)
     }
 
     pub fn gitlab_integration_status(
@@ -1382,6 +1440,12 @@ impl LocalWtsService {
                                     session_id,
                                     event.change_request_proposals.clone(),
                                 );
+                        }
+                        if !event.mr_link_proposals.is_empty() {
+                            let _ = event_service.inner.agent_sessions.set_mr_link_proposals(
+                                session_id,
+                                event.mr_link_proposals.clone(),
+                            );
                         }
                         event_service
                             .inner
@@ -3269,6 +3333,18 @@ impl LocalWtsService {
         &self,
         workspace_id: Uuid,
     ) -> Result<WorkspacePreflight, LocalWtsError> {
+        if self.inner.registry.get(workspace_id)?.is_some_and(|view| {
+            view.lifecycle.materialization_state == WorkspaceMaterializationState::NeedsAttention
+        }) {
+            match self.validate_materialization(workspace_id) {
+                Err(error @ LocalWtsError::WorkspaceGitStateChanged)
+                | Err(error @ LocalWtsError::InvalidMaterializationManifest) => {
+                    return Err(error);
+                }
+                Ok(_) | Err(LocalWtsError::NotMaterialized) => {}
+                Err(error) => return Err(error),
+            }
+        }
         self.prepare_preflight(workspace_id)
             .map(|prepared| prepared.public)
     }
@@ -6010,84 +6086,6 @@ impl LocalWtsService {
             agent,
             &cancellation,
             || {},
-        )
-    }
-
-    pub fn run_workspace_code_review(
-        &self,
-        workspace_id: Uuid,
-        provider: AgentProvider,
-        scope: crate::CodeReviewScope,
-        model: Option<&str>,
-    ) -> Result<crate::WorkspaceCodeReviewResult, LocalWtsError> {
-        let materialization = self.load_materialization(workspace_id)?;
-        let mut context_summary = String::new();
-        const TOTAL_DIFF_BUDGET: usize = 24 * 1024;
-        let mut remaining_budget = TOTAL_DIFF_BUDGET;
-
-        match scope {
-            crate::CodeReviewScope::RecentChanges => {
-                context_summary.push_str("Recent diffs by repository:\n");
-                for repo in &materialization.worktrees {
-                    if let Ok(diff) =
-                        self.workspace_repository_diff(workspace_id, &repo.repository_id)
-                    {
-                        context_summary.push_str(&format!(
-                            "--- Repository: {} (base: {}) ---\n",
-                            repo.label, repo.base_commit_oid
-                        ));
-                        if diff.patch.is_empty() {
-                            context_summary.push_str("No uncommitted or branch changes.\n");
-                        } else if remaining_budget == 0 {
-                            context_summary
-                                .push_str("[Additional changes omitted to fit prompt limit]\n");
-                        } else {
-                            let patch = &diff.patch;
-                            if patch.len() <= remaining_budget {
-                                context_summary.push_str(patch);
-                                context_summary.push('\n');
-                                remaining_budget = remaining_budget.saturating_sub(patch.len());
-                            } else {
-                                let boundary = patch
-                                    .char_indices()
-                                    .map(|(idx, _)| idx)
-                                    .take_while(|&idx| idx <= remaining_budget)
-                                    .last()
-                                    .unwrap_or(0);
-                                context_summary.push_str(&patch[..boundary]);
-                                context_summary.push_str(&format!(
-                                    "\n[... Diff truncated: showing {} of {} bytes to fit prompt limit ...]\n",
-                                    boundary,
-                                    patch.len()
-                                ));
-                                remaining_budget = 0;
-                            }
-                        }
-                    }
-                }
-            }
-            crate::CodeReviewScope::TotalCode => {
-                context_summary.push_str("Repositories in this workspace:\n");
-                for repo in &materialization.worktrees {
-                    context_summary.push_str(&format!(
-                        "- Repository: {} at {}\n",
-                        repo.label, repo.target_display_path
-                    ));
-                }
-            }
-        }
-
-        let prompt = crate::build_code_review_prompt(scope, &context_summary, model);
-        let agent_result = self.run_agent_with_custom(workspace_id, provider, &prompt, model)?;
-        let timestamp_ms = now_unix_ms();
-
-        crate::parse_code_review_outcome(
-            workspace_id,
-            provider,
-            scope,
-            model.map(str::to_string),
-            &agent_result.output,
-            timestamp_ms,
         )
     }
 
@@ -10934,6 +10932,10 @@ fn workspace_agent_guide(context: &WorkspaceEvidenceContext) -> String {
          - Treat proposed commands and validation flows as review-only until the user runs or approves them.\n\
          - Every evidence path must remain inside a listed repository worktree.\n\n\
          ## Change-request proposals\n\n\
+         If an MR already exists, do not make another MR. Point WTS to it in your final response. \
+         Write one compact JSON line per repository: `WTS_MR_LINK_PROPOSAL: {\"schemaVersion\":1,\"repositoryId\":\"<ID from .wts/context.json>\",\"iid\":<MR number>}`. \
+         Use only the MR number, not its URL or a branch name. WTS checks the trusted GitLab project before it saves a link. \
+         Do not switch branches or move local work to point to an MR.\n\n\
          If you push a branch and it is ready for a change request, end your final response with one compact JSON object per repository on its own line. Prefix each line exactly with `WTS_CHANGE_REQUEST_PROPOSAL:`. Use this schema: `{\"schemaVersion\":1,\"repositoryId\":\"<ID from .wts/context.json>\",\"sourceHeadCommitOid\":\"<full HEAD>\",\"title\":\"<proposed title>\",\"body\":\"<complete proposed description>\",\"issueKeys\":[\"<only linked Jira keys this change serves>\"],\"verification\":{\"status\":\"passed|partial|failed|notReported\",\"summary\":\"<checks run and limitations>\"}}`. Read `.wts/work-items.json` for the linked Jira allowlist. Do not add every linked issue. Include only issues that this repository change directly serves. Describe the complete change and important behavior in the body. Report verification as `passed` only when all intended checks completed, `partial` when targeted checks passed but another check could not complete, and `failed` when a completed check failed. Do not emit a proposal when the branch is not pushed or is not ready.\n\n\
          ## Status and result text\n\n\
          WTS can show your latest status and result in the workspace list. Use direct technical English for this text.\n\n\
@@ -11101,6 +11103,43 @@ fn atomic_write_json(path: &Path, value: &impl Serialize) -> Result<(), LocalWts
             cleanup_complete: false,
         })?;
     atomic_write_bytes(path, &bytes)
+}
+
+fn read_linked_gitlab_mrs(workspace_path: &Path) -> Result<BTreeMap<String, u64>, LocalWtsError> {
+    let path = linked_gitlab_mrs_path(workspace_path)?;
+    let metadata = match path.symlink_metadata() {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(BTreeMap::new()),
+        Err(_) => return Err(LocalWtsError::InvalidMaterializationManifest),
+    };
+    if !metadata.is_file() || metadata.file_type().is_symlink() || metadata.len() > 4096 {
+        return Err(LocalWtsError::InvalidMaterializationManifest);
+    }
+    let links: BTreeMap<String, u64> = serde_json::from_slice(
+        &fs::read(path).map_err(|_| LocalWtsError::InvalidMaterializationManifest)?
+    ).map_err(|_| LocalWtsError::InvalidMaterializationManifest)?;
+    if links.len() > 20 || links.iter().any(|(id, iid)| {
+        id.is_empty() || id.len() > 160 || id.trim() != id || id.contains(['\0', '\n', '\r', '\t'])
+            || *iid == 0 || *iid > i64::MAX as u64
+    }) {
+        return Err(LocalWtsError::InvalidMaterializationManifest);
+    }
+    Ok(links)
+}
+
+fn linked_gitlab_mrs_path(workspace_path: &Path) -> Result<PathBuf, LocalWtsError> {
+    validate_workspace_root(workspace_path)?;
+    let evidence = workspace_path.join(EVIDENCE_DIRECTORY);
+    let metadata = evidence
+        .symlink_metadata()
+        .map_err(|_| LocalWtsError::InvalidMaterializationManifest)?;
+    if !metadata.is_dir()
+        || metadata.file_type().is_symlink()
+        || evidence.canonicalize().ok().as_deref() != Some(evidence.as_path())
+    {
+        return Err(LocalWtsError::InvalidMaterializationManifest);
+    }
+    Ok(evidence.join(LINKED_GITLAB_MRS_FILE))
 }
 
 fn atomic_replace_json(path: &Path, value: &impl Serialize) -> Result<(), LocalWtsError> {
@@ -11668,6 +11707,19 @@ mod tests {
     };
     use std::{cell::RefCell, fs};
     use uuid::Uuid;
+
+    #[cfg(unix)]
+    #[test]
+    fn linked_mr_store_rejects_a_symlinked_evidence_directory() {
+        let directory = tempfile::tempdir().unwrap();
+        let workspace = directory.path().canonicalize().unwrap().join("workspace");
+        let outside = directory.path().canonicalize().unwrap().join("outside");
+        fs::create_dir(&workspace).unwrap();
+        fs::create_dir(&outside).unwrap();
+        std::os::unix::fs::symlink(&outside, workspace.join(".wts")).unwrap();
+        assert!(super::read_linked_gitlab_mrs(&workspace).is_err());
+        assert!(!outside.join(super::LINKED_GITLAB_MRS_FILE).exists());
+    }
     use wts_core::workspace::{
         RuntimePlanSelection, RuntimePortPolicy, RuntimePortSelection, RuntimeServiceSelection,
         WorkspaceIntent, WorkspacePlanningFormat,

@@ -149,7 +149,7 @@ describe("UI Polish & Perceived Quality", () => {
 
       expect(await screen.findByText("No local changes")).toBeInTheDocument();
       expect(
-        screen.getByText("The workspace is up to date with the target branch."),
+        screen.getByText(/has no change from its base commit/),
       ).toBeInTheDocument();
     });
   });

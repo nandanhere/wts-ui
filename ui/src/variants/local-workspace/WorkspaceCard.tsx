@@ -34,6 +34,30 @@ export interface WorkspaceCardProps {
   dragProps?: Omit<ButtonProps, "children" | "className" | "onPress">;
 }
 
+export interface WorkspaceNextStep {
+  label: string;
+  tone: "action" | "wait" | "done";
+}
+
+/** The one thing the user can do next on this card. The label is an instruction or an agent status. */
+export function workspaceNextStep(
+  workspace: Pick<Workspace, "lane">,
+  agent?: Pick<WorkspaceAgentSnapshot, "state" | "needsInput" | "updateKind" | "observedLocally">,
+  gitlabReview?: Pick<GitlabReview, "status" | "reviewState">,
+  mergeRequest?: Pick<GitlabMergeRequest, "status">,
+): WorkspaceNextStep | undefined {
+  if (agent?.needsInput === "question") return { label: "Answer the agent", tone: "action" };
+  if (agent?.needsInput === "access") return { label: "Give the agent access", tone: "action" };
+  if (agent?.state === "attention") return { label: "Review the agent session", tone: "action" };
+  if (gitlabReview?.status === "open" && gitlabReview.reviewState === "changesAfterApproval") return { label: "Review the new changes", tone: "action" };
+  if (gitlabReview?.status === "open" && gitlabReview.reviewState !== "approved") return { label: "Review the MR", tone: "action" };
+  if (agent?.state === "working") return { label: "Agent works", tone: "wait" };
+  if (agent?.updateKind === "completion" && !agent.observedLocally) return { label: "Check the agent result", tone: "action" };
+  if (mergeRequest?.status === "merged" || gitlabReview?.status === "merged") return { label: "Merged. Park or remove", tone: "done" };
+  if (workspace.lane === "planned") return { label: "Start the work", tone: "action" };
+  return undefined;
+}
+
 export const WorkspaceCard = memo(function WorkspaceCard({
   workspace,
   attention,
@@ -82,6 +106,7 @@ export const WorkspaceCard = memo(function WorkspaceCard({
   const hasInlineAction = Boolean(
     issueAction || (primaryMergeRequest && onOpenMergeRequest),
   );
+  const nextStep = workspaceNextStep(workspace, agent, gitlabReview, primaryMergeRequest);
   const cardContents = (
     <>
       <span className={styles.cardHeader}>
@@ -176,7 +201,14 @@ export const WorkspaceCard = memo(function WorkspaceCard({
         </span>
       )}
       <span className={styles.cardFooter}>
-        <span className={styles.providerMeta}>{sourceLabel}</span>
+        {nextStep ? (
+          <span className={styles.cardNextStep} data-tone={nextStep.tone}>
+            <b>{nextStep.label}</b>
+            <span className={styles.providerMeta}>{sourceLabel}</span>
+          </span>
+        ) : (
+          <span className={styles.providerMeta}>{sourceLabel}</span>
+        )}
         <span className={styles.cardArrow} aria-hidden="true">
           <Glyph name="arrow" size={15} />
         </span>

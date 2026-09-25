@@ -218,6 +218,9 @@ export function fakeWorkspaceClient(options: {
       fetchedAtUnixMs: 1_765_756_800_000,
       detail: "GitLab returned no matching merge requests.",
     });
+  const linkWorkspaceGitlabMergeRequest = vi
+    .fn<WorkspaceClient["linkWorkspaceGitlabMergeRequest"]>()
+    .mockRejectedValue(new Error("Unexpected linkWorkspaceGitlabMergeRequest call"));
   const openGitlabMergeRequest = vi
     .fn<WorkspaceClient["openGitlabMergeRequest"]>()
     .mockRejectedValue(
@@ -441,6 +444,28 @@ export function fakeWorkspaceClient(options: {
       findings: [],
       actionableSteps: [],
       reviewedAtUnixMs: 1_726_000_000_000,
+    });
+  const getWorkspaceCodeReview = vi
+    .fn<NonNullable<WorkspaceClient["getWorkspaceCodeReview"]>>()
+    .mockResolvedValue(null);
+  const getWorkspaceCodeReviewTrace = vi
+    .fn<NonNullable<WorkspaceClient["getWorkspaceCodeReviewTrace"]>>()
+    .mockResolvedValue(null);
+  const listAgentModels = vi
+    .fn<NonNullable<WorkspaceClient["listAgentModels"]>>()
+    .mockResolvedValue({
+      raptikSkillLoaded: true,
+      reviewSkills: [
+        { id: "raptik-review", label: "Raptik rules", reviewer: "Pratik", source: "~/.codex/skills/raptik-review", hasManifest: true, precedentCount: 120, sizeGateLines: 500 },
+        { id: "team-review", label: "Team review", source: "~/.agents/skills/team-review", hasManifest: true, precedentCount: 0 },
+      ],
+      defaultReviewSkill: "raptik-review",
+      providers: [
+        { provider: "codex", installed: true, defaultModel: "gpt-5.5", defaultSource: "~/.codex/config.toml", models: ["gpt-5.5", "gpt-5.4-mini"], modelSelectable: true },
+        { provider: "copilot", installed: true, defaultModel: "auto", defaultSource: "Copilot default", models: ["auto", "claude-sonnet-4.5"], modelSelectable: true },
+        { provider: "openCode", installed: false, models: [], modelSelectable: true },
+        { provider: "hermes", installed: false, models: [], modelSelectable: true },
+      ],
     });
   const promoteAgentVerificationCheck = vi
     .fn<WorkspaceClient["promoteAgentVerificationCheck"]>()
@@ -726,6 +751,7 @@ export function fakeWorkspaceClient(options: {
     openWorkspaceInVscode,
     openRepositoryBase,
     getGitlabMergeRequests,
+    linkWorkspaceGitlabMergeRequest,
     openGitlabMergeRequest,
     getGitlabIntegrationStatus,
     getUpdateStatus,
@@ -746,6 +772,9 @@ export function fakeWorkspaceClient(options: {
     promoteAgentVerificationCheck,
     runWorkspaceVerification,
     runWorkspaceCodeReview,
+    getWorkspaceCodeReview,
+    getWorkspaceCodeReviewTrace,
+    listAgentModels,
     listWorkspaceTestRuns,
     getWorkspaceTestRun,
     runWorkspaceTestJourney,
@@ -835,6 +864,7 @@ export function fakeWorkspaceClient(options: {
     openWorkspaceInVscode,
     openRepositoryBase,
     getGitlabMergeRequests,
+    linkWorkspaceGitlabMergeRequest,
     openGitlabMergeRequest,
     getGitlabIntegrationStatus,
     getUpdateStatus,
@@ -855,6 +885,9 @@ export function fakeWorkspaceClient(options: {
     promoteAgentVerificationCheck,
     runWorkspaceVerification,
     runWorkspaceCodeReview,
+    getWorkspaceCodeReview,
+    getWorkspaceCodeReviewTrace,
+    listAgentModels,
     listWorkspaceTestRuns,
     getWorkspaceTestRun,
     runWorkspaceTestJourney,

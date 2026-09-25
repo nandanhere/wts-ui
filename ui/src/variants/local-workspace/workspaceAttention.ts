@@ -1,7 +1,7 @@
 import type { GitlabDiscussions, GitlabMergeRequestInbox, WorkspaceClient, WorkspaceEvidence, WorkspaceVerificationCheckResult, WorkspaceVerificationResult, WorkspaceVerificationSummary } from "../../lib/wtsClient";
 import type { AgentConversationList } from "../../lib/agentConversations";
 import { buildFeedbackTimeline } from "../../lib/agentFeedbackTimeline";
-import { gitlabCommentRevision, gitlabCommentReadChecker, subscribeGitlabDiscussionReads } from "./gitlabDiscussions";
+import { gitlabCommentsAfterOwnReply, gitlabCommentRevision, gitlabCommentReadChecker, subscribeGitlabDiscussionReads } from "./gitlabDiscussions";
 import { loadWorkspaceGitlabMergeRequests } from "./gitlabMergeRequestDiscovery";
 
 export interface WorkspaceAttentionWorkspace { workspaceId: string; materialized: boolean }
@@ -487,7 +487,7 @@ class AttentionStore implements WorkspaceAttentionStore {
       const id = JSON.stringify(["gitlab", workspaceId, snapshot.scopeId, thread.id]);
       const previous = this.threads.get(id);
       if (previous && previous.fetchedAt > snapshot.fetchedAtUnixMs) continue;
-      let comments = thread.comments.filter(comment => comment.authorLogin.toLowerCase() !== snapshot.viewerLogin.toLowerCase())
+      let comments = gitlabCommentsAfterOwnReply(thread.comments, snapshot.viewerLogin)
         .map(comment => ({ id: comment.id, revision: gitlabCommentRevision(comment) }));
       if ((snapshot.fromCache || snapshot.truncated) && previous) comments = [...new Map([...previous.comments, ...comments].map(comment => [comment.id, comment])).values()];
       const item: WorkspaceAttentionItem = { id, revision: "", workspaceId, kind: "gitlab", label: thread.filePath ?? `MR !${snapshot.iid} conversation`, detail: "Unread comments and replies.",

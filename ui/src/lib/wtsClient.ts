@@ -1152,6 +1152,14 @@ export function gitlabMergeRequestInboxHttpPath(workspaceId: string) {
   return `/api/v1/workspaces/${encodeURIComponent(workspaceId)}/merge-requests/gitlab`;
 }
 
+export function linkWorkspaceGitlabMergeRequestHttpPath(
+  workspaceId: string,
+  repositoryId: string,
+  iid: number,
+) {
+  return `/api/v1/workspaces/${encodeURIComponent(workspaceId)}/gitlab-merge-requests/${encodeURIComponent(repositoryId)}/${iid}/link`;
+}
+
 export function openGitlabMergeRequestHttpPath(
   repositoryId: string,
   iid: number,
@@ -1161,6 +1169,8 @@ export function openGitlabMergeRequestHttpPath(
 
 export const GET_GITLAB_MERGE_REQUESTS_TAURI_COMMAND =
   "get_gitlab_merge_requests";
+export const LINK_WORKSPACE_GITLAB_MERGE_REQUEST_TAURI_COMMAND =
+  "link_workspace_gitlab_merge_request";
 export const OPEN_GITLAB_MERGE_REQUEST_TAURI_COMMAND =
   "open_gitlab_merge_request";
 export const GET_GITLAB_INTEGRATION_STATUS_TAURI_COMMAND =
@@ -1319,14 +1329,38 @@ export type CodeReviewScope = "recentChanges" | "totalCode";
 
 export type CodeReviewFindingSeverity = "critical" | "warning" | "suggestion";
 
+export type CodeReviewLabel =
+  | "blocking"
+  | "issue"
+  | "question"
+  | "suggestion"
+  | "nit"
+  | "praise";
+
+export interface CodeReviewPrecedent {
+  body: string;
+  url?: string;
+  filePath?: string;
+  score: number;
+}
+
 export interface CodeReviewFinding {
   findingId: string;
   severity: CodeReviewFindingSeverity;
+  label?: CodeReviewLabel;
+  repositoryId?: string;
   filePath: string;
   line?: number;
+  side?: "additions" | "deletions";
+  /** True when the file, line, and side name a changed line in the reviewed patch. */
+  anchored?: boolean;
   title: string;
   explanation: string;
+  code?: string;
+  suggestedComment?: string;
   suggestedPatch?: string;
+  alsoLines?: number[];
+  precedent?: CodeReviewPrecedent;
 }
 
 export interface CodeReviewActionableStep {
@@ -1334,16 +1368,342 @@ export interface CodeReviewActionableStep {
   instruction: string;
 }
 
+export type CodeReviewMode = "raptik" | "skill" | "standard";
+
+/** The review skill that shaped a review. */
+export interface CodeReviewSkillRef {
+  id: string;
+  label: string;
+  reviewer?: string;
+}
+
+/** The GitLab merge request version that a repository review covered. */
+export interface CodeReviewMergeRequest {
+  iid: number;
+  baseCommitOid: string;
+  startCommitOid: string;
+  headCommitOid: string;
+}
+
+/** A review skill that WTS found on this machine. docs/review-skills.md describes the contract. */
+export interface ReviewSkillSummary {
+  id: string;
+  label: string;
+  description?: string;
+  reviewer?: string;
+  source: string;
+  hasManifest: boolean;
+  precedentCount: number;
+  sizeGateLines?: number;
+}
+
+export type CodeReviewOutcome =
+  | "reviewed"
+  | "sizeGateStopped"
+  | "unstructured"
+  | "noChanges";
+
+export interface CodeReviewRepository {
+  repositoryId: string;
+  repositoryLabel: string;
+  baseCommitOid: string;
+  headCommitOid: string;
+  patchSha256: string;
+  changedLines: number;
+  sizeGateExceeded: boolean;
+  strictness: "strict" | "normal";
+  patchTruncated?: boolean;
+  mergeRequest?: CodeReviewMergeRequest;
+}
+
 export interface WorkspaceCodeReviewResult {
+  schemaVersion?: number;
   workspaceId: string;
   provider: AgentProvider;
   scope: CodeReviewScope;
   model?: string;
   agent?: string;
+  mode?: CodeReviewMode;
+  skill?: CodeReviewSkillRef;
+  outcome?: CodeReviewOutcome;
+  intent?: string;
   summary: string;
   findings: CodeReviewFinding[];
   actionableSteps: CodeReviewActionableStep[];
+  suggestedTests?: string[];
+  notChecked?: string[];
+  repositories?: CodeReviewRepository[];
+  rawOutput?: string;
   reviewedAtUnixMs: number;
+}
+
+export interface RunWorkspaceCodeReviewOptions {
+  repositoryId?: string;
+  ignoreSizeGate?: boolean;
+  /** The review skill ID. "none" runs without a skill. No value uses the default skill. */
+  skill?: string;
+  /** Reviews the published patch of this merge request. Needs repositoryId. */
+  mergeRequestIid?: number;
+}
+
+export type CodeReviewTraceKind = "status" | "thinking" | "message" | "command" | "tool" | "search" | "error";
+
+export interface CodeReviewTraceStep {
+  sequence: number;
+  kind: CodeReviewTraceKind;
+  text: string;
+  detail?: string;
+  itemId?: string;
+  /** True while a command or tool is still in progress. */
+  running: boolean;
+  atUnixMs: number;
+}
+
+export interface CodeReviewTrace {
+  workspaceId: string;
+  runId: string;
+  provider: AgentProvider;
+  model?: string;
+  state: "running" | "finished" | "failed";
+  startedAtUnixMs: number;
+  steps: CodeReviewTraceStep[];
+  droppedSteps: number;
+}
+
+const TRACE_KINDS: readonly CodeReviewTraceKind[] = ["status", "thinking", "message", "command", "tool", "search", "error"];
+
+export function normalizeCodeReviewTrace(payload: unknown): CodeReviewTrace | null {
+  if (!payload || typeof payload !== "object") return null;
+  const raw = payload as Record<string, unknown>;
+  if (typeof raw.runId !== "string") return null;
+  const steps = Array.isArray(raw.steps) ? raw.steps : [];
+  return {
+    workspaceId: typeof raw.workspaceId === "string" ? raw.workspaceId : "",
+    runId: raw.runId,
+    provider: CODE_REVIEW_PROVIDERS.includes(raw.provider as AgentProvider) ? (raw.provider as AgentProvider) : "codex",
+    ...(optionalText(raw.model) ? { model: raw.model as string } : {}),
+    state: raw.state === "finished" || raw.state === "failed" ? raw.state : "running",
+    startedAtUnixMs: typeof raw.startedAtUnixMs === "number" ? raw.startedAtUnixMs : 0,
+    droppedSteps: typeof raw.droppedSteps === "number" ? raw.droppedSteps : 0,
+    steps: steps.flatMap((item) => {
+      if (!item || typeof item !== "object") return [];
+      const step = item as Record<string, unknown>;
+      if (typeof step.sequence !== "number" || typeof step.text !== "string") return [];
+      return [{
+        sequence: step.sequence,
+        kind: TRACE_KINDS.includes(step.kind as CodeReviewTraceKind) ? (step.kind as CodeReviewTraceKind) : "status",
+        text: step.text,
+        ...(optionalText(step.detail) ? { detail: step.detail as string } : {}),
+        ...(optionalText(step.itemId) ? { itemId: step.itemId as string } : {}),
+        running: step.running === true,
+        atUnixMs: typeof step.atUnixMs === "number" ? step.atUnixMs : 0,
+      }];
+    }),
+  };
+}
+
+export interface AgentProviderModels {
+  provider: AgentProvider;
+  installed: boolean;
+  defaultModel?: string;
+  /** Where the default came from, for example "~/.codex/config.toml". */
+  defaultSource?: string;
+  models: string[];
+  modelSelectable: boolean;
+}
+
+export interface AgentModelCatalog {
+  providers: AgentProviderModels[];
+  /** True when WTS found the Raptik review skill on this machine. */
+  raptikSkillLoaded?: boolean;
+  reviewSkills?: ReviewSkillSummary[];
+  defaultReviewSkill?: string;
+}
+
+const CODE_REVIEW_PROVIDERS: readonly AgentProvider[] = ["codex", "copilot", "openCode", "hermes"];
+const CODE_REVIEW_LABELS: readonly CodeReviewLabel[] = ["blocking", "issue", "question", "suggestion", "nit", "praise"];
+
+function optionalText(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value : undefined;
+}
+
+function textList(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+}
+
+function normalizeCodeReviewFinding(value: unknown, index: number): CodeReviewFinding | null {
+  if (!value || typeof value !== "object") return null;
+  const raw = value as Record<string, unknown>;
+  const filePath = optionalText(raw.filePath) ?? "";
+  const title = optionalText(raw.title) ?? optionalText(raw.explanation) ?? "";
+  if (!title) return null;
+  const severity: CodeReviewFindingSeverity =
+    raw.severity === "critical" || raw.severity === "warning" ? raw.severity : "suggestion";
+  const label = CODE_REVIEW_LABELS.includes(raw.label as CodeReviewLabel)
+    ? (raw.label as CodeReviewLabel)
+    : severity === "critical" ? "blocking" : severity === "warning" ? "issue" : "suggestion";
+  const line = typeof raw.line === "number" && Number.isInteger(raw.line) && raw.line > 0 ? raw.line : undefined;
+  const side = raw.side === "additions" || raw.side === "deletions" ? raw.side : undefined;
+  const precedent = raw.precedent && typeof raw.precedent === "object"
+    ? (raw.precedent as Record<string, unknown>)
+    : undefined;
+  return {
+    findingId: optionalText(raw.findingId) ?? `finding-${index + 1}`,
+    severity,
+    label,
+    ...(optionalText(raw.repositoryId) ? { repositoryId: raw.repositoryId as string } : {}),
+    filePath,
+    ...(line ? { line } : {}),
+    ...(side ? { side } : {}),
+    anchored: raw.anchored === true && Boolean(line && side),
+    title,
+    explanation: typeof raw.explanation === "string" ? raw.explanation : "",
+    ...(optionalText(raw.code) ? { code: raw.code as string } : {}),
+    ...(optionalText(raw.suggestedComment) ? { suggestedComment: raw.suggestedComment as string } : {}),
+    ...(optionalText(raw.suggestedPatch) ? { suggestedPatch: raw.suggestedPatch as string } : {}),
+    ...(Array.isArray(raw.alsoLines)
+      ? { alsoLines: raw.alsoLines.filter((item): item is number => Number.isInteger(item) && (item as number) > 0) }
+      : {}),
+    ...(precedent && typeof precedent.body === "string"
+      ? {
+          precedent: {
+            body: precedent.body,
+            ...(optionalText(precedent.url) ? { url: precedent.url as string } : {}),
+            ...(optionalText(precedent.filePath) ? { filePath: precedent.filePath as string } : {}),
+            score: typeof precedent.score === "number" ? precedent.score : 0,
+          },
+        }
+      : {}),
+  };
+}
+
+/** Reads a code review from the transport and fills the fields that older reviews omit. */
+export function normalizeWorkspaceCodeReviewResult(
+  payload: unknown,
+  workspaceId: string,
+): WorkspaceCodeReviewResult {
+  if (!payload || typeof payload !== "object") {
+    throw new Error("WTS returned a code review that it cannot read.");
+  }
+  const raw = payload as Record<string, unknown>;
+  const provider = CODE_REVIEW_PROVIDERS.includes(raw.provider as AgentProvider)
+    ? (raw.provider as AgentProvider)
+    : "codex";
+  const outcome: CodeReviewOutcome =
+    raw.outcome === "sizeGateStopped" || raw.outcome === "unstructured" || raw.outcome === "noChanges"
+      ? raw.outcome
+      : "reviewed";
+  const repositories = Array.isArray(raw.repositories)
+    ? raw.repositories.filter(
+        (item): item is CodeReviewRepository =>
+          Boolean(item) && typeof item === "object" && typeof (item as CodeReviewRepository).repositoryId === "string",
+      ).map((item) => {
+        const mergeRequest = item.mergeRequest as unknown as Record<string, unknown> | undefined;
+        const valid = mergeRequest
+          && typeof mergeRequest.iid === "number"
+          && optionalText(mergeRequest.baseCommitOid)
+          && optionalText(mergeRequest.startCommitOid)
+          && optionalText(mergeRequest.headCommitOid);
+        if (valid || !("mergeRequest" in item)) return item;
+        const { mergeRequest: _dropped, ...rest } = item;
+        return rest as CodeReviewRepository;
+      })
+    : [];
+  const rawSkill = raw.skill && typeof raw.skill === "object" ? (raw.skill as Record<string, unknown>) : undefined;
+  const skill: CodeReviewSkillRef | undefined = rawSkill && optionalText(rawSkill.id)
+    ? {
+        id: rawSkill.id as string,
+        label: optionalText(rawSkill.label) ?? (rawSkill.id as string),
+        ...(optionalText(rawSkill.reviewer) ? { reviewer: rawSkill.reviewer as string } : {}),
+      }
+    : undefined;
+  const steps = Array.isArray(raw.actionableSteps)
+    ? raw.actionableSteps.filter(
+        (item): item is CodeReviewActionableStep =>
+          Boolean(item) && typeof item === "object" && typeof (item as CodeReviewActionableStep).instruction === "string",
+      )
+    : [];
+  return {
+    ...(raw as object),
+    workspaceId: optionalText(raw.workspaceId) ?? workspaceId,
+    provider,
+    scope: raw.scope === "totalCode" ? "totalCode" : "recentChanges",
+    ...(optionalText(raw.model) ? { model: raw.model as string } : {}),
+    ...(optionalText(raw.agent) ? { agent: raw.agent as string } : {}),
+    mode: raw.mode === "raptik" || raw.mode === "skill" ? raw.mode : "standard",
+    skill,
+    outcome,
+    summary: typeof raw.summary === "string" ? raw.summary : "",
+    findings: Array.isArray(raw.findings)
+      ? raw.findings.flatMap((item, index) => normalizeCodeReviewFinding(item, index) ?? [])
+      : [],
+    actionableSteps: steps,
+    suggestedTests: textList(raw.suggestedTests),
+    notChecked: textList(raw.notChecked),
+    repositories,
+    reviewedAtUnixMs: typeof raw.reviewedAtUnixMs === "number" ? raw.reviewedAtUnixMs : 0,
+  } as WorkspaceCodeReviewResult;
+}
+
+export function normalizeAgentModelCatalog(payload: unknown): AgentModelCatalog {
+  const providers = payload && typeof payload === "object" && Array.isArray((payload as AgentModelCatalog).providers)
+    ? (payload as AgentModelCatalog).providers
+    : [];
+  const rawSkills = payload && typeof payload === "object" && Array.isArray((payload as AgentModelCatalog).reviewSkills)
+    ? ((payload as AgentModelCatalog).reviewSkills as unknown[])
+    : [];
+  const reviewSkills = rawSkills.flatMap((item): ReviewSkillSummary[] => {
+    if (!item || typeof item !== "object") return [];
+    const skill = item as Record<string, unknown>;
+    if (!optionalText(skill.id)) return [];
+    return [{
+      id: skill.id as string,
+      label: optionalText(skill.label) ?? (skill.id as string),
+      ...(optionalText(skill.description) ? { description: skill.description as string } : {}),
+      ...(optionalText(skill.reviewer) ? { reviewer: skill.reviewer as string } : {}),
+      source: optionalText(skill.source) ?? "",
+      hasManifest: skill.hasManifest === true,
+      precedentCount: typeof skill.precedentCount === "number" ? skill.precedentCount : 0,
+      ...(typeof skill.sizeGateLines === "number" ? { sizeGateLines: skill.sizeGateLines } : {}),
+    }];
+  });
+  const defaultReviewSkill = payload && typeof payload === "object"
+    ? optionalText((payload as AgentModelCatalog).defaultReviewSkill)
+    : undefined;
+  return {
+    raptikSkillLoaded: Boolean(payload && typeof payload === "object" && (payload as AgentModelCatalog).raptikSkillLoaded === true),
+    reviewSkills,
+    ...(defaultReviewSkill && reviewSkills.some((skill) => skill.id === defaultReviewSkill) ? { defaultReviewSkill } : {}),
+    providers: providers.flatMap((item) => {
+      if (!item || typeof item !== "object" || !CODE_REVIEW_PROVIDERS.includes(item.provider)) return [];
+      return [{
+        provider: item.provider,
+        installed: item.installed === true,
+        ...(optionalText(item.defaultModel) ? { defaultModel: item.defaultModel } : {}),
+        ...(optionalText(item.defaultSource) ? { defaultSource: item.defaultSource } : {}),
+        models: textList(item.models),
+        modelSelectable: item.modelSelectable !== false,
+      }];
+    }),
+  };
+}
+
+function codeReviewRequestBody(
+  provider: AgentProvider,
+  scope: CodeReviewScope,
+  model: string | undefined,
+  options: RunWorkspaceCodeReviewOptions | undefined,
+) {
+  const trimmedModel = model?.trim();
+  return {
+    provider,
+    scope,
+    ...(trimmedModel ? { model: trimmedModel, agent: trimmedModel } : {}),
+    ...(options?.repositoryId ? { repositoryId: options.repositoryId } : {}),
+    ...(options?.ignoreSizeGate ? { ignoreSizeGate: true } : {}),
+    ...(options?.skill ? { skill: options.skill } : {}),
+    ...(options?.mergeRequestIid ? { mergeRequestIid: options.mergeRequestIid } : {}),
+  };
 }
 
 export type VerificationKind =
@@ -1886,6 +2246,13 @@ export interface AgentSession {
     | null;
   needsInput?: AgentNeedsInput;
   changeRequestProposals?: AgentChangeRequestProposal[];
+  mrLinkProposals?: AgentMrLinkProposal[];
+}
+
+export interface AgentMrLinkProposal {
+  schemaVersion: 1;
+  repositoryId: string;
+  iid: number;
 }
 
 export interface AgentChangeRequestProposal {
@@ -1943,6 +2310,7 @@ export interface ObservedAgentSession {
   updateKind?: AgentObservationUpdateKind;
   needsInput?: AgentNeedsInput;
   changeRequestProposals?: AgentChangeRequestProposal[];
+  mrLinkProposals?: AgentMrLinkProposal[];
   startedAtUnixMs: number;
   lastEventAtUnixMs: number;
 }
@@ -2290,6 +2658,11 @@ export interface WorkspaceClient {
     baseRef: string,
   ): Promise<OpenRepositoryBaseResult>;
   getGitlabMergeRequests(workspaceId: string): Promise<GitlabMergeRequestInbox>;
+  linkWorkspaceGitlabMergeRequest(
+    workspaceId: string,
+    repositoryId: string,
+    iid: number,
+  ): Promise<GitlabMergeRequest>;
   openGitlabMergeRequest(
     repositoryId: string,
     iid: number,
@@ -2354,7 +2727,14 @@ export interface WorkspaceClient {
     provider: AgentProvider,
     scope: CodeReviewScope,
     model?: string,
+    options?: RunWorkspaceCodeReviewOptions,
   ): Promise<WorkspaceCodeReviewResult>;
+  /** Returns the last saved AI code review for the workspace, or null. */
+  getWorkspaceCodeReview?(workspaceId: string): Promise<WorkspaceCodeReviewResult | null>;
+  /** Returns the live steps of the newest review run. With after, only newer steps. */
+  getWorkspaceCodeReviewTrace?(workspaceId: string, after?: number): Promise<CodeReviewTrace | null>;
+  /** Lists installed agent CLIs with their configured default model and known models. */
+  listAgentModels?(refresh?: boolean): Promise<AgentModelCatalog>;
   runWorkspaceVerificationCheck?(
     workspaceId: string,
     checkId: string,
@@ -3432,6 +3812,51 @@ function normalizeOpenGithubReviewResult(value: unknown): OpenGithubReviewResult
   };
 }
 
+export function normalizeGitlabMergeRequest(
+  value: unknown,
+  path = "gitlabMergeRequest",
+): GitlabMergeRequest {
+  const item = exactRecord(value, path, [
+    "id", "repositoryId", "projectPath", "webUrl", "iid", "title",
+    "sourceBranch", "sourceHeadCommitOid", "targetBranch",
+    "authorUsername", "updatedAt", "draft", "status",
+  ]);
+  const iid = integerField(item.iid, `${path}.iid`);
+  const updatedAt = stringField(item.updatedAt, `${path}.updatedAt`);
+  if (iid < 1 || Number.isNaN(Date.parse(updatedAt))) {
+    return invalidPayload(path);
+  }
+  const sourceHeadCommitOid = optionalStringField(
+    item.sourceHeadCommitOid,
+    `${path}.sourceHeadCommitOid`,
+  );
+  if (
+    sourceHeadCommitOid !== undefined
+    && !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i.test(sourceHeadCommitOid)
+  ) {
+    return invalidPayload(`${path}.sourceHeadCommitOid`);
+  }
+  return {
+    id: stringField(item.id, `${path}.id`),
+    repositoryId: stringField(item.repositoryId, `${path}.repositoryId`),
+    projectPath: stringField(item.projectPath, `${path}.projectPath`),
+    webUrl: trustedHttpUrlField(item.webUrl, `${path}.webUrl`),
+    iid,
+    title: stringField(item.title, `${path}.title`),
+    sourceBranch: stringField(item.sourceBranch, `${path}.sourceBranch`),
+    ...(sourceHeadCommitOid === undefined ? {} : { sourceHeadCommitOid }),
+    targetBranch: stringField(item.targetBranch, `${path}.targetBranch`),
+    authorUsername: stringField(item.authorUsername, `${path}.authorUsername`),
+    updatedAt,
+    draft: booleanField(item.draft, `${path}.draft`),
+    status: enumField(
+      item.status,
+      ["open", "merged", "closed"] as const,
+      `${path}.status`,
+    ),
+  };
+}
+
 export function normalizeGitlabMergeRequestInbox(
   value: unknown,
 ): GitlabMergeRequestInbox {
@@ -3455,62 +3880,8 @@ export function normalizeGitlabMergeRequestInbox(
     ["fresh", "stale", "auth", "error"] as const,
     "gitlabMergeRequestInbox.state",
   );
-  const mergeRequests = raw.mergeRequests.map(
-    (value, index): GitlabMergeRequest => {
-      const path = `gitlabMergeRequestInbox.mergeRequests[${index}]`;
-      const item = exactRecord(value, path, [
-        "id",
-        "repositoryId",
-        "projectPath",
-        "webUrl",
-        "iid",
-        "title",
-        "sourceBranch",
-        "sourceHeadCommitOid",
-        "targetBranch",
-        "authorUsername",
-        "updatedAt",
-        "draft",
-        "status",
-      ]);
-      const iid = integerField(item.iid, `${path}.iid`);
-      const updatedAt = stringField(item.updatedAt, `${path}.updatedAt`);
-      if (iid < 1 || Number.isNaN(Date.parse(updatedAt))) {
-        return invalidPayload(path);
-      }
-      const sourceHeadCommitOid = optionalStringField(
-        item.sourceHeadCommitOid,
-        `${path}.sourceHeadCommitOid`,
-      );
-      if (
-        sourceHeadCommitOid !== undefined
-        && !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i.test(sourceHeadCommitOid)
-      ) {
-        return invalidPayload(`${path}.sourceHeadCommitOid`);
-      }
-      return {
-        id: stringField(item.id, `${path}.id`),
-        repositoryId: stringField(item.repositoryId, `${path}.repositoryId`),
-        projectPath: stringField(item.projectPath, `${path}.projectPath`),
-        webUrl: trustedHttpUrlField(item.webUrl, `${path}.webUrl`),
-        iid,
-        title: stringField(item.title, `${path}.title`),
-        sourceBranch: stringField(item.sourceBranch, `${path}.sourceBranch`),
-        ...(sourceHeadCommitOid === undefined ? {} : { sourceHeadCommitOid }),
-        targetBranch: stringField(item.targetBranch, `${path}.targetBranch`),
-        authorUsername: stringField(
-          item.authorUsername,
-          `${path}.authorUsername`,
-        ),
-        updatedAt,
-        draft: booleanField(item.draft, `${path}.draft`),
-        status: enumField(
-          item.status,
-          ["open", "merged", "closed"] as const,
-          `${path}.status`,
-        ),
-      };
-    },
+  const mergeRequests = raw.mergeRequests.map((item, index) =>
+    normalizeGitlabMergeRequest(item, `gitlabMergeRequestInbox.mergeRequests[${index}]`),
   );
   const fetchedAtUnixMs = raw.fetchedAtUnixMs === null
     ? null
@@ -4422,6 +4793,7 @@ function normalizeAgentSession(value: unknown, path: string): AgentSession {
     "failure",
     "needsInput",
     "changeRequestProposals",
+    "mrLinkProposals",
   ]);
   if (integerField(raw.schemaVersion, `${path}.schemaVersion`) !== 1) {
     return invalidPayload(`${path}.schemaVersion`);
@@ -4493,7 +4865,22 @@ function normalizeAgentSession(value: unknown, path: string): AgentSession {
             ),
           ),
         }),
+    ...(raw.mrLinkProposals === undefined
+      ? {}
+      : { mrLinkProposals: arrayField(raw.mrLinkProposals, `${path}.mrLinkProposals`)
+          .map((proposal, index) => normalizeAgentMrLinkProposal(proposal, `${path}.mrLinkProposals[${index}]`)) }),
   };
+}
+
+function normalizeAgentMrLinkProposal(value: unknown, path: string): AgentMrLinkProposal {
+  const raw = exactRecord(value, path, ["schemaVersion", "repositoryId", "iid"]);
+  const repositoryId = stringField(raw.repositoryId, `${path}.repositoryId`);
+  const iid = integerField(raw.iid, `${path}.iid`);
+  if (raw.schemaVersion !== 1 || !repositoryId || repositoryId.length > 160 ||
+      repositoryId.trim() !== repositoryId || !Number.isSafeInteger(iid) || iid <= 0) {
+    return invalidPayload(path);
+  }
+  return { schemaVersion: 1, repositoryId, iid };
 }
 
 function normalizeAgentChangeRequestProposal(
@@ -4613,6 +5000,7 @@ function normalizeObservedAgentSession(
     "updateKind",
     "needsInput",
     "changeRequestProposals",
+    "mrLinkProposals",
     "startedAtUnixMs",
     "lastEventAtUnixMs",
   ]);
@@ -4696,6 +5084,10 @@ function normalizeObservedAgentSession(
             ),
           ),
         }),
+    ...(raw.mrLinkProposals === undefined
+      ? {}
+      : { mrLinkProposals: arrayField(raw.mrLinkProposals, `${path}.mrLinkProposals`)
+          .map((proposal, index) => normalizeAgentMrLinkProposal(proposal, `${path}.mrLinkProposals[${index}]`)) }),
     startedAtUnixMs: integerField(
       raw.startedAtUnixMs,
       `${path}.startedAtUnixMs`,
@@ -8897,6 +9289,9 @@ function retryableStatus(status: number): boolean {
   return status === 408 || status === 429 || status >= 500;
 }
 
+/** Number of times a read waits for the busy local host before it fails. */
+const CAPACITY_READ_RETRIES = 3;
+
 function errorDetails(value: unknown): {
   code?: string;
   message?: string;
@@ -10115,6 +10510,26 @@ class HttpWorkspaceClient implements WorkspaceClient {
     );
   }
 
+  async linkWorkspaceGitlabMergeRequest(
+    workspaceId: string,
+    repositoryId: string,
+    iid: number,
+  ): Promise<GitlabMergeRequest> {
+    const workspace = requiredWorkspaceId(workspaceId);
+    const repository = requiredChangeRequestRepositoryId(repositoryId);
+    validateGitlabMergeRequestIdentity(repository, iid);
+    const result = normalizeGitlabMergeRequest(
+      await this.request(
+        linkWorkspaceGitlabMergeRequestHttpPath(workspace, repository, iid),
+        { method: "POST" },
+      ),
+    );
+    if (result.repositoryId !== repository || result.iid !== iid) {
+      return invalidPayload("gitlabMergeRequest.identity");
+    }
+    return result;
+  }
+
   async openGitlabMergeRequest(
     repositoryId: string,
     iid: number,
@@ -10423,19 +10838,38 @@ class HttpWorkspaceClient implements WorkspaceClient {
     provider: AgentProvider,
     scope: CodeReviewScope,
     model?: string,
+    options?: RunWorkspaceCodeReviewOptions,
   ): Promise<WorkspaceCodeReviewResult> {
     const workspace = requiredWorkspaceId(workspaceId);
-    return (await this.request(
+    const payload = await this.request(
       `/api/v1/workspaces/${encodeURIComponent(workspace)}/code-review/run`,
       {
         method: "POST",
-        body: JSON.stringify({
-          provider,
-          scope,
-          ...(model?.trim() ? { model: model.trim(), agent: model.trim() } : {}),
-        }),
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(codeReviewRequestBody(provider, scope, model, options)),
       },
-    )) as WorkspaceCodeReviewResult;
+    );
+    return normalizeWorkspaceCodeReviewResult(payload, workspace);
+  }
+
+  async getWorkspaceCodeReview(workspaceId: string): Promise<WorkspaceCodeReviewResult | null> {
+    const workspace = requiredWorkspaceId(workspaceId);
+    const payload = await this.request(`/api/v1/workspaces/${encodeURIComponent(workspace)}/code-review`);
+    return payload === null ? null : normalizeWorkspaceCodeReviewResult(payload, workspace);
+  }
+
+  async getWorkspaceCodeReviewTrace(workspaceId: string, after?: number): Promise<CodeReviewTrace | null> {
+    const workspace = requiredWorkspaceId(workspaceId);
+    const query = after !== undefined ? `?after=${Math.max(0, Math.floor(after))}` : "";
+    return normalizeCodeReviewTrace(
+      await this.request(`/api/v1/workspaces/${encodeURIComponent(workspace)}/code-review/trace${query}`),
+    );
+  }
+
+  async listAgentModels(refresh = false): Promise<AgentModelCatalog> {
+    return normalizeAgentModelCatalog(
+      await this.request(`/api/v1/agent-models${refresh ? "?refresh=true" : ""}`),
+    );
   }
 
   async runWorkspaceVerificationCheck(
@@ -10658,28 +11092,44 @@ class HttpWorkspaceClient implements WorkspaceClient {
     if (changesSessions) invalidateAgentSessions(this);
     try {
       const sessionToken = await this.sessionToken();
-      let response: Response;
-      try {
-        response = await this.fetch()(`${this.baseUrl}${path}`, {
-          ...init,
-          headers: {
-            Accept: "application/json",
-            "X-WTS-Session": sessionToken,
-            "X-WTS-Request": "local-ui",
-            ...init.headers,
-          },
-        });
-      } catch (error) {
-        const wrapped = wrapTransportError(error);
-        logHttpTransportFailure(
-          "request",
-          init.method ?? "GET",
-          path,
-          wrapped,
-        );
-        throw wrapped;
+      const readOnly = init.method === undefined || init.method === "GET";
+      for (let attempt = 0; ; attempt += 1) {
+        let response: Response;
+        try {
+          response = await this.fetch()(`${this.baseUrl}${path}`, {
+            ...init,
+            headers: {
+              Accept: "application/json",
+              "X-WTS-Session": sessionToken,
+              "X-WTS-Request": "local-ui",
+              ...init.headers,
+            },
+          });
+        } catch (error) {
+          const wrapped = wrapTransportError(error);
+          logHttpTransportFailure(
+            "request",
+            init.method ?? "GET",
+            path,
+            wrapped,
+          );
+          throw wrapped;
+        }
+        // A busy local host rejects a read before it starts work. Reads are
+        // safe to repeat, so wait for the advertised delay instead of showing
+        // the user a dead end.
+        if (readOnly && response.status === 429 && attempt < CAPACITY_READ_RETRIES) {
+          const retryAfter = Number(response.headers.get("Retry-After"));
+          const delayMs = Math.min(
+            Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : 500,
+            2000,
+          ) * (attempt + 1);
+          await response.body?.cancel().catch(() => undefined);
+          await new Promise((resolve) => setTimeout(resolve, delayMs));
+          continue;
+        }
+        return await this.readResponse(response);
       }
-      return await this.readResponse(response);
     } finally {
       if (changesSessions) invalidateAgentSessions(this);
     }
@@ -11516,6 +11966,27 @@ class TauriWorkspaceClient implements WorkspaceClient {
     );
   }
 
+  async linkWorkspaceGitlabMergeRequest(
+    workspaceId: string,
+    repositoryId: string,
+    iid: number,
+  ): Promise<GitlabMergeRequest> {
+    const workspace = requiredWorkspaceId(workspaceId);
+    const repository = requiredChangeRequestRepositoryId(repositoryId);
+    validateGitlabMergeRequestIdentity(repository, iid);
+    const result = normalizeGitlabMergeRequest(
+      await this.invoke(LINK_WORKSPACE_GITLAB_MERGE_REQUEST_TAURI_COMMAND, {
+        workspaceId: workspace,
+        repositoryId: repository,
+        iid,
+      }),
+    );
+    if (result.repositoryId !== repository || result.iid !== iid) {
+      return invalidPayload("gitlabMergeRequest.identity");
+    }
+    return result;
+  }
+
   async openGitlabMergeRequest(
     repositoryId: string,
     iid: number,
@@ -11759,15 +12230,39 @@ class TauriWorkspaceClient implements WorkspaceClient {
     provider: AgentProvider,
     scope: CodeReviewScope,
     model?: string,
+    options?: RunWorkspaceCodeReviewOptions,
   ): Promise<WorkspaceCodeReviewResult> {
     const workspace = requiredWorkspaceId(workspaceId);
-    return (await this.invoke("run_workspace_code_review", {
+    const payload = await this.invoke("run_workspace_code_review", {
       workspaceId: workspace,
       provider,
       scope,
       model: model?.trim() || null,
       agent: model?.trim() || null,
-    })) as WorkspaceCodeReviewResult;
+      ...(options?.repositoryId ? { repositoryId: options.repositoryId } : {}),
+      ...(options?.ignoreSizeGate ? { ignoreSizeGate: true } : {}),
+      ...(options?.skill ? { skill: options.skill } : {}),
+      ...(options?.mergeRequestIid ? { mergeRequestIid: options.mergeRequestIid } : {}),
+    });
+    return normalizeWorkspaceCodeReviewResult(payload, workspace);
+  }
+
+  async getWorkspaceCodeReview(workspaceId: string): Promise<WorkspaceCodeReviewResult | null> {
+    const workspace = requiredWorkspaceId(workspaceId);
+    const payload = await this.invoke("get_workspace_code_review", { workspaceId: workspace });
+    return payload === null ? null : normalizeWorkspaceCodeReviewResult(payload, workspace);
+  }
+
+  async getWorkspaceCodeReviewTrace(workspaceId: string, after?: number): Promise<CodeReviewTrace | null> {
+    const workspace = requiredWorkspaceId(workspaceId);
+    return normalizeCodeReviewTrace(await this.invoke("get_workspace_code_review_trace", {
+      workspaceId: workspace,
+      after: after ?? null,
+    }));
+  }
+
+  async listAgentModels(refresh = false): Promise<AgentModelCatalog> {
+    return normalizeAgentModelCatalog(await this.invoke("list_agent_models", { refresh }));
   }
 
   async getWorkspaceVerificationSummary(workspaceId: string): Promise<WorkspaceVerificationSummary | null> {
