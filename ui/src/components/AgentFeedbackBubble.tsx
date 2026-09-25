@@ -6,7 +6,7 @@ import { WorkspaceClientError, type AgentProvider, type WorkspaceClient } from "
 import type { AgentConversation, AgentConversationMessage, AgentConversationSource } from "../lib/agentConversations";
 import { cleanupFeedbackCaptures, discardUnstoredFeedbackCapture, hydrateFeedbackCapture, MAX_FEEDBACK_DRAFTS, newFeedbackDraft, persistFeedbackCapture, readFeedbackShelf, saveFeedbackShelf,
   type AgentFeedbackDraft, type AgentFeedbackShelf, type QueuedFeedbackEdit } from "../lib/agentFeedbackDraft";
-import { AGENT_FEEDBACK_REQUESTED_EVENT, AGENT_FEEDBACK_RESULT_REQUESTED_EVENT, type AgentFeedbackResultTarget } from "../lib/agentFeedbackEvents";
+import { AGENT_FEEDBACK_REQUESTED_EVENT, AGENT_FEEDBACK_RESULT_REQUESTED_EVENT, AGENT_TASK_REQUESTED_EVENT, type AgentFeedbackResultTarget, type AgentTaskRequest } from "../lib/agentFeedbackEvents";
 import { canCaptureUiRegion, UI_REGION_SELECTED_EVENT, type UiRegionSelection } from "./uiRegionSelection";
 import { GitlabDiscussionBody } from "../variants/local-workspace/GitlabDiscussionBody";
 import type { GitlabDiscussionFixContext } from "../variants/local-workspace/gitlabDiscussionFixContext";
@@ -266,8 +266,14 @@ export function AgentFeedbackBubble({ client }: { client: WorkspaceClient }) {
       ++selectionGeneration.current; setSelectionPending(false); rememberFocus();
       addDraft(newFeedbackDraft(mrSource(detail), "Address this review feedback in the local source. Run the relevant checks and explain the changes."));
     };
-    window.addEventListener(UI_REGION_SELECTED_EVENT, select); window.addEventListener(AGENT_FEEDBACK_REQUESTED_EVENT, review);
-    return () => { ++selectionGeneration.current; window.removeEventListener(UI_REGION_SELECTED_EVENT, select); window.removeEventListener(AGENT_FEEDBACK_REQUESTED_EVENT, review); };
+    const task = ({ detail }: CustomEvent<AgentTaskRequest>) => {
+      clearResultNavigation();
+      ++selectionGeneration.current; setSelectionPending(false); rememberFocus();
+      addDraft(newFeedbackDraft({ kind: "ui", route: window.location.href, calloutId: detail.calloutId, label: detail.label,
+        ...(detail.selectedText?.trim() ? { selectedText: detail.selectedText } : {}) }, detail.body));
+    };
+    window.addEventListener(UI_REGION_SELECTED_EVENT, select); window.addEventListener(AGENT_FEEDBACK_REQUESTED_EVENT, review); window.addEventListener(AGENT_TASK_REQUESTED_EVENT, task);
+    return () => { ++selectionGeneration.current; window.removeEventListener(UI_REGION_SELECTED_EVENT, select); window.removeEventListener(AGENT_FEEDBACK_REQUESTED_EVENT, review); window.removeEventListener(AGENT_TASK_REQUESTED_EVENT, task); };
   }, [client, isCurrentClient, addDraft, clearResultNavigation]);
   useEffect(() => {
     if (!shelf.open) {

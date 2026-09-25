@@ -535,6 +535,15 @@ where
     }
 
     pub fn list(&self, repositories: &[GitlabTrustedRepository]) -> GitlabMergeRequestInbox {
+        self.list_with_links(repositories, &BTreeMap::new())
+    }
+
+    /// Discover exact-branch MRs and revalidate explicitly linked MRs.
+    pub fn list_with_links(
+        &self,
+        repositories: &[GitlabTrustedRepository],
+        links: &BTreeMap<String, u64>,
+    ) -> GitlabMergeRequestInbox {
         let repositories = repositories
             .iter()
             .take(MAX_TRUSTED_REPOSITORIES)
@@ -568,12 +577,22 @@ where
         }
         let mut found = Vec::new();
         for repository in &repositories {
-            let Some(username) = identities.get(repository.host()) else {
+            if !identities.contains_key(repository.host()) {
                 return self.failure(&repositories, Failure::Invalid);
-            };
-            match self.query_repository(&executable, repository, username) {
+            }
+            match self.query_repository(&executable, repository) {
                 Ok(mut merge_requests) => found.append(&mut merge_requests),
                 Err(error) => return self.failure(&repositories, error),
+            }
+            if let Some(&iid) = links.get(repository.repository_id()) {
+                match self.query_linked_merge_request(&executable, repository, iid) {
+                    Ok(linked) => {
+                        if !found.iter().any(|mr| mr.repository_id == linked.repository_id && mr.iid == iid) {
+                            found.push(linked);
+                        }
+                    }
+                    Err(error) => return self.failure(&repositories, error),
+                }
             }
         }
         found.sort_by(|left, right| {
@@ -607,8 +626,59 @@ where
             found,
             Some(fetched_at),
             None,
-            "GitLab returned the current authored merge requests.",
+            "GitLab returned merge requests for the managed branches.",
         )
+    }
+
+    /// Check one explicit MR hint against the trusted project and signed-in user.
+    pub fn linked_merge_request(
+        &self,
+        repository: &GitlabTrustedRepository,
+        iid: u64,
+    ) -> Result<GitlabMergeRequest, String> {
+        if iid == 0 || iid > i64::MAX as u64 {
+            return Err("reviewNotFound".to_owned());
+        }
+        let executable = self.resolver.resolve("glab")
+            .ok().flatten().ok_or("glabMissing")?;
+        let linked = self.query_linked_merge_request(&executable, repository, iid)
+            .map_err(|_| "reviewNotFound".to_owned())?;
+        if linked.status != GitlabMergeRequestStatus::Open {
+            return Err("reviewNotFound".to_owned());
+        }
+        Ok(linked)
+    }
+
+    fn query_linked_merge_request(
+        &self,
+        executable: &PathBuf,
+        repository: &GitlabTrustedRepository,
+        iid: u64,
+    ) -> Result<GitlabMergeRequest, Failure> {
+        if iid == 0 || iid > i64::MAX as u64 {
+            return Err(Failure::Invalid);
+        }
+        let username = self.current_user(executable, repository.host())?;
+        let endpoint = publication_merge_request_endpoint(repository, iid);
+        let output = self.runner.run(CommandProbe {
+            executable,
+            args: &["api", "--hostname", repository.host(), &endpoint],
+        }).map_err(provider_failure)?;
+        let node: MergeRequestNode =
+            serde_json::from_slice(output.stdout()).map_err(|_| Failure::Invalid)?;
+        if node.iid != iid
+            || node.source_project_id.is_none()
+            || node.source_project_id != node.target_project_id
+        {
+            return Err(Failure::Invalid);
+        }
+        let source = GitlabTrustedRepository::from_origin(
+            repository.repository_id(),
+            &format!("https://{}/{}.git", repository.host(), repository.project_path()),
+            &node.source_branch,
+            repository.head_commit_oid(),
+        ).ok_or(Failure::Invalid)?;
+        validated_merge_request(node, &source, &username).ok_or(Failure::Invalid)
     }
 
     /// Re-fetch one authored, open merge request from the exact trusted project.
@@ -1787,9 +1857,8 @@ where
         &self,
         executable: &PathBuf,
         repository: &GitlabTrustedRepository,
-        username: &str,
     ) -> Result<Vec<GitlabMergeRequest>, Failure> {
-        let endpoint = merge_request_endpoint(repository, username);
+        let endpoint = merge_request_endpoint(repository);
         let output = self
             .runner
             .run(CommandProbe {
@@ -1802,7 +1871,7 @@ where
         Ok(nodes
             .into_iter()
             .take(MAX_PER_REPOSITORY)
-            .filter_map(|node| validated_merge_request(node, repository, username))
+            .filter_map(|node| validated_branch_merge_request(node, repository))
             .collect())
     }
 
@@ -1947,13 +2016,12 @@ fn now_ms() -> u64 {
         .unwrap_or(u64::MAX)
 }
 
-fn merge_request_endpoint(repository: &GitlabTrustedRepository, username: &str) -> String {
+fn merge_request_endpoint(repository: &GitlabTrustedRepository) -> String {
     let project =
         form_urlencoded::byte_serialize(repository.project_path().as_bytes()).collect::<String>();
     let query = form_urlencoded::Serializer::new(String::new())
         .append_pair("state", "all")
         .append_pair("source_branch", repository.source_branch())
-        .append_pair("author_username", username)
         .append_pair("order_by", "updated_at")
         .append_pair("sort", "desc")
         .append_pair("per_page", &MAX_PER_REPOSITORY.to_string())
@@ -1989,6 +2057,16 @@ fn validated_merge_request(
     repository: &GitlabTrustedRepository,
     username: &str,
 ) -> Option<GitlabMergeRequest> {
+    if !node.author.username.eq_ignore_ascii_case(username) {
+        return None;
+    }
+    validated_branch_merge_request(node, repository)
+}
+
+fn validated_branch_merge_request(
+    node: MergeRequestNode,
+    repository: &GitlabTrustedRepository,
+) -> Option<GitlabMergeRequest> {
     let status = match node.state.as_str() {
         "opened" => GitlabMergeRequestStatus::Open,
         "merged" => GitlabMergeRequestStatus::Merged,
@@ -1999,7 +2077,6 @@ fn validated_merge_request(
         || node.iid == 0
         || node.iid > i64::MAX as u64
         || node.source_branch != repository.source_branch
-        || !node.author.username.eq_ignore_ascii_case(username)
     {
         return None;
     }
@@ -3805,6 +3882,84 @@ esac
             json["mergeRequests"][0]["webUrl"],
             "https://gitlab.example.com/acme/api/-/merge_requests/17"
         );
+    }
+
+    #[test]
+    fn discovers_an_existing_branch_merge_request_by_another_author() {
+        struct BranchRunner(AtomicUsize);
+        impl CommandRunner for BranchRunner {
+            fn run(&self, probe: CommandProbe<'_>) -> Result<ProbeOutput, ProbeFailure> {
+                match self.0.fetch_add(1, Ordering::SeqCst) {
+                    0 => Ok(ProbeOutput::new(
+                        br#"{"id":7,"username":"alice"}"#.to_vec(),
+                        [],
+                    )),
+                    _ => {
+                        assert!(probe.args[3].contains("source_branch=feat%2Fdelivery"));
+                        assert!(!probe.args[3].contains("author_username="));
+                        Ok(ProbeOutput::new(br#"[{"id":1017,"iid":17,"title":"Existing MR","web_url":"https://gitlab.example.com/acme/api/-/merge_requests/17","state":"opened","source_branch":"feat/delivery","target_branch":"develop","author":{"username":"bob"},"updated_at":"2026-08-14T09:00:00Z","draft":false}]"#.to_vec(), []))
+                    }
+                }
+            }
+        }
+
+        let result =
+            GitlabMergeRequestsAdapter::new(BranchRunner(AtomicUsize::new(0)), FixedResolver)
+                .list(&[repository()]);
+        assert_eq!(result.state, GitlabMergeRequestInboxState::Fresh);
+        assert_eq!(result.merge_requests.len(), 1);
+        assert_eq!(result.merge_requests[0].author_username, "bob");
+        assert_eq!(result.merge_requests[0].repository_id, "repo_api");
+    }
+
+    #[test]
+    fn linked_mr_uses_the_trusted_project_not_the_managed_branch() {
+        struct LinkedRunner;
+        impl CommandRunner for LinkedRunner {
+            fn run(&self, probe: CommandProbe<'_>) -> Result<ProbeOutput, ProbeFailure> {
+                if probe.args[3] == "/user" {
+                    return Ok(ProbeOutput::new(
+                        br#"{"id":7,"username":"alice"}"#.to_vec(), [],
+                    ));
+                }
+                assert_eq!(
+                    probe.args[3],
+                    "/projects/acme%2Fapi/merge_requests/43",
+                );
+                Ok(ProbeOutput::new(
+                    br#"{"id":1043,"iid":43,"title":"Existing work","web_url":"https://gitlab.example.com/acme/api/-/merge_requests/43","state":"opened","source_branch":"review/complete","source_project_id":7,"target_project_id":7,"target_branch":"develop","author":{"username":"alice"},"updated_at":"2026-09-23T09:00:00Z","draft":true}"#.to_vec(),
+                    [],
+                ))
+            }
+        }
+        let adapter = GitlabMergeRequestsAdapter::new(LinkedRunner, FixedResolver);
+        let result = adapter.linked_merge_request(&repository(), 43).unwrap();
+        assert_eq!(result.source_branch, "review/complete");
+        assert_eq!(result.repository_id, "repo_api");
+        assert_eq!(result.status, GitlabMergeRequestStatus::Open);
+    }
+
+    #[test]
+    fn linked_mr_rejects_another_project_or_author() {
+        struct RejectedRunner(&'static str);
+        impl CommandRunner for RejectedRunner {
+            fn run(&self, probe: CommandProbe<'_>) -> Result<ProbeOutput, ProbeFailure> {
+                if probe.args[3] == "/user" {
+                    return Ok(ProbeOutput::new(
+                        br#"{"id":7,"username":"alice"}"#.to_vec(), [],
+                    ));
+                }
+                Ok(ProbeOutput::new(self.0.as_bytes().to_vec(), []))
+            }
+        }
+        for response in [
+            r#"{"id":1043,"iid":43,"title":"Wrong project","web_url":"https://gitlab.example.com/other/api/-/merge_requests/43","state":"opened","source_branch":"review/complete","source_project_id":8,"target_project_id":7,"target_branch":"develop","author":{"username":"alice"},"updated_at":"2026-09-23T09:00:00Z"}"#,
+            r#"{"id":1043,"iid":43,"title":"Wrong author","web_url":"https://gitlab.example.com/acme/api/-/merge_requests/43","state":"opened","source_branch":"review/complete","source_project_id":7,"target_project_id":7,"target_branch":"develop","author":{"username":"bob"},"updated_at":"2026-09-23T09:00:00Z"}"#,
+            r#"{"id":1043,"iid":43,"title":"Closed","web_url":"https://gitlab.example.com/acme/api/-/merge_requests/43","state":"closed","source_branch":"review/complete","source_project_id":7,"target_project_id":7,"target_branch":"develop","author":{"username":"alice"},"updated_at":"2026-09-23T09:00:00Z"}"#,
+        ] {
+            let adapter = GitlabMergeRequestsAdapter::new(RejectedRunner(response), FixedResolver);
+            assert!(adapter.linked_merge_request(&repository(), 43).is_err());
+        }
     }
 
     #[test]

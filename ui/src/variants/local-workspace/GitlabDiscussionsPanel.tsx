@@ -34,6 +34,11 @@ function commentDate(value: string) {
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
 }
 
+function automatedPreview(body: string) {
+  const text = body.replace(/<[^>]+>/g, " ").replace(/[#*_`>|]+/g, " ").split("\n").map((line) => line.trim()).filter(Boolean).slice(0, 3).join(" ");
+  return text.length > 240 ? `${text.slice(0, 239)}…` : text;
+}
+
 function longAutomatedComment(discussion: GitlabReviewDiscussion, comment: GitlabReviewDiscussionComment) {
   return discussion.automated && discussion.comments[0]?.id === comment.id &&
     (comment.body.length > 600 || comment.body.split("\n").length > 8);
@@ -108,9 +113,14 @@ export function GitlabDiscussionsPanel({
   const selectionKey = JSON.stringify([targetKey, scopeId]);
   const discussions = snapshot?.discussions ?? [];
   const fileDiscussions = discussions.filter((discussion) => !filePath || discussion.filePath === filePath);
-  const visibleDiscussions = fileDiscussions.filter((discussion) =>
-    filter === "all" || (filter === "resolved" ? discussion.resolved : !discussion.resolved),
-  );
+  // Human review threads come first. Bot notes stay at the end.
+  const visibleDiscussions = fileDiscussions
+    .filter((discussion) =>
+      filter === "all" || (filter === "resolved" ? discussion.resolved : !discussion.resolved),
+    )
+    .map((discussion, index) => ({ discussion, index }))
+    .sort((left, right) => Number(left.discussion.automated) - Number(right.discussion.automated) || left.index - right.index)
+    .map(({ discussion }) => discussion);
   const selected = visibleDiscussions.find((discussion) => discussion.id === (selectedDiscussionId ?? selections[selectionKey]));
   const draftKey = JSON.stringify([targetKey, scopeId, selected?.id ?? ""]);
   const selectedDisplay = selected ? displayed[draftKey] : undefined;
@@ -283,6 +293,7 @@ export function GitlabDiscussionsPanel({
           {compact && <h3>Conversations</h3>}
           {snapshot && <p>{fileDiscussions.length} {fileDiscussions.length === 1 ? "conversation" : "conversations"} · {unreadCount} unread {unreadCount === 1 ? "comment" : "comments"}</p>}
           {snapshot && <p className={styles.freshness} role="status" title={freshness}>{freshness}</p>}
+          {!compact && <p className={styles.explainer} data-ui="gitlab-conversations.help" data-ui-label="Conversations help">Select a thread to read it and see its code. Replies go to GitLab.</p>}
         </div>
         {entry && !hideTargetSelector && <label>
           <span className={styles.srOnly}>Merge request</span>
@@ -301,7 +312,7 @@ export function GitlabDiscussionsPanel({
         <button className={styles.refresh} aria-label="Refresh conversations" disabled={entry?.state === "loading" || controller.loading} onClick={() => controller.refresh(entry?.target.key)} type="button"><span aria-hidden="true" data-pending={entry?.state === "loading" || controller.loading || undefined}><Glyph name="refresh" size={14} /></span>Refresh</button>
         {compact && onClose && <button aria-label="Close file conversations" onClick={onClose} type="button">Close</button>}
       </header>
-      {error && <div className={styles.error} role="alert">{error}{onOpenIntegrations && <button onClick={onOpenIntegrations} type="button">Check GitLab connection</button>}</div>}
+      {error && <div className={styles.error} role="alert" data-ui="gitlab-conversations.error" data-ui-label="Conversations error"><span>{error}</span><button disabled={entry?.state === "loading" || controller.loading} onClick={() => controller.refresh(entry?.target.key)} type="button">Retry conversations</button>{onOpenIntegrations && !error.startsWith("WTS is already") && <button onClick={onOpenIntegrations} type="button">Check GitLab connection</button>}</div>}
       {openErrors[selectionKey] && <p className={styles.error} role="alert">{openErrors[selectionKey]}</p>}
       {snapshot?.truncated && <p className={styles.notice}>GitLab returned part of this conversation history.</p>}
       {!entry ? (
@@ -334,7 +345,9 @@ export function GitlabDiscussionsPanel({
                         {comments.map((comment) => {
                           const commentKey = `${key}:${comment.id}`;
                           const collapsible = longAutomatedComment(discussion, comment);
+                          // An unread bot comment shows a short preview so the reviewer can judge it without a click.
                           const expanded = Boolean(expandedComments[commentKey]);
+                          const preview = collapsible && !expanded && unreadIds.has(comment.id) ? automatedPreview(comment.body) : "";
                           return (
                             <article className={styles.comment} key={comment.id}>
                               <span className={styles.avatar} aria-hidden="true">{comment.authorLogin.slice(0, 1).toUpperCase()}</span>
@@ -345,6 +358,7 @@ export function GitlabDiscussionsPanel({
                                   <time dateTime={comment.createdAt}>{commentDate(comment.createdAt)}</time>
                                 </header>
                                 {(!collapsible || expanded) && <GitlabDiscussionBody body={comment.body} className={styles.commentBody} />}
+                                {preview && <p className={styles.commentPreview}>{preview}</p>}
                                 {collapsible && <button className={styles.disclosure} aria-expanded={expanded} onClick={() => {
                                   if (!expanded) selectConversation(discussion);
                                   setExpandedComments((current) => ({ ...current, [commentKey]: !expanded }));

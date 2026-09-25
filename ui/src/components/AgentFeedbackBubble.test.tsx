@@ -4,7 +4,7 @@ import { WorkspaceClientError, type WorkspaceClient } from "../lib/wtsClient";
 import type { AgentConversation, CreateAgentConversationRequest } from "../lib/agentConversations";
 import { AgentFeedbackBubble } from "./AgentFeedbackBubble";
 import { UI_REGION_SELECTED_EVENT, type UiRegionSelection } from "./uiRegionSelection";
-import { openAgentFeedback } from "../lib/agentFeedbackEvents";
+import { openAgentFeedback, requestAgentTask } from "../lib/agentFeedbackEvents";
 import { readFeedbackDraft } from "../lib/agentFeedbackDraft";
 
 const region: UiRegionSelection = { schemaVersion: 1, id: "plan.description", label: "Plan description", route: "/sessions/project", capturedAtUnixMs: 1, rect: { x: 10, y: 40, width: 200, height: 100 }, viewport: { width: 1200, height: 800, devicePixelRatio: 2 }, visibleText: "Imported description", controls: [], ancestors: [] };
@@ -39,6 +39,18 @@ const capture = { mimeType: "image/png" as const, dataUrl: "data:image/png;base6
 beforeEach(() => localStorage.clear());
 afterEach(() => vi.restoreAllMocks());
 describe("contextual agent chat", () => {
+  it("opens a prepared WTS task as a draft and sends it only on request", async () => {
+    const { client, create, send } = setup();
+    render(<AgentFeedbackBubble client={client} />);
+    act(() => requestAgentTask({ calloutId: "planning.plan-starter", label: "Plan · Review zeno !41", body: "Write a review plan in PLAN.md." }));
+    expect(await screen.findByRole("dialog", { name: "Agent feedback" })).toHaveTextContent("Plan · Review zeno !41");
+    expect(screen.getByRole("textbox", { name: "Message to agent" })).toHaveValue("Write a review plan in PLAN.md.");
+    expect(create).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Send to agent" }));
+    await waitFor(() => expect(send).toHaveBeenCalledOnce());
+    expect(create.mock.calls[0]![0].source).toMatchObject({ kind: "ui", calloutId: "planning.plan-starter", label: "Plan · Review zeno !41" });
+  });
+
   it("creates a WTS source conversation only on send and preserves it across a remount", async () => {
     const { client, create, send } = setup();
     const view = render(<AgentFeedbackBubble client={client} />);

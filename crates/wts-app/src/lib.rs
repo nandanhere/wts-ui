@@ -5,6 +5,7 @@
 //! generated files, and external command arguments.
 
 mod adapter;
+mod agent_models;
 mod agent_observation;
 mod agent_session_details;
 mod agent_sessions;
@@ -17,6 +18,9 @@ mod generated_files;
 mod launcher;
 mod model;
 mod process;
+mod precedents;
+mod review_skill;
+mod review_trace;
 mod runtime;
 mod runtime_analysis;
 mod service;
@@ -41,14 +45,21 @@ pub use agent_session_details::{
     AgentSessionEventKind,
 };
 pub use agent_sessions::{
-    AGENT_SESSION_SCHEMA_VERSION, AgentChangeRequestProposal, AgentChangeRequestVerification,
+    AGENT_SESSION_SCHEMA_VERSION, AgentChangeRequestProposal, AgentMrLinkProposal, AgentChangeRequestVerification,
     AgentChangeRequestVerificationStatus, AgentSession, AgentSessionCategory, AgentSessionFailure,
     AgentSessionList, AgentSessionStatus,
 };
+pub use agent_models::{AgentModelCatalog, AgentProviderModels};
+pub use review_skill::ReviewSkillSummary;
+pub use review_trace::{CodeReviewRunState, CodeReviewTrace, CodeReviewTraceKind, CodeReviewTraceStep};
 pub use code_review::{
-    CodeReviewActionableStep, CodeReviewFinding, CodeReviewFindingSeverity, CodeReviewScope,
-    RunWorkspaceCodeReviewRequest, WorkspaceCodeReviewResult, build_code_review_prompt,
-    parse_code_review_outcome,
+    CODE_REVIEW_SCHEMA_VERSION, CodeReviewActionableStep, CodeReviewFinding,
+    CodeReviewFindingSeverity, CodeReviewLabel, CodeReviewMode, CodeReviewOptions,
+    CodeReviewMergeRequest, CodeReviewOutcome, CodeReviewPrecedent, CodeReviewRepository,
+    CodeReviewScope, CodeReviewSkillRef, CodeReviewStrictness, RAPTIK_SIZE_GATE_LINES,
+    RunWorkspaceCodeReviewRequest,
+    WorkspaceCodeReviewResult, build_code_review_prompt, count_reviewable_changed_lines,
+    extract_agent_text, parse_code_review_outcome, raptik_strictness,
 };
 pub use collaboration::{
     CollaborationAdapter, CollaborationAdapterFailure, CollaborationAdapterOutcome,

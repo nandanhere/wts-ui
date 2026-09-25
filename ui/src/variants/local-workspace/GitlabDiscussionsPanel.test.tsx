@@ -50,6 +50,22 @@ function selectMr(key: string) { fireEvent.change(screen.getByRole("combobox", {
 afterEach(() => { vi.restoreAllMocks(); gitlabDiscussionDrafts.clear(); });
 
 describe("GitLab conversations", () => {
+  it("lists human review threads before automated bot notes", () => {
+    const fake = fakeWorkspaceClient();
+    const base = entry();
+    const withBot: GitlabConversationEntry = {
+      ...base,
+      snapshot: { ...base.snapshot!, discussions: [
+        { id: "bot", resolvable: false, resolved: false, automated: true, comments: [comment(61, "hello from cibot", "cibot")] },
+        ...base.snapshot!.discussions,
+      ] },
+    };
+    render(<GitlabDiscussionsPanel active client={fake.client} controller={controller([withBot])} repositoryId="repo_checkout" />);
+    const threads = within(screen.getByRole("list", { name: "Conversations" })).getAllByRole("listitem");
+    expect(threads[0]).toHaveTextContent("Please explain");
+    expect(threads.at(-1)).toHaveTextContent("hello from cibot");
+  });
+
   it("retains uncertain reply guidance when the response fails after unmount", async () => {
     const fake = fakeWorkspaceClient(); let reject!: (cause: Error) => void; const response = new Promise<GitlabDiscussionReplyResult>((_resolve, fail) => { reject = fail; }); fake.replyGitlabDiscussion.mockReturnValue(response);
     const props = { active: true, client: fake.client, controller: controller(), repositoryId: "repo_checkout" }; const first = render(<GitlabDiscussionsPanel {...props} />); openGeneral(); draft("Check this reply before repeating it."); fireEvent.click(screen.getByRole("button", { name: "Reply to GitLab" })); first.unmount();
@@ -234,6 +250,16 @@ describe("GitLab conversations", () => {
     expect(onOpenIntegrations).toHaveBeenCalledOnce();
   });
 
+  it("retries a busy conversation read in place without GitLab settings", () => {
+    const fake = fakeWorkspaceClient();
+    const failed = { ...entry(), snapshot: undefined, state: "error" as const, error: "WTS is already running the maximum number of local operations. Retry shortly." };
+    const state = controller([failed]);
+    render(<GitlabDiscussionsPanel active client={fake.client} controller={state} repositoryId="repo_checkout" onOpenIntegrations={vi.fn()} />);
+    expect(screen.queryByRole("button", { name: "Check GitLab connection" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Retry conversations" }));
+    expect(state.refresh).toHaveBeenCalledWith(failed.target.key);
+  });
+
   it("opens GitLab to check an uncertain reply without resending the draft", async () => {
     const fake = fakeWorkspaceClient();
     fake.replyGitlabDiscussion.mockRejectedValueOnce(new Error("The response timed out."));
@@ -267,6 +293,20 @@ describe("GitLab conversations", () => {
     openGeneral();
     expect(within(threads[0]!).getByRole("textbox", { name: "Reply" })).toBeVisible();
     expect(state.markRead).toHaveBeenLastCalledWith("checkout-9", scopeId, first.snapshot!.discussions[0]!.comments);
+  });
+
+  it("previews an unread long automated comment as plain text before it expands", () => {
+    const fake = fakeWorkspaceClient();
+    const first = entry();
+    first.snapshot!.discussions[0] = {
+      ...first.snapshot!.discussions[0]!, automated: true,
+      comments: [comment(41, `## Automated findings\n\nThe **retry guard** misses a timeout.\n${"More detail. ".repeat(80)}`, "review-bot")],
+    };
+    first.unreadCommentIds = [41];
+    render(<GitlabDiscussionsPanel active client={fake.client} controller={controller([first])} repositoryId="repo_checkout" />);
+    expect(screen.getByText(/Automated findings The retry guard misses a timeout\./)).toBeVisible();
+    expect(screen.queryByRole("heading", { name: "Automated findings" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Show automated comment" })).toBeVisible();
   });
 
   it("collapses a long automated comment until the reader expands its rendered body", () => {

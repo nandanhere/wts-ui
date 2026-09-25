@@ -137,6 +137,33 @@ function planningClient() {
 }
 
 describe("PlanningDocumentsPanel", () => {
+  it("offers an agent draft for a template PLAN.md and sends a review plan request", async () => {
+    const fake = planningClient();
+    const template = "# Plan: Review sre-tools/zeno !41\n\n## Objective\n\n_TODO: Describe the outcome this workspace should produce._\n\n## Current scope\n\n- [ ] Define the first bounded deliverable.\n\n## Non-goals\n\n- _TODO: Record what is deliberately outside this workspace._\n";
+    fake.readWorkspacePlanningDocument.mockImplementation(async (_id: string, documentId: WorkspacePlanningDocument["documentId"]) =>
+      planningDocument(documentId, documentId === "plan" ? template : `# ${documentId}\n\nWritten notes`));
+    const listener = vi.fn();
+    window.addEventListener("wts:agent-task-requested", listener);
+    try {
+      render(<PlanningDocumentsPanel client={fake.client} workspaceId={workspaceId} workspaceKey="zeno !41" workspaceTitle="Review sre-tools/zeno !41" />);
+      const starter = await screen.findByRole("region", { name: "Plan starter" });
+      fireEvent.click(within(starter).getByRole("button", { name: "Ask agent to draft the plan" }));
+      expect(listener).toHaveBeenCalledOnce();
+      const detail = (listener.mock.calls[0]![0] as CustomEvent).detail;
+      expect(detail).toMatchObject({ calloutId: "planning.plan-starter", label: "Plan · Review sre-tools/zeno !41" });
+      expect(detail.body).toContain("review plan");
+      expect(detail.body).toContain("Do not change source code.");
+      expect(fake.updateWorkspacePlanningDocument).not.toHaveBeenCalled();
+    } finally { window.removeEventListener("wts:agent-task-requested", listener); }
+  });
+
+  it("keeps the plan starter off a written plan", async () => {
+    const fake = planningClient();
+    render(<PlanningDocumentsPanel client={fake.client} workspaceId={workspaceId} workspaceKey="PLATFORM-42" />);
+    await screen.findByRole("article", { name: "PLAN.md preview" });
+    expect(screen.queryByRole("region", { name: "Plan starter" })).not.toBeInTheDocument();
+  });
+
   it("keeps known native previews out of edit mode", async () => {
     const fake = planningClient();
     Object.defineProperty(window, "__WTS_NATIVE_PREVIEW__", { configurable: true, value: { schemaVersion: 1, allowedCommands: ["read_workspace_planning_document"] } });
@@ -959,9 +986,13 @@ describe("PlanningDocumentsPanel", () => {
       />,
     );
 
-    expect(await screen.findByRole("alert")).toHaveTextContent(
-      "This workspace does not have a planning home.",
-    );
+    expect(
+      await screen.findByText("No plan for this workspace yet"),
+    ).toBeVisible();
+    expect(
+      screen.getByText(/This workspace does not have a planning home\./),
+    ).toBeVisible();
+    expect(screen.queryByText("Planning files are unavailable")).toBeNull();
     expect(screen.queryByRole("button", { name: "Try again" })).toBeNull();
     await user.click(
       screen.getByRole("button", { name: "Create planning home" }),

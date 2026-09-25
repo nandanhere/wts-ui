@@ -5,7 +5,10 @@ pub(crate) use conversation_process::{ConversationCapture, ConversationOutput};
 use crate::{
     AgentProvider, AgentRunResult, GraphIndexResult, GraphWorkspaceStatus,
     agent_session_details::{AgentProcessEvent, AgentProcessEventKind},
-    agent_sessions::{CHANGE_REQUEST_PROPOSAL_PREFIX, parse_agent_change_request_proposals},
+    agent_sessions::{
+        CHANGE_REQUEST_PROPOSAL_PREFIX, MR_LINK_PROPOSAL_PREFIX,
+        parse_agent_change_request_proposals, parse_agent_mr_link_proposals,
+    },
     collaboration::{
         CollaborationAdapter, CollaborationAdapterFailure, CollaborationAdapterOutcome,
         CollaborationConfinement, CollaborationInvocation, CollaborationStopReason,
@@ -37,6 +40,18 @@ const MAX_ADAPTER_OUTPUT_BYTES: usize = 1024 * 1024;
 // still fit inside the coordinator's default one-MiB evidence limit.
 const MAX_COLLABORATION_STREAM_BYTES: usize = (MAX_ADAPTER_OUTPUT_BYTES / 2) - 1;
 const POLL_INTERVAL: Duration = Duration::from_millis(25);
+const MODEL_LISTING_TIMEOUT: Duration = Duration::from_secs(20);
+/// A review keeps at most this many bytes of one stdout line. Longer lines are cut.
+const MAX_TAIL_LINE_BYTES: usize = 256 * 1024;
+
+/// How the adapter keeps agent stdout.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum StdoutRetention {
+    /// Stop the run when stdout is larger than the adapter limit.
+    Bounded,
+    /// Keep the newest lines inside the adapter limit. A review needs only the last message.
+    Tail,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AdapterFailure {
@@ -155,6 +170,8 @@ pub struct ProcessWorkspaceAdapter {
     image_context: Option<PathBuf>,
     conversation_capture: Option<Arc<std::sync::Mutex<ConversationCapture>>>,
     conversation_final_path: Option<PathBuf>,
+    read_only_review: bool,
+    review_trace: Option<crate::review_trace::ReviewTraceSink>,
 }
 
 impl Default for ProcessWorkspaceAdapter {
@@ -169,6 +186,8 @@ impl Default for ProcessWorkspaceAdapter {
             conversation_capture: None,
             conversation_final_path: None,
             image_context: None,
+            read_only_review: false,
+            review_trace: None,
         }
     }
 }
@@ -345,6 +364,57 @@ impl ProcessWorkspaceAdapter {
         self
     }
 
+    /// Runs review agents without write access where the provider supports it.
+    pub(crate) fn for_read_only_review(mut self) -> Self {
+        self.read_only_review = true;
+        self
+    }
+
+    /// Sends each readable step of a review run to the sink while the agent works.
+    pub(crate) fn with_review_trace(mut self, sink: crate::review_trace::ReviewTraceSink) -> Self {
+        self.review_trace = Some(sink);
+        self
+    }
+
+    fn resolved_executable(&self, provider: AgentProvider) -> OsString {
+        match provider {
+            AgentProvider::Codex => resolve_codex_executable(&self.codex_executable),
+            AgentProvider::Copilot => resolve_copilot_executable(&self.copilot_executable),
+            AgentProvider::OpenCode => self.open_code_executable.clone(),
+            AgentProvider::Hermes => self.hermes_executable.clone(),
+        }
+    }
+
+    /// Returns the provider executable when it exists on this machine.
+    pub(crate) fn installed_executable(&self, provider: AgentProvider) -> Option<PathBuf> {
+        let executable = PathBuf::from(self.resolved_executable(provider));
+        if executable.components().count() > 1 {
+            return is_codex_executable(&executable).then_some(executable);
+        }
+        SystemPathResolver
+            .resolve(executable.to_str()?)
+            .ok()
+            .flatten()
+    }
+
+    /// Runs a fixed, read-only model listing command and returns stdout.
+    pub(crate) fn run_model_listing(&self, provider: AgentProvider, args: &[&str]) -> Option<String> {
+        let allowed = matches!(
+            (provider, args),
+            (AgentProvider::Copilot, ["help", "config"]) | (AgentProvider::OpenCode, ["models"])
+        );
+        if !allowed {
+            return None;
+        }
+        let executable = self.installed_executable(provider)?;
+        let args = args.iter().map(OsString::from).collect::<Vec<_>>();
+        let directory = std::env::temp_dir();
+        let output = run_bounded(executable, &args, &directory, MODEL_LISTING_TIMEOUT).ok()?;
+        output
+            .success
+            .then(|| String::from_utf8_lossy(&output.stdout).into_owned())
+    }
+
     pub fn with_graphify_executable(mut self, executable: impl Into<OsString>) -> Self {
         self.graphify_executable = executable.into();
         self
@@ -404,7 +474,7 @@ impl ProcessWorkspaceAdapter {
                     "--ephemeral".into(),
                     "--json".into(),
                     "--sandbox".into(),
-                    "workspace-write".into(),
+                    if self.read_only_review { "read-only" } else { "workspace-write" }.into(),
                     "-c".into(),
                     "approval_policy=\"never\"".into(),
                     "--skip-git-repo-check".into(),
@@ -447,11 +517,22 @@ impl ProcessWorkspaceAdapter {
                     "--source".into(),
                     "tool".into(),
                 ]);
+                if let Some(model_name) = agent.filter(|s| !s.trim().is_empty()) {
+                    args.extend(["--model".into(), model_name.into()]);
+                }
                 &self.hermes_executable
             }
             AgentProvider::Copilot => {
+                if self.read_only_review {
+                    args.extend([
+                        "--allow-all-tools".into(),
+                        "--deny-tool=write".into(),
+                        "--deny-tool=shell(git push)".into(),
+                    ]);
+                } else {
+                    args.push("--allow-all".into());
+                }
                 args.extend([
-                    "--allow-all".into(),
                     "--silent".into(),
                     "-C".into(),
                     workspace.as_os_str().to_owned(),
@@ -480,16 +561,28 @@ impl ProcessWorkspaceAdapter {
                 &mut on_event,
             )?
         } else {
-            run_bounded_controlled(
+            let retention = if self.read_only_review {
+                StdoutRetention::Tail
+            } else {
+                StdoutRetention::Bounded
+            };
+            let review_trace = self.review_trace.clone();
+            run_bounded_controlled_with(
                 executable,
                 &args,
                 workspace,
                 AGENT_TIMEOUT,
                 cancellation,
                 self.process_lease.as_deref(),
+                retention,
                 &mut on_spawn,
                 &mut heartbeat,
                 &mut |line| {
+                    if let Some(trace) = &review_trace {
+                        for step in crate::review_trace::parse_review_line(provider, line) {
+                            trace(step);
+                        }
+                    }
                     if provider == AgentProvider::Codex
                         && let Some(event) = parse_codex_event(line)
                     {
@@ -821,6 +914,36 @@ fn run_bounded_controlled(
     heartbeat: &mut impl FnMut(),
     on_stdout_line: &mut impl FnMut(&[u8]),
 ) -> Result<ProcessOutput, AdapterFailure> {
+    run_bounded_controlled_with(
+        executable,
+        args,
+        current_dir,
+        timeout,
+        cancellation,
+        lease,
+        StdoutRetention::Bounded,
+        on_spawn,
+        heartbeat,
+        on_stdout_line,
+    )
+}
+
+#[allow(
+    clippy::too_many_arguments,
+    reason = "Keep lifecycle callbacks explicit at the process boundary."
+)]
+fn run_bounded_controlled_with(
+    executable: impl AsRef<OsStr>,
+    args: &[OsString],
+    current_dir: &Path,
+    timeout: Duration,
+    cancellation: &Arc<AtomicBool>,
+    lease: Option<&fs::File>,
+    retention: StdoutRetention,
+    on_spawn: &mut impl FnMut(),
+    heartbeat: &mut impl FnMut(),
+    on_stdout_line: &mut impl FnMut(&[u8]),
+) -> Result<ProcessOutput, AdapterFailure> {
     if cancellation.load(Ordering::Acquire) {
         return Err(AdapterFailure::Cancelled);
     }
@@ -839,8 +962,11 @@ fn run_bounded_controlled(
     })?;
     let stdout = child.stdout.take().ok_or(AdapterFailure::SpawnFailed)?;
     let stderr = child.stderr.take().ok_or(AdapterFailure::SpawnFailed)?;
-    let stdout_reader = spawn_line_reader(stdout);
-    let stderr_reader = spawn_reader(stderr);
+    let stdout_reader = spawn_line_reader_with(stdout, retention);
+    let stderr_reader = match retention {
+        StdoutRetention::Bounded => spawn_reader(stderr),
+        StdoutRetention::Tail => spawn_tail_reader(stderr),
+    };
     on_spawn();
     let started_at = Instant::now();
     let mut last_heartbeat = started_at;
@@ -933,7 +1059,10 @@ struct LineReader {
     output: Receiver<io::Result<Vec<u8>>>,
 }
 
-fn spawn_line_reader(reader: impl Read + Send + 'static) -> LineReader {
+fn spawn_line_reader_with(reader: impl Read + Send + 'static, retention: StdoutRetention) -> LineReader {
+    if retention == StdoutRetention::Tail {
+        return spawn_tail_line_reader(reader);
+    }
     let (line_sender, lines) = mpsc::channel();
     let (output_sender, output_receiver) = mpsc::sync_channel(1);
     thread::spawn(move || {
@@ -962,6 +1091,92 @@ fn spawn_line_reader(reader: impl Read + Send + 'static) -> LineReader {
         lines,
         output: output_receiver,
     }
+}
+
+/// Reads every stdout line and keeps only the newest lines inside the adapter limit.
+fn spawn_tail_line_reader(reader: impl Read + Send + 'static) -> LineReader {
+    let (line_sender, lines) = mpsc::channel();
+    let (output_sender, output_receiver) = mpsc::sync_channel(1);
+    thread::spawn(move || {
+        let mut reader = BufReader::new(reader);
+        let mut kept = std::collections::VecDeque::<Vec<u8>>::new();
+        let mut kept_bytes = 0_usize;
+        let mut observers_open = true;
+        let result = loop {
+            let mut line = Vec::new();
+            match read_capped_line(&mut reader, &mut line, MAX_TAIL_LINE_BYTES) {
+                Ok(0) => break Ok(kept.into_iter().flatten().collect::<Vec<u8>>()),
+                Ok(_) => {}
+                Err(error) => break Err(error),
+            }
+            if observers_open && line_sender.send(line.clone()).is_err() {
+                observers_open = false;
+            }
+            kept_bytes += line.len();
+            kept.push_back(line);
+            while kept_bytes > MAX_ADAPTER_OUTPUT_BYTES {
+                let Some(old) = kept.pop_front() else { break };
+                kept_bytes -= old.len();
+            }
+        };
+        let _ = output_sender.send(result);
+    });
+    LineReader {
+        lines,
+        output: output_receiver,
+    }
+}
+
+/// Reads one line. It keeps at most `maximum` bytes and drops the rest of a longer line.
+fn read_capped_line(reader: &mut impl BufRead, line: &mut Vec<u8>, maximum: usize) -> io::Result<usize> {
+    let mut total = 0_usize;
+    loop {
+        let available = match reader.fill_buf() {
+            Ok(buffer) => buffer,
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            Err(error) => return Err(error),
+        };
+        if available.is_empty() {
+            return Ok(total);
+        }
+        let (length, done) = match available.iter().position(|byte| *byte == b'\n') {
+            Some(index) => (index + 1, true),
+            None => (available.len(), false),
+        };
+        let room = maximum.saturating_sub(line.len());
+        line.extend_from_slice(&available[..length.min(room)]);
+        total += length;
+        reader.consume(length);
+        if done {
+            if line.last() != Some(&b'\n') {
+                line.push(b'\n');
+            }
+            return Ok(total);
+        }
+    }
+}
+
+/// Reads all bytes and keeps only the newest bytes inside the adapter limit.
+fn spawn_tail_reader(mut reader: impl Read + Send + 'static) -> Receiver<io::Result<Vec<u8>>> {
+    let (sender, receiver) = mpsc::sync_channel(1);
+    thread::spawn(move || {
+        let mut kept = std::collections::VecDeque::<u8>::new();
+        let mut buffer = [0_u8; 8192];
+        let result = loop {
+            match reader.read(&mut buffer) {
+                Ok(0) => break Ok(kept.into_iter().collect::<Vec<u8>>()),
+                Ok(read) => {
+                    kept.extend(&buffer[..read]);
+                    let excess = kept.len().saturating_sub(MAX_ADAPTER_OUTPUT_BYTES);
+                    kept.drain(..excess);
+                }
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+                Err(error) => break Err(error),
+            }
+        };
+        let _ = sender.send(result);
+    });
+    receiver
 }
 
 fn drain_line_reader(
@@ -1050,15 +1265,17 @@ fn parse_codex_event(line: &[u8]) -> Option<AgentProcessEvent> {
                 "agent_message" if event_type == "item.completed" => {
                     let text = item.get("text").and_then(Value::as_str)?;
                     let change_request_proposals = parse_agent_change_request_proposals(text);
+                    let mr_link_proposals = parse_agent_mr_link_proposals(text);
                     bounded_agent_message(text)
                         .or_else(|| {
-                            (!change_request_proposals.is_empty())
-                                .then(|| "Codex prepared a change request.".to_owned())
+                            (!change_request_proposals.is_empty() || !mr_link_proposals.is_empty())
+                                .then(|| "Codex proposed an MR link.".to_owned())
                         })
                         .map(|summary| AgentProcessEvent {
                             kind: AgentProcessEventKind::AgentUpdate,
                             summary,
                             change_request_proposals,
+                            mr_link_proposals,
                         })
                 }
                 "reasoning" => Some(managed_event(
@@ -1093,6 +1310,7 @@ fn managed_event(kind: AgentProcessEventKind, summary: &str) -> AgentProcessEven
         kind,
         summary: summary.to_owned(),
         change_request_proposals: Vec::new(),
+        mr_link_proposals: Vec::new(),
     }
 }
 
@@ -1100,7 +1318,11 @@ fn bounded_agent_message(value: &str) -> Option<String> {
     let normalized = value
         .lines()
         .map(str::trim)
-        .filter(|line| !line.is_empty() && !line.starts_with(CHANGE_REQUEST_PROPOSAL_PREFIX))
+        .filter(|line| {
+            !line.is_empty()
+                && !line.starts_with(CHANGE_REQUEST_PROPOSAL_PREFIX)
+                && !line.starts_with(MR_LINK_PROPOSAL_PREFIX)
+        })
         .take(4)
         .collect::<Vec<_>>()
         .join("\n");
@@ -1359,6 +1581,71 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn review_runs_keep_the_last_message_when_stdout_is_larger_than_the_limit() {
+        use std::os::unix::fs::PermissionsExt;
+        let directory = tempdir().expect("temporary directory");
+        let executable = directory.path().join("noisy-codex");
+        // About 3 MiB of command events, one 400 KiB line, then the final review message.
+        fs::write(
+            &executable,
+            concat!(
+                "#!/bin/sh\n",
+                "i=0\n",
+                "big=$(head -c 3000 /dev/zero | tr '\\0' x)\n",
+                "while [ $i -lt 1000 ]; do\n",
+                "  printf '{\"type\":\"item.completed\",\"item\":{\"id\":\"c%s\",\"type\":\"command_execution\",\"command\":\"cat f\",\"aggregated_output\":\"%s\",\"exit_code\":0}}\\n' $i \"$big\"\n",
+                "  i=$((i+1))\n",
+                "done\n",
+                "head -c 409600 /dev/zero | tr '\\0' y\n",
+                "printf '\\n'\n",
+                "printf '%s\\n' '{\"type\":\"item.completed\",\"item\":{\"id\":\"m\",\"type\":\"agent_message\",\"text\":\"FINAL_REVIEW\"}}'\n",
+            ),
+        )
+        .unwrap();
+        fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
+        let steps = Arc::new(std::sync::Mutex::new(0_usize));
+        let counted = Arc::clone(&steps);
+        let adapter = ProcessWorkspaceAdapter::default()
+            .with_agent_executable(AgentProvider::Codex, &executable)
+            .for_read_only_review()
+            .with_review_trace(crate::review_trace::ReviewTraceSink::new(move |_| {
+                *counted.lock().unwrap() += 1;
+            }));
+        let result = adapter
+            .run_agent_with_custom(
+                Uuid::new_v4(),
+                AgentProvider::Codex,
+                directory.path(),
+                "review",
+                None,
+                &Arc::new(AtomicBool::new(false)),
+                || {},
+                || {},
+                |_| {},
+            )
+            .expect("a review run keeps the newest output");
+        assert!(result.output.len() <= MAX_ADAPTER_OUTPUT_BYTES + 2);
+        assert_eq!(crate::extract_agent_text(AgentProvider::Codex, &result.output), "FINAL_REVIEW");
+        assert!(*steps.lock().unwrap() >= 1000, "each command must reach the live trace");
+
+        let bounded = ProcessWorkspaceAdapter::default()
+            .with_agent_executable(AgentProvider::Codex, &executable)
+            .run_agent_with_custom(
+                Uuid::new_v4(),
+                AgentProvider::Codex,
+                directory.path(),
+                "task",
+                None,
+                &Arc::new(AtomicBool::new(false)),
+                || {},
+                || {},
+                |_| {},
+            );
+        assert_eq!(bounded.err(), Some(AdapterFailure::OutputTooLarge));
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn controlled_agent_run_cancels_and_reaps_the_owned_process_group() {
         let directory = tempdir().expect("temporary directory");
         let descendant_file = directory.path().join("agent-descendant.pid");
@@ -1564,7 +1851,7 @@ printf '%s\n' '{"type":"turn.completed","usage":{"secret":"private usage"}}'
                 "type": "item.completed",
                 "item": {
                     "type": "agent_message",
-                    "text": "Pushed and verified.\nWTS_CHANGE_REQUEST_PROPOSAL: {\"schemaVersion\":1,\"repositoryId\":\"repo_checkout\",\"sourceHeadCommitOid\":\"0123456789abcdef0123456789abcdef01234567\",\"title\":\"PLATFORM-42: Validate admission\",\"body\":\"## Summary\\n\\nValidate admission.\",\"issueKeys\":[\"PLATFORM-42\"]}"
+                    "text": "Pushed and verified.\nWTS_CHANGE_REQUEST_PROPOSAL: {\"schemaVersion\":1,\"repositoryId\":\"repo_checkout\",\"sourceHeadCommitOid\":\"0123456789abcdef0123456789abcdef01234567\",\"title\":\"PLATFORM-42: Validate admission\",\"body\":\"## Summary\\n\\nValidate admission.\",\"issueKeys\":[\"PLATFORM-42\"]}\nWTS_MR_LINK_PROPOSAL: {\"schemaVersion\":1,\"repositoryId\":\"repo_checkout\",\"iid\":43}"
                 }
             })
             .to_string()
@@ -1573,6 +1860,7 @@ printf '%s\n' '{"type":"turn.completed","usage":{"secret":"private usage"}}'
         .expect("agent update");
         assert_eq!(event.summary, "Pushed and verified.");
         assert_eq!(event.change_request_proposals.len(), 1);
+        assert_eq!(event.mr_link_proposals[0].iid, 43);
         assert_eq!(
             event.change_request_proposals[0].repository_id,
             "repo_checkout"

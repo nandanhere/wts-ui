@@ -600,8 +600,18 @@ or rebuild a materialized workspace in place.
 
 GitHub **My reviews** includes direct individual requests only. GitLab delivery
 tracking includes open or draft merge requests authored by the active GitLab
-CLI user for the current managed branch and commit. WTS does not yet combine
-all forge activity into one remote delivery inbox.
+CLI user for the current managed branch. When an MR uses another branch in the
+same trusted project, the agent can report its repository ID and MR number.
+WTS shows **Link agent MR !43** for the matching workspace. Select it to
+let WTS check the MR in the trusted GitLab project. The repository row shows
+**Different local branch** and keeps the managed worktree unchanged. A linked
+MR does not make the local worktree eligible for MR comparison or publication.
+WTS does not yet combine all forge activity into one remote delivery inbox.
+
+Optional integration check: use a disposable GitLab project and a workspace
+with a different local branch. Let an agent report an open MR, link it, restart WTS, and
+check that the row still shows the MR. Check that the local branch, files, and
+commits did not change. Do not use the live Senzu MR for this check.
 
 The external CLI handoff targets native macOS Terminal or Warp. Unsupported
 hosts return an unavailable error instead of a simulated success. Use **Create

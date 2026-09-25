@@ -45,7 +45,8 @@ use wts_core::{
 };
 use wts_integrations::{
     ActivityWatchDailyReview, ActivityWatchError, ActivityWatchReviewError, ActivityWatchStatus,
-    GithubReviewInbox, GitlabIntegrationStatus, GitlabMergeRequestInbox, GitlabReviewInbox,
+    GithubReviewInbox, GitlabIntegrationStatus, GitlabMergeRequest, GitlabMergeRequestInbox,
+    GitlabReviewInbox,
     JiraActiveIssueList, JiraMcpVerification, OpenProjectError, OpenProjectVerification,
     SetupSnapshot, TimeReviewAgentBrief,
 };
@@ -648,6 +649,31 @@ async fn get_gitlab_merge_requests(
             .map_err(local_wts_command_error)
     })
     .await
+}
+
+#[tauri::command]
+async fn link_workspace_gitlab_merge_request(
+    workspace_id: Uuid,
+    repository_id: String,
+    iid: u64,
+    state: tauri::State<'_, LocalWtsService>,
+) -> Result<GitlabMergeRequest, WorkspaceCommandError> {
+    let service = state.inner().clone();
+    run_blocking_command(move || {
+        link_workspace_gitlab_merge_request_command(&service, workspace_id, &repository_id, iid)
+    })
+    .await
+}
+
+fn link_workspace_gitlab_merge_request_command(
+    service: &LocalWtsService,
+    workspace_id: Uuid,
+    repository_id: &str,
+    iid: u64,
+) -> Result<GitlabMergeRequest, WorkspaceCommandError> {
+    service
+        .link_workspace_gitlab_merge_request(workspace_id, repository_id, iid)
+        .map_err(local_wts_command_error)
 }
 
 #[tauri::command]
@@ -1722,23 +1748,69 @@ async fn run_workspace_agent(
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments, reason = "Tauri maps each argument to one camelCase field.")]
 async fn run_workspace_code_review(
     workspace_id: String,
     provider: AgentProvider,
     scope: CodeReviewScope,
     model: Option<String>,
     agent: Option<String>,
+    repository_id: Option<String>,
+    ignore_size_gate: Option<bool>,
+    skill: Option<String>,
+    merge_request_iid: Option<u64>,
     state: tauri::State<'_, LocalWtsService>,
 ) -> Result<WorkspaceCodeReviewResult, WorkspaceCommandError> {
     let workspace_id = parse_workspace_id(&workspace_id)?;
     let service = state.inner().clone();
-    let selected_model = model.or(agent);
+    let options = wts_app::CodeReviewOptions {
+        model: model.or(agent),
+        repository_id,
+        ignore_size_gate: ignore_size_gate.unwrap_or(false),
+        skill,
+        merge_request_iid,
+    };
     run_blocking_command(move || {
         service
-            .run_workspace_code_review(workspace_id, provider, scope, selected_model.as_deref())
+            .run_workspace_code_review_with_options(workspace_id, provider, scope, options)
             .map_err(local_wts_command_error)
     })
     .await
+}
+
+#[tauri::command]
+async fn get_workspace_code_review(
+    workspace_id: String,
+    state: tauri::State<'_, LocalWtsService>,
+) -> Result<Option<WorkspaceCodeReviewResult>, WorkspaceCommandError> {
+    let workspace_id = parse_workspace_id(&workspace_id)?;
+    let service = state.inner().clone();
+    run_blocking_command(move || {
+        service
+            .get_workspace_code_review(workspace_id)
+            .map_err(local_wts_command_error)
+    })
+    .await
+}
+
+#[tauri::command]
+async fn get_workspace_code_review_trace(
+    workspace_id: String,
+    after: Option<u32>,
+    state: tauri::State<'_, LocalWtsService>,
+) -> Result<Option<wts_app::CodeReviewTrace>, WorkspaceCommandError> {
+    let workspace_id = parse_workspace_id(&workspace_id)?;
+    let service = state.inner().clone();
+    run_blocking_command(move || Ok(service.workspace_code_review_trace(workspace_id, after))).await
+}
+
+#[tauri::command]
+async fn list_agent_models(
+    refresh: Option<bool>,
+    state: tauri::State<'_, LocalWtsService>,
+) -> Result<wts_app::AgentModelCatalog, WorkspaceCommandError> {
+    let service = state.inner().clone();
+    run_blocking_command(move || Ok(service.agent_model_catalog(refresh.unwrap_or(false)))).await
 }
 
 fn get_workspace_verification_summary_command(
@@ -2581,6 +2653,11 @@ fn local_wts_command_error(error: LocalWtsError) -> WorkspaceCommandError {
         LocalWtsError::RepositoryFileConflict => WorkspaceCommandError {code:"repository_file_conflict",message:"The source file changed. Reload the file before you save.".to_owned(),retryable:false},
         LocalWtsError::InvalidRepositoryFileRevision => WorkspaceCommandError {code:"invalid_repository_file_revision",message:"The source file revision is invalid.".to_owned(),retryable:false},
         LocalWtsError::GitlabComparisonUnavailable => WorkspaceCommandError {code:"gitlab_comparison_unavailable",message:"WTS could not load the merge request comparison. Refresh the merge request and check the local branch.".to_owned(),retryable:true},
+        LocalWtsError::GitlabMergeRequestLinkUnavailable => WorkspaceCommandError {
+            code: "gitlab_merge_request_link_unavailable",
+            message: "WTS could not link the merge request. Check the GitLab connection and merge request, then retry.".to_owned(),
+            retryable: true,
+        },
         LocalWtsError::InvalidRepositoryRemote => WorkspaceCommandError {
             code: "invalid_repository_remote",
             message: "Enter a supported HTTPS or SSH Git repository URL without embedded credentials."
@@ -3380,6 +3457,7 @@ pub fn run() {
             get_gitlab_discussions,
             reply_gitlab_discussion,
             get_gitlab_merge_requests,
+            link_workspace_gitlab_merge_request,
             get_gitlab_integration_status,
             open_gitlab_merge_request,
             prepare_gitlab_review_repository,
@@ -3448,6 +3526,9 @@ pub fn run() {
             remove_workspace,
             run_workspace_agent,
             run_workspace_code_review,
+            get_workspace_code_review,
+            get_workspace_code_review_trace,
+            list_agent_models,
             get_workspace_evidence,
             get_workspace_verification_summary,
             promote_agent_verification_check,
@@ -3503,6 +3584,40 @@ fn restore_main_window(app: &tauri::AppHandle) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_merge_request_link_command_checks_workspace_and_exposes_permission() {
+        let directory = tempfile::tempdir().unwrap();
+        let repositories = directory.path().join("repositories");
+        std::fs::create_dir(&repositories).unwrap();
+        let service = LocalWtsService::open(
+            directory.path().join("data"),
+            "native-mr-link-test",
+            directory.path().join("workspaces"),
+            &repositories,
+        )
+        .unwrap();
+        let error =
+            link_workspace_gitlab_merge_request_command(&service, Uuid::new_v4(), "repo-1", 43)
+                .unwrap_err();
+        assert_eq!(error.code, "workspace_not_found");
+
+        let link_error = local_wts_command_error(LocalWtsError::GitlabMergeRequestLinkUnavailable);
+        assert_eq!(link_error.code, "gitlab_merge_request_link_unavailable");
+        assert!(link_error.retryable);
+        assert!(link_error.message.contains("retry"));
+
+        let capability: serde_json::Value =
+            serde_json::from_str(include_str!("../capabilities/default.json")).unwrap();
+        assert!(capability["permissions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|permission| permission == "allow-link-workspace-gitlab-merge-request"));
+        let permission =
+            include_str!("../permissions/autogenerated/link_workspace_gitlab_merge_request.toml");
+        assert!(permission.contains("commands.allow = [\"link_workspace_gitlab_merge_request\"]"));
+    }
 
     #[test]
     fn unimplemented_agent_publication_has_no_desktop_permission() {

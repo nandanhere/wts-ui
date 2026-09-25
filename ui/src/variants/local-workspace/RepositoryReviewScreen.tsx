@@ -1,8 +1,10 @@
 import type { FeedbackSelectionReturn } from "../../lib/agentFeedbackNavigation";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import type {
   WorkspaceAgentReport,
   WorkspaceClient,
+  WorkspaceCodeReviewResult,
   WorkspaceMaterialization,
   WorkspaceRepositoryDiff,
   WorkspaceRepositoryReviewGraph,
@@ -15,10 +17,10 @@ import { useTheme } from "../../theme";
 import { openAgentFeedback } from "../../lib/agentFeedbackEvents";
 import { Glyph } from "./Glyph";
 import { SelectMenu } from "../../components/SelectMenu";
-import { RepositoryPatchViewer } from "./RepositoryPatchViewer";
-import { WorkspaceCodeReviewCard } from "./WorkspaceCodeReviewCard";
+import { RepositoryPatchViewer, type AiReviewFocusRequest } from "./RepositoryPatchViewer";
+import { codeReviewIsStale, CodeReviewPublishProvider, WorkspaceCodeReviewCard, type CodeReviewMergeRequestTarget } from "./WorkspaceCodeReviewCard";
 import { GitlabDiscussionsPanel } from "./GitlabDiscussionsPanel";
-import { MergeRequestWorkingChanges } from "./MergeRequestWorkingChanges";
+import { mergeRequestAiReview, MergeRequestWorkingChanges } from "./MergeRequestWorkingChanges";
 import { reviewSession } from "./workingChangesState";
 import { getCachedRepositoryReview, loadRepositoryReview } from "./repositoryReviewCache";
 import type { GitlabConversationEntry, GitlabConversationsController } from "./gitlabDiscussions";
@@ -38,6 +40,10 @@ interface RepositoryReviewScreenProps {
   onNotice?: (message: string, kind?: "info" | "error") => void;
   onOpenIntegrations?: () => void;
   onOpenWorkspaceStatus?: () => void;
+  /** A node in the workspace header. The MR title, status, and selectors show there. */
+  identitySlot?: HTMLElement | null;
+  /** Each new value opens the AI review panel in the code view. */
+  openAiReviewRequest?: number;
 }
 
 export const REVIEW_PATCH_POLL_INTERVAL_MS = 60_000;
@@ -60,9 +66,31 @@ export function RepositoryReviewScreen({
   onNotice,
   onOpenIntegrations,
   onOpenWorkspaceStatus,
+  identitySlot,
+  openAiReviewRequest,
 }: RepositoryReviewScreenProps) {
   const { resolvedTheme } = useTheme();
-  const [showAiReview, setShowAiReview] = useState(false);
+  const [showAiReview, setShowAiReview] = useState(Boolean(openAiReviewRequest));
+  useEffect(() => {
+    if (openAiReviewRequest) setShowAiReview(true);
+  }, [openAiReviewRequest]);
+  const [aiReview, setAiReview] = useState<WorkspaceCodeReviewResult | null>(null);
+  const [aiReviewFocus, setAiReviewFocus] = useState<AiReviewFocusRequest>();
+  const aiReviewFocusId = useRef(0);
+  const focusAiReview = (findingId?: string) => {
+    aiReviewFocusId.current += 1;
+    setAiReviewFocus({ requestId: aiReviewFocusId.current, ...(findingId ? { findingId } : {}) });
+  };
+  useEffect(() => {
+    setAiReview(null);
+    if (!client.getWorkspaceCodeReview) return;
+    let active = true;
+    client.getWorkspaceCodeReview(workspaceId).then(
+      (saved) => { if (active) setAiReview(saved); },
+      () => undefined,
+    );
+    return () => { active = false; };
+  }, [client, workspaceId]);
   const changeViewId = useId();
   const session = reviewSession(client, workspaceId);
   const [, setSessionRevision] = useState(0);
@@ -590,6 +618,62 @@ export function RepositoryReviewScreen({
   const sourceBranch = managedTarget?.sourceBranch ?? matchingReview?.sourceBranch;
   const targetBranch = managedTarget?.targetBranch ?? matchingReview?.targetBranch;
 
+  const unreadLabel = (entry: GitlabConversationEntry) =>
+    materialization.worktrees.find((tree) => tree.repositoryId === entry.target.worktreeRepositoryId)?.label ?? entry.target.label;
+  // The next unread thread: the current MR first, then the other MRs in list order.
+  const nextUnread = unreadEntries.find((entry) => entry.target.key === managedTarget?.key) ?? unreadEntries[0];
+  const nextUnreadIsHere = Boolean(nextUnread && managedTarget && nextUnread.target.key === managedTarget.key);
+  const mrCanPost = selectedConversation?.state === "ready" && !selectedConversation.snapshot?.fromCache;
+  const mrReviewTarget = useMemo<CodeReviewMergeRequestTarget | undefined>(() => managedTarget
+    ? {
+        worktreeRepositoryId: managedTarget.worktreeRepositoryId,
+        providerRepositoryId: managedTarget.repositoryId,
+        iid: managedTarget.iid,
+        canPost: mrCanPost,
+      }
+    : undefined, [managedTarget?.worktreeRepositoryId, managedTarget?.repositoryId, managedTarget?.iid, mrCanPost]);
+  const mrPublishValue = useMemo(
+    () => (mrReviewTarget ? { client, workspaceId, target: mrReviewTarget, review: aiReview } : null),
+    [aiReview, client, mrReviewTarget, workspaceId],
+  );
+  const mrAiFindingCount = managedTarget
+    ? mergeRequestAiReview(aiReview, managedTarget.worktreeRepositoryId, managedTarget.iid)?.review.findings.length ?? 0
+    : 0;
+  const mrIdentityContent = managedTarget ? (
+    <div
+      className={styles.mrIdentity}
+      data-testid="repository-review-toolbar"
+      data-ui="repository-review.mr-identity"
+      data-ui-label="Merge request identity"
+    >
+      <h2 title={mrTitle}>{mrTitle}</h2>
+      <div className={styles.mrMetadata}>
+        {mrStatus && <span className={styles.mrStatus} data-status={mrStatus}>{mrStatus === "open" ? "Open" : mrStatus === "merged" ? "Merged" : "Closed"}</span>}
+        <span className={styles.mrLabel} title={managedTarget.label}>{managedTarget.label}</span>
+        {sourceBranch && targetBranch && <span className={styles.branches} title={`${sourceBranch} into ${targetBranch}`}><code>{sourceBranch}</code><Glyph name="arrow" size={11} /><code>{targetBranch}</code></span>}
+        <label className={styles.identitySelect}>
+          <span className={styles.srOnly}>Repository</span>
+          <SelectMenu aria-label="Repository to review" onChange={selectRepository} value={repositoryId || defaultRepositoryId}>
+            {materialization.worktrees.map((worktree) => (
+              <option key={worktree.repositoryId} value={worktree.repositoryId}>
+                {worktree.label}{repositoryUnreadCount(worktree.repositoryId) > 0 ? ` · ${repositoryUnreadCount(worktree.repositoryId)} unread` : ""}
+              </option>
+            ))}
+          </SelectMenu>
+        </label>
+        {conversationEntries.length > 1 && (
+          <label className={styles.identitySelect}>
+            <span className={styles.srOnly}>Merge request</span>
+            <SelectMenu aria-label="Merge request" value={managedTarget.key} onChange={selectConversationTarget}>
+              {conversationEntries.map((entry) => <option key={entry.target.key} value={entry.target.key}>{entry.target.label}{entry.unreadCommentIds.length > 0 ? ` · ${entry.unreadCommentIds.length} unread` : ""}</option>)}
+            </SelectMenu>
+          </label>
+        )}
+      </div>
+    </div>
+  ) : null;
+  const mrIdentity = mrIdentityContent && (identitySlot ? createPortal(mrIdentityContent, identitySlot) : <div className={styles.mrIdentityFallback}>{mrIdentityContent}</div>);
+
   const selectChangeMode = (mode: "code" | "conversations") => {
     if (mode === "conversations" && !repositoryId) setRepositoryId(currentRepositoryId);
     session.mode = mode;
@@ -621,20 +705,16 @@ export function RepositoryReviewScreen({
       data-history-swipe-block
       data-testid="repository-review-screen"
     >
-      <header
+      {managedTarget && mrIdentity}
+      {!managedTarget && <header
         className={styles.header}
-        data-mr={Boolean(managedTarget) || undefined}
         data-ui="repository-review.header"
         data-ui-label="Repository review toolbar"
         data-testid="repository-review-toolbar"
       >
         <div>
-          <h2 title={managedTarget ? mrTitle : undefined}>{managedTarget ? mrTitle : changeMode === "conversations" ? "Repository conversations" : diff ? `${diff.repositoryLabel} changes` : "Find changed code"}</h2>
-          {managedTarget ? <div className={styles.mrMetadata}>
-            {mrStatus && <span className={styles.mrStatus} data-status={mrStatus}>{mrStatus === "open" ? "Open" : mrStatus === "merged" ? "Merged" : "Closed"}</span>}
-            <span className={styles.mrLabel} title={managedTarget.label}>{managedTarget.label}</span>
-            {sourceBranch && targetBranch && <span className={styles.branches}><code>{sourceBranch}</code><Glyph name="arrow" size={12} /><code>{targetBranch}</code></span>}
-          </div> : <p>
+          <h2>{changeMode === "conversations" ? "Repository conversations" : diff ? `${diff.repositoryLabel} changes` : "Find changed code"}</h2>
+          <p>
             {changeMode === "conversations"
               ? "Read and reply to GitLab conversations."
               : gitlabReview
@@ -642,7 +722,7 @@ export function RepositoryReviewScreen({
               : diff
               ? `${diff.baseCommitOid.slice(0, 8)} to ${diff.headCommitOid.slice(0, 8)}`
               : "WTS checks repositories for local changes"}
-          </p>}
+          </p>
         </div>
         <label>
           <span>Repository</span>
@@ -658,8 +738,7 @@ export function RepositoryReviewScreen({
             ))}
           </SelectMenu>
         </label>
-        {managedTarget && conversationEntries.length > 1 && <label><span>Merge request</span><SelectMenu aria-label="Merge request" value={managedTarget.key} onChange={selectConversationTarget}>{conversationEntries.map((entry) => <option key={entry.target.key} value={entry.target.key}>{entry.target.label}{entry.unreadCommentIds.length > 0 ? ` · ${entry.unreadCommentIds.length} unread` : ""}</option>)}</SelectMenu></label>}
-        {changeMode === "code" && gitlabReview && !managedTarget && (
+        {changeMode === "code" && gitlabReview && (
           <label>
             <span>Changes</span>
             <SelectMenu
@@ -685,8 +764,8 @@ export function RepositoryReviewScreen({
             </SelectMenu>
           </label>
         )}
-        {changeMode === "code" && !managedTarget && !gitlabReview && <button className={styles.toolbarAction} disabled={checkingReviewUpdates} onClick={retryRepositoryRequest} type="button">Refresh changes</button>}
-        {changeMode === "code" && !managedTarget && <>
+        {changeMode === "code" && !gitlabReview && <button className={styles.toolbarAction} disabled={checkingReviewUpdates} onClick={retryRepositoryRequest} type="button">Refresh changes</button>}
+        {changeMode === "code" && <>
         <span
           className={styles.graphStatus}
           data-ready={materialization.graph.status === "ready" || undefined}
@@ -736,64 +815,125 @@ export function RepositoryReviewScreen({
           <button
             aria-expanded={showAiReview}
             className={styles.toolbarAction}
+            data-ui="repository-review.ai-review-toggle"
+            data-ui-label="AI review button"
             onClick={() => setShowAiReview((prev) => !prev)}
             type="button"
           >
             {showAiReview ? "Hide AI review" : "AI review"}
+            {!showAiReview && aiReview && aiReview.findings.length > 0 && (
+              <span className={styles.aiReviewCount} aria-label={`${aiReview.findings.length} findings`}>{aiReview.findings.length}</span>
+            )}
           </button>
         )}
         </>}
-      </header>
-      {unreadEntries.length > 0 && (
-        <nav className={styles.unreadInbox} aria-label="Unread MR comments" data-ui="repository-review.unread" data-ui-label="Unread comment links">
-          <span className={styles.unreadSummary}>
-            <Glyph name="comment" size={14} />
-            <strong>{gitlabConversations!.unreadCount} unread {gitlabConversations!.unreadCount === 1 ? "comment" : "comments"}</strong>
-            <span>in this workspace</span>
-          </span>
-          <div className={styles.unreadTargets}>
-            {unreadEntries.map((entry) => {
-              const label = materialization.worktrees.find((tree) => tree.repositoryId === entry.target.worktreeRepositoryId)?.label ?? entry.target.label;
-              const count = entry.unreadCommentIds.length;
-              return <button key={entry.target.key} type="button" onClick={() => openUnreadConversation(entry)} aria-label={`Open ${count} unread ${count === 1 ? "comment" : "comments"} in ${label} !${entry.target.iid}`}>
-                <span>{label} <span className={styles.unreadMr}>!{entry.target.iid}</span></span>
-                <b>{count}</b>
-                {entry.snapshot?.fromCache && <small>Saved</small>}
-                <Glyph name="arrow" size={12} />
-              </button>;
-            })}
-          </div>
-        </nav>
-      )}
+      </header>}
       {gitlabConversations && (
-        <div className={styles.changeViews} role="tablist" aria-label="Change views" data-ui="repository-review.views" data-ui-label="Change views">
-          {(["code", "conversations"] as const).map((mode) => (
+        <div
+          className={styles.reviewBar}
+          data-ui="repository-review.views"
+          data-ui-label="Change views"
+        >
+          <div className={styles.changeViews} role="tablist" aria-label="Change views">
+            {(["code", "conversations"] as const).map((mode) => (
+              <button
+                aria-controls={`${changeViewId}-${mode}-panel`}
+                aria-selected={changeMode === mode}
+                aria-label={mode === "code" ? "Code" : `Conversations${unreadConversations ? `, ${unreadConversations} unread comments` : ""}`}
+                data-view={mode}
+                id={`${changeViewId}-${mode}-tab`}
+                key={mode}
+                onClick={() => selectChangeMode(mode)}
+                onKeyDown={(event) => {
+                  if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+                  event.preventDefault();
+                  const next = event.key === "Home" ? "code" : event.key === "End" ? "conversations" : mode === "code" ? "conversations" : "code";
+                  selectChangeMode(next);
+                  event.currentTarget.parentElement?.querySelector<HTMLButtonElement>(`[data-view="${next}"]`)?.focus();
+                }}
+                role="tab"
+                tabIndex={changeMode === mode ? 0 : -1}
+                type="button"
+              >
+                {mode === "code" ? "Code" : <>Conversations{conversationsKnown && <span className={styles.conversationCount}>{conversationCount}</span>}{unreadConversations > 0 && <span className={styles.unreadBadge}>{unreadConversations} new</span>}</>}
+              </button>
+            ))}
+          </div>
+          {managedTarget && workspaceKey && (
             <button
-              aria-controls={`${changeViewId}-${mode}-panel`}
-              aria-selected={changeMode === mode}
-              aria-label={mode === "code" ? "Code" : `Conversations${unreadConversations ? `, ${unreadConversations} unread comments` : ""}`}
-              data-view={mode}
-              id={`${changeViewId}-${mode}-tab`}
-              key={mode}
-              onClick={() => selectChangeMode(mode)}
-              onKeyDown={(event) => {
-                if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
-                event.preventDefault();
-                const next = event.key === "Home" ? "code" : event.key === "End" ? "conversations" : mode === "code" ? "conversations" : "code";
-                selectChangeMode(next);
-                event.currentTarget.parentElement?.querySelector<HTMLButtonElement>(`[data-view="${next}"]`)?.focus();
-              }}
-              role="tab"
-              tabIndex={changeMode === mode ? 0 : -1}
+              aria-expanded={showAiReview}
+              className={styles.barAction}
+              data-active={showAiReview || undefined}
+              data-ui="repository-review.mr-ai-review-toggle"
+              data-ui-label="MR AI review button"
+              onClick={() => setShowAiReview((prev) => !prev)}
               type="button"
             >
-              {mode === "code" ? "Code" : <>Conversations {conversationsKnown && <span className={styles.conversationCount}>{conversationCount}</span>}{unreadConversations > 0 && <span className={styles.unreadBadge}>{unreadConversations} unread</span>}</>}
+              <Glyph name="play" size={11} />
+              {showAiReview ? "Hide AI review" : "AI review"}
+              {!showAiReview && mrAiFindingCount > 0 && (
+                <span className={styles.aiReviewCount} aria-label={`${mrAiFindingCount} findings`}>{mrAiFindingCount}</span>
+              )}
             </button>
-          ))}
+          )}
+          {unreadEntries.length > 0 && (
+            <nav className={styles.unreadInbox} aria-label="Unread MR comments" data-ui="repository-review.unread" data-ui-label="Unread comment links">
+              <span className={styles.unreadSummary}>
+                <Glyph name="comment" size={13} />
+                <strong>{gitlabConversations.unreadCount} unread {gitlabConversations.unreadCount === 1 ? "comment" : "comments"}</strong>
+              </span>
+              {nextUnread && unreadEntries.length > 1 && (
+                <button
+                  className={styles.nextUnread}
+                  data-ui="repository-review.next-unread"
+                  data-ui-label="Next unread button"
+                  onClick={() => openUnreadConversation(nextUnread)}
+                  title="Open the first unread thread. WTS marks a thread as read when you open it."
+                  type="button"
+                >
+                  {nextUnreadIsHere ? "Open next unread" : `Next unread in ${unreadLabel(nextUnread)}`}
+                  <Glyph name="arrow" size={12} />
+                </button>
+              )}
+              <div className={styles.unreadTargets}>
+                {unreadEntries.map((entry) => {
+                    const label = unreadLabel(entry);
+                    const count = entry.unreadCommentIds.length;
+                    const single = unreadEntries.length === 1;
+                    return <button className={single ? styles.nextUnread : undefined} data-ui={single ? "repository-review.next-unread" : undefined} data-ui-label={single ? "Next unread button" : undefined} key={entry.target.key} type="button" onClick={() => openUnreadConversation(entry)} aria-label={`Open ${count} unread ${count === 1 ? "comment" : "comments"} in ${label} !${entry.target.iid}`} title="Open the first unread thread. WTS marks a thread as read when you open it.">
+                      {single ? <span>Open next unread</span> : <><span>{label} <span className={styles.unreadMr}>!{entry.target.iid}</span></span><b>{count}</b></>}
+                      {entry.snapshot?.fromCache && <small>Saved</small>}
+                      {single && <Glyph name="arrow" size={12} />}
+                    </button>;
+                })}
+              </div>
+            </nav>
+          )}
         </div>
       )}
       <div className={styles.codeContent} hidden={changeMode !== "code"} role={gitlabConversations ? "tabpanel" : undefined} id={`${changeViewId}-code-panel`} aria-labelledby={gitlabConversations ? `${changeViewId}-code-tab` : undefined}>
-      {managedTarget && gitlabConversations ? <MergeRequestWorkingChanges
+      {managedTarget && gitlabConversations ? <CodeReviewPublishProvider value={mrPublishValue}>
+      {showAiReview && workspaceKey && (
+        <div className={styles.aiReviewSlot}>
+          <WorkspaceCodeReviewCard
+            client={client}
+            compact
+            findingsInDiff={mrAiFindingCount > 0}
+            mergeRequest={mrReviewTarget}
+            onNotice={onNotice}
+            onReviewChange={(next, source) => {
+              setAiReview(next);
+              if (source === "run" && next && next.findings.length > 0) focusAiReview();
+            }}
+            onRevealFinding={(finding) => focusAiReview(finding.findingId)}
+            repositoryId={currentRepositoryId || undefined}
+            review={aiReview}
+            workspaceId={workspaceId}
+            workspaceKey={workspaceKey}
+          />
+        </div>
+      )}
+      <MergeRequestWorkingChanges
         key={`${workspaceId}:${currentRepositoryId}:${managedTarget.key}`}
         client={client} workspaceId={workspaceId} repositoryId={currentRepositoryId}
         target={managedTarget} controller={gitlabConversations} active={changeMode === "code"}
@@ -802,12 +942,23 @@ export function RepositoryReviewScreen({
         selectedDiscussionId={session.discussions[selectedConversationScope]}
         onSelectConversation={(discussion) => { session.discussions[selectedConversationScope] = discussion.id; setSessionRevision((value) => value + 1); }}
         onFileChange={(path) => { session.files[`${currentRepositoryId}:${managedTarget.key}`] = path; setSessionRevision((value) => value + 1); }}
-      /> : <>
+        aiReview={aiReview}
+        aiReviewFocus={aiReviewFocus}
+      /></CodeReviewPublishProvider> : <>
       {showAiReview && workspaceKey && (
-        <div style={{ padding: "12px 16px", borderBottom: "1px solid var(--wts-line)" }}>
+        <div className={styles.aiReviewSlot}>
           <WorkspaceCodeReviewCard
             client={client}
+            currentPatch={diff?.patchSha256 ? { repositoryId: diff.repositoryId, patchSha256: diff.patchSha256 } : undefined}
+            findingsInDiff={Boolean(diff?.patch)}
             onNotice={onNotice}
+            onReviewChange={(next, source) => {
+              setAiReview(next);
+              if (source === "run" && next && next.findings.length > 0) focusAiReview();
+            }}
+            onRevealFinding={(finding) => focusAiReview(finding.findingId)}
+            repositoryId={currentRepositoryId || undefined}
+            review={aiReview}
             workspaceId={workspaceId}
             workspaceKey={workspaceKey}
           />
@@ -891,6 +1042,9 @@ export function RepositoryReviewScreen({
                     },
                   }
                 : {})}
+              aiReview={aiReview}
+              aiReviewFocus={aiReviewFocus}
+              aiReviewStale={codeReviewIsStale(aiReview, diff.patchSha256 ? { repositoryId: diff.repositoryId, patchSha256: diff.patchSha256 } : undefined)}
               graphReady={Boolean(reviewGraph)}
               lineCommentProvider={gitlabReview ? "GitLab" : undefined}
               patch={diff.patch}
@@ -937,7 +1091,28 @@ export function RepositoryReviewScreen({
             <Glyph name="check" size={20} />
           </div>
           <b>No local changes</b>
-          <p>The workspace is up to date with the target branch.</p>
+          <p>
+            {materialization.worktrees.find((worktree) => worktree.repositoryId === currentRepositoryId)?.label ?? "This repository"} has no change from its base commit
+            {diff?.baseCommitOid ? <> <code>{diff.baseCommitOid.slice(0, 8)}</code></> : null}.
+          </p>
+          {(() => {
+            const changed = materialization.worktrees.filter(
+              (worktree) =>
+                worktree.repositoryId !== currentRepositoryId &&
+                ((worktree.activity?.changedFileCount ?? 0) > 0 || (worktree.activity?.commitsAhead ?? 0) > 0),
+            );
+            return changed.length > 0 ? (
+              <div className={styles.emptyJump} data-ui="repository-review.changed-repositories" data-ui-label="Repositories with changes">
+                <span>Changes are in:</span>
+                {changed.map((worktree) => (
+                  <button key={worktree.repositoryId} onClick={() => selectRepository(worktree.repositoryId)} type="button">
+                    {worktree.label}
+                    <small>{worktree.activity?.changedFileCount ?? 0} files</small>
+                  </button>
+                ))}
+              </div>
+            ) : null;
+          })()}
         </div>
       )}
       </>}

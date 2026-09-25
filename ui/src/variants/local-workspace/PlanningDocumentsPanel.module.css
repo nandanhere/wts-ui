@@ -489,6 +489,46 @@
   grid-template-columns: minmax(0, 1fr) 316px;
 }
 
+.planStarter {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 12px 18px 0;
+  padding: 12px 14px;
+  color: var(--wts-ink);
+  background: color-mix(in srgb, var(--wts-blue) 6%, var(--wts-surface));
+  border: 1px solid color-mix(in srgb, var(--wts-blue) 28%, var(--wts-line));
+  border-radius: 8px;
+}
+
+.planStarter > span {
+  display: inline-grid;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 auto;
+  place-items: center;
+  color: var(--wts-blue);
+  background: var(--wts-surface);
+  border-radius: 6px;
+}
+
+.planStarter > div {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.planStarter strong {
+  display: block;
+  font-size: 13px;
+}
+
+.planStarter p {
+  margin: 2px 0 0;
+  color: var(--wts-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
 .documentCanvas {
   display: flex;
   min-width: 0;

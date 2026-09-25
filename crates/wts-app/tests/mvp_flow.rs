@@ -1869,6 +1869,80 @@ fn gitlab_status_uses_the_managed_base_tracking_remote_without_origin() {
 
 #[cfg(unix)]
 #[test]
+fn links_a_different_branch_mr_without_moving_local_work() {
+    use std::os::unix::fs::PermissionsExt;
+    let directory = tempfile::tempdir().unwrap();
+    let executable = directory.path().join("glab");
+    fs::write(&executable, r#"#!/bin/sh
+set -eu
+root="$WTS_TEST_LINK_ROOT"
+printf '%s\n' "$4" >> "$root/endpoints"
+case "$4" in
+ /user) printf '{"id":7,"username":"alice"}' ;;
+ */merge_requests/43) cat "$root/mr.json" ;;
+ */merge_requests\?*) printf '[]' ;;
+ *) exit 31 ;;
+esac
+"#).unwrap();
+    fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
+    let mut paths = vec![directory.path().to_path_buf()];
+    paths.extend(std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()));
+    let output = Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", "linked_mr_workspace_child", "--nocapture"])
+        .env("WTS_TEST_LINK_ROOT", directory.path())
+        .env("PATH", std::env::join_paths(paths).unwrap())
+        .output().unwrap();
+    assert!(output.status.success(), "{}\n{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+}
+
+#[cfg(unix)]
+#[test]
+fn linked_mr_workspace_child() {
+    let Some(root) = std::env::var_os("WTS_TEST_LINK_ROOT").map(PathBuf::from) else {
+        return;
+    };
+    let fixture = Fixture::new();
+    git(Some(&fixture.api), ["remote", "add", "upstream", "https://gitlab.example.test/trusted/checkout-api.git"]);
+    git(Some(&fixture.api), ["update-ref", "refs/remotes/upstream/main", "HEAD"]);
+    git(Some(&fixture.api), ["config", "branch.main.remote", "upstream"]);
+    git(Some(&fixture.api), ["config", "branch.main.merge", "refs/heads/main"]);
+    let workspace_id = fixture.create_plan(&["checkout-api"]);
+    let preflight = fixture.service.preflight_workspace(workspace_id).unwrap();
+    let materialized = fixture.service.materialize_workspace(workspace_id, &preflight.effect_digest).unwrap().materialization;
+    let worktree = &materialized.worktrees[0];
+    let local = Path::new(&worktree.target_display_path);
+    fs::write(local.join("local-edit.txt"), "keep this local work\n").unwrap();
+    let before_head = git_output(Some(local), ["rev-parse", "HEAD"]);
+    let before_branch = git_output(Some(local), ["branch", "--show-current"]);
+    let repository_id = &worktree.repository_id;
+    let mr = serde_json::json!({
+        "id": 1043, "iid": 43, "title": "Existing work",
+        "web_url": "https://gitlab.example.test/trusted/checkout-api/-/merge_requests/43",
+        "state": "opened", "source_branch": "review/complete",
+        "source_project_id": 7, "target_project_id": 7, "target_branch": "main",
+        "author": {"username": "alice"}, "updated_at": "2026-09-23T09:00:00Z", "draft": true
+    });
+    fs::write(root.join("mr.json"), serde_json::to_vec(&mr).unwrap()).unwrap();
+    let linked = fixture.service.link_workspace_gitlab_merge_request(workspace_id, repository_id, 43).unwrap();
+    assert_eq!(linked.source_branch, "review/complete");
+    assert_eq!(fixture.service.gitlab_merge_requests(workspace_id).unwrap().merge_requests[0].iid, 43);
+    let reopened = fixture.reopen(RecordingLauncher::default());
+    assert_eq!(reopened.gitlab_merge_requests(workspace_id).unwrap().merge_requests[0].iid, 43);
+    assert_eq!(git_output(Some(local), ["rev-parse", "HEAD"]), before_head);
+    assert_eq!(git_output(Some(local), ["branch", "--show-current"]), before_branch);
+    assert_eq!(fs::read_to_string(local.join("local-edit.txt")).unwrap(), "keep this local work\n");
+    let endpoints = fs::read_to_string(root.join("endpoints")).unwrap();
+    assert!(endpoints.contains("/projects/trusted%2Fcheckout-api/merge_requests/43"), "{endpoints}");
+    let mut wrong_project = mr;
+    wrong_project["web_url"] = serde_json::json!(
+        "https://gitlab.example.test/other/checkout-api/-/merge_requests/43"
+    );
+    fs::write(root.join("mr.json"), serde_json::to_vec(&wrong_project).unwrap()).unwrap();
+    assert!(reopened.link_workspace_gitlab_merge_request(workspace_id, repository_id, 43).is_err());
+}
+
+#[cfg(unix)]
+#[test]
 fn gitlab_discussions_use_catalog_on_cold_start_and_managed_tracking_remote() {
     use std::os::unix::fs::PermissionsExt;
     let directory = tempfile::tempdir().unwrap();
@@ -4417,6 +4491,10 @@ fn reconciles_user_owned_branch_head_origin_and_upstream_changes() {
     let changed_head = git_output(Some(&worktree), ["rev-parse", "HEAD"])
         .trim()
         .to_owned();
+    fs::write(worktree.join("README.md"), "uncommitted user edit\n")
+        .expect("dirty tracked file");
+    fs::write(worktree.join("untracked.txt"), "untracked user work\n")
+        .expect("dirty untracked file");
     let changed_inspection = wts_git::GitWorktreeService::new()
         .inspect_repository(&worktree)
         .expect("inspect changed worktree");
@@ -4458,6 +4536,26 @@ fn reconciles_user_owned_branch_head_origin_and_upstream_changes() {
     assert_eq!(
         listed.lifecycle.materialization_state,
         WorkspaceMaterializationState::NeedsAttention
+    );
+    assert!(matches!(
+        fixture.service.preflight_workspace(workspace_id),
+        Err(LocalWtsError::WorkspaceGitStateChanged)
+    ));
+    assert_eq!(
+        git_output(Some(&worktree), ["rev-parse", "HEAD"]).trim(),
+        changed_head
+    );
+    assert_eq!(
+        git_output(Some(&worktree), ["branch", "--show-current"]).trim(),
+        "manual-drift"
+    );
+    assert_eq!(
+        fs::read_to_string(worktree.join("README.md")).unwrap(),
+        "uncommitted user edit\n"
+    );
+    assert_eq!(
+        fs::read_to_string(worktree.join("untracked.txt")).unwrap(),
+        "untracked user work\n"
     );
 
     let opened_during_git_changes = fixture

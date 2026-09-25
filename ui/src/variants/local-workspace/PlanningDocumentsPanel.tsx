@@ -1,6 +1,7 @@
 import { planningDocumentDisplayPath, resolvePlanningDocumentLink } from "./planningDocumentPaths";
 import { isNativePreviewReadOnlyCode, nativePreviewAllowsCommand, NATIVE_PREVIEW_READ_ONLY_MESSAGE } from "../../lib/nativePreview";
 import { RecoveryCopyButton } from "./RecoveryCopyButton";
+import { requestAgentTask } from "../../lib/agentFeedbackEvents";
 import { observePlanningSave, planningCacheFor, planningDocumentCacheKey, planningViewFor, publishPlanningSave, rememberPlanningView, type PlanningView } from "./planningWorkspaceCache";
 import {
   isValidElement,
@@ -529,6 +530,19 @@ function codeText(children: ReactNode) {
   return String(children).replace(/\n$/, "");
 }
 
+export function MermaidCodeBlock({ children }: { children?: ReactNode }) {
+  if (
+    isValidElement<{
+      children?: ReactNode;
+      className?: string;
+    }>(children) &&
+    /^language-mermaid(?:\s|$)/.test(children.props.className ?? "")
+  ) {
+    return <MermaidDiagram source={codeText(children.props.children)} />;
+  }
+  return <pre>{children}</pre>;
+}
+
 const planningMarkdownComponents: Components = {
   a: ({ children, href }) => {
     const safeHref = href ? safeMarkdownUrl(href) : undefined;
@@ -550,18 +564,7 @@ const planningMarkdownComponents: Components = {
       Image not loaded{alt ? `: ${alt}` : ""}
     </span>
   ),
-  pre: ({ children }) => {
-    if (
-      isValidElement<{
-        children?: ReactNode;
-        className?: string;
-      }>(children) &&
-      /^language-mermaid(?:\s|$)/.test(children.props.className ?? "")
-    ) {
-      return <MermaidDiagram source={codeText(children.props.children)} />;
-    }
-    return <pre>{children}</pre>;
-  },
+  pre: MermaidCodeBlock,
 };
 
 interface PlanningPreviewProps {
@@ -840,8 +843,28 @@ export interface PlanningDocumentsPanelProps {
   client: WorkspaceClient;
   workspaceId: string;
   workspaceKey: string;
+  /** The workspace title. It lets the plan starter describe the real goal. */
+  workspaceTitle?: string;
   onNotice?: (message: string, kind?: "info" | "error") => void;
   onCreatePlanningHome?: () => void;
+}
+
+const TEMPLATE_MARKER = /^\s*[-*]?\s*_?TODO:/;
+
+/** A PLAN.md that still has only template prompts gets a starter. Other files and written plans do not. */
+export function planStarterNeeded(document: { fileName: string; contents: string }): boolean {
+  const name = document.fileName.split("/").at(-1)?.toUpperCase();
+  if (name !== "PLAN.MD") return false;
+  const lines = document.contents.split("\n").map((line) => line.trim()).filter(Boolean);
+  const written = lines.filter((line) => !line.startsWith("#") && !TEMPLATE_MARKER.test(line) && !/^[-*]\s*\[[ x]\]\s*Define the first bounded deliverable\.?$/i.test(line));
+  return lines.some((line) => TEMPLATE_MARKER.test(line)) && written.length === 0;
+}
+
+export function planStarterPrompt(title: string, fileName: string): string {
+  const review = /^Review\s/i.test(title) || /![0-9]+/.test(title);
+  return review
+    ? `Write a review plan for "${title}" in ${fileName}. Read the merge request changes in this workspace. State the objective, the files and risks to check first, the tests to run, and the open questions for the author. Keep the file headings. Do not change source code.`
+    : `Write a first plan for "${title}" in ${fileName}. Read this workspace. State the objective, the first bounded deliverable, the non-goals, and the decisions that block progress. Keep the file headings. Do not change source code.`;
 }
 
 export function PlanningDocumentsPanel(props: PlanningDocumentsPanelProps) {
@@ -853,6 +876,7 @@ function PlanningDocumentsPanelContent({
   client,
   workspaceId,
   workspaceKey,
+  workspaceTitle,
   onNotice,
   onCreatePlanningHome,
 }: PlanningDocumentsPanelProps) {
@@ -1542,6 +1566,23 @@ function PlanningDocumentsPanelContent({
     );
   }
 
+  if (listState === "error" && listErrorCode === "planning_not_configured" && onCreatePlanningHome) {
+    // A missing planning home is a setup step, not a failure.
+    return (
+      <section aria-label="Plans and Kanban" className={styles.state} data-ui="plans.setup" data-ui-label="Plan setup">
+        <span className={styles.stateIcon} aria-hidden="true">
+          <Glyph name="file" />
+        </span>
+        <strong>No plan for this workspace yet</strong>
+        <p>{listError} Add one to let the agent write a review plan and track findings.</p>
+        <Button className={styles.primaryButton} onPress={onCreatePlanningHome}>
+          <Glyph name="file" size={15} />
+          Create planning home
+        </Button>
+      </section>
+    );
+  }
+
   if (listState === "error") {
     return (
       <section aria-label="Plans and Kanban" className={styles.state}>
@@ -1947,6 +1988,30 @@ function PlanningDocumentsPanelContent({
               </div>
             )}
 
+            {!editing && document && planStarterNeeded(document) && (
+              <section
+                aria-label="Plan starter"
+                className={styles.planStarter}
+                data-ui="planning.plan-starter"
+                data-ui-label="Plan starter"
+              >
+                <span aria-hidden="true"><Glyph name="play" size={14} /></span>
+                <div>
+                  <strong>This plan is still a template</strong>
+                  <p>The agent can read the workspace and write a first draft. You review the draft before you keep it.</p>
+                </div>
+                <Button
+                  className={styles.primaryButton}
+                  onPress={() => requestAgentTask({
+                    calloutId: "planning.plan-starter",
+                    label: `Plan · ${workspaceTitle ?? workspaceKey}`,
+                    body: planStarterPrompt(workspaceTitle ?? workspaceKey, document.fileName),
+                  })}
+                >
+                  Ask agent to draft the plan
+                </Button>
+              </section>
+            )}
             <div className={styles.reviewLayout}>
               <div
                 className={styles.documentCanvas}

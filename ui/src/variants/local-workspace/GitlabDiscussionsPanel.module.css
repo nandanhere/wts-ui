@@ -450,3 +450,20 @@
     margin-left: auto;
   }
 }
+
+.summary .explainer {
+  max-width: 640px;
+  margin-top: 4px;
+  color: var(--wts-faint);
+}
+
+.commentPreview {
+  display: -webkit-box;
+  margin: 4px 0 2px;
+  overflow: hidden;
+  color: var(--wts-ink);
+  font-size: 13px;
+  line-height: 1.5;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}

@@ -1,4 +1,5 @@
 import type {
+  GitlabMergeRequest,
   GitlabReview,
   GitlabReviewTarget,
   WorkspaceIntent,
@@ -138,6 +139,7 @@ export function gitlabReviewForWorkspace(
 export function gitlabReviewTargetForWorkspace(
   workspace: ReviewWorkspaceSignalSource,
   reviews: readonly GitlabReview[],
+  mergeRequests: readonly GitlabMergeRequest[] = [],
 ): (GitlabReviewTarget & Partial<GitlabReview>) | undefined {
   const current = gitlabReviewForWorkspace(workspace, reviews);
   if (current) return current;
@@ -148,10 +150,28 @@ export function gitlabReviewTargetForWorkspace(
       candidate.repositoryId && candidate.label === reference.repositoryLabel,
   );
   if (!repository?.repositoryId) return undefined;
+  // A review leaves the pending inbox after approval. The workspace MR list
+  // still holds its status, so the overview keeps a real state.
+  const known = mergeRequests.find(
+    (mergeRequest) =>
+      mergeRequest.iid === reference.number &&
+      mergeRequest.projectPath === reference.repository,
+  );
   return {
     repositoryId: repository.repositoryId,
     repository: reference.repository,
     number: reference.number,
+    ...(known
+      ? {
+          title: known.title,
+          status: known.status,
+          draft: known.draft,
+          sourceBranch: known.sourceBranch,
+          targetBranch: known.targetBranch,
+          authorLogin: known.authorUsername,
+          updatedAt: known.updatedAt,
+        }
+      : {}),
   };
 }
 
@@ -159,10 +179,14 @@ function gitlabReviewReferenceForWorkspace(
   workspace: ReviewWorkspaceSignalSource,
 ): { repository: string; repositoryLabel: string; number: number } | undefined {
   if (workspace.intent.type !== "repositorySet") return undefined;
-  const match = [workspace.intent.label, workspace.title]
+  // A label can hold the short name ("Review zeno !41") while the title holds
+  // the full project path. Prefer the full path so the inbox entry matches.
+  const matches = [workspace.intent.label, workspace.title]
     .filter((value): value is string => Boolean(value))
     .map((value) => /^Review (.+) !([1-9][0-9]*)$/.exec(value))
-    .find((value) => value !== null);
+    .filter((value): value is RegExpExecArray => value !== null);
+  const match =
+    matches.find((value) => value[1]?.includes("/")) ?? matches[0];
   if (!match) return undefined;
   const number = Number(match[2]);
   if (!Number.isSafeInteger(number)) return undefined;

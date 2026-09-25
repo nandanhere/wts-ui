@@ -17,7 +17,7 @@ function conversation(body = "The fix is ready."): AgentConversation {
 }
 function discussions(body = "Please change the return value."): GitlabDiscussions {
   return { schemaVersion: 1, repositoryId: "repo_checkout", iid: 16, scopeId: "a".repeat(64), viewerLogin: "me", fetchedAtUnixMs: 4, fromCache: false, truncated: false,
-    discussions: [{ id: "thread-1", resolvable: true, resolved: false, automated: false, filePath: "src/main.rs", comments: [{ id: 1, body, authorLogin: "reviewer", createdAt: "2026-09-19T00:00:00Z" }, { id: 2, body: "My own reply", authorLogin: "me", createdAt: "2026-09-19T00:00:01Z" }] }] };
+    discussions: [{ id: "thread-1", resolvable: true, resolved: false, automated: false, filePath: "src/main.rs", comments: [{ id: 1, body, authorLogin: "reviewer", createdAt: "2026-09-19T00:00:00Z" }, { id: 2, body: "My own reply", authorLogin: "me", createdAt: "2026-09-18T23:59:59Z" }] }] };
 }
 function harness() {
   const inbox = { schemaVersion: 1, state: "fresh", detail: "Ready", fetchedAtUnixMs: 4,
@@ -42,6 +42,38 @@ describe("workspace attention", () => {
     expect(snapshot.items.find(item => item.kind === "verification")?.target).toMatchObject({ checkId: "checkout-unit", planRevision: 1 });
     expect(snapshot.sources[workspaceId]?.agent.detail).toMatch(/recent.*50/i);
     expect(client.getWorkspaceVerificationSummary!).toHaveBeenCalledTimes(1);
+  });
+
+
+  it("clears earlier thread attention after a GitLab reply and restores it for a later comment", async () => {
+    const { store, client } = harness();
+    await store.refresh(workspaces);
+    expect(store.getSnapshot().items.find(item => item.kind === "gitlab")?.count).toBe(1);
+    const replied = discussions();
+    replied.discussions[0]!.comments[1]!.createdAt = "2026-09-19T00:00:01Z";
+    vi.mocked(client.getGitlabDiscussions).mockResolvedValue(replied);
+    await store.refresh(workspaces, { force: true });
+    expect(store.getSnapshot().items.some(item => item.kind === "gitlab")).toBe(false);
+    replied.discussions[0]!.comments.push({ id: 3, body: "One more change", authorLogin: "reviewer", createdAt: "2026-09-19T00:00:02Z" });
+    await store.refresh(workspaces, { force: true });
+    expect(store.getSnapshot().items.find(item => item.kind === "gitlab")?.count).toBe(1);
+  });
+
+  it("clears attention immediately after a reply from WTS without a provider refresh", async () => {
+    const { store, client } = harness();
+    await store.refresh(workspaces);
+    const unsubscribe = store.subscribe(() => {});
+    const materialization = { worktrees: [{ repositoryId: "repo_checkout", label: "checkout", branchName: "feature" }] } as WorkspaceMaterialization;
+    const view = renderHook(() => useWorkspaceGitlabDiscussions({ client, workspaceId, materialization, enabled: true }));
+    await waitFor(() => expect(view.result.current.unreadCount).toBe(1));
+    act(() => view.result.current.acceptReply(view.result.current.entries[0]!.target.key, {
+      schemaVersion: 1, repositoryId: "repo_checkout", iid: 16, discussionId: "thread-1",
+      comment: { id: 3, body: "Fixed", authorLogin: "me", createdAt: "2026-09-19T00:00:01Z" },
+    }, "a".repeat(64)));
+    expect(view.result.current.unreadCount).toBe(0);
+    expect(store.getSnapshot().items.some(item => item.kind === "gitlab")).toBe(false);
+    view.unmount();
+    unsubscribe();
   });
 
   it("shares pending reads and keeps cached items visible on a failed refresh", async () => {

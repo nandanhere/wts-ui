@@ -75,10 +75,25 @@ describe("workspace board attention", () => {
     const card = await screen.findByRole("region", { name: "Project 0 attention" });
     expect(within(card).getByRole("button", { name: "Review result 0 Saved task 0" })).toBeVisible();
     expect(within(card).getByText(/GitLab status is unavailable/)).toBeVisible();
+    const banner = screen.getByRole("note");
+    expect(banner).toHaveTextContent("GitLab status is unavailable for 1 workspace.");
+    fireEvent.click(within(banner).getByRole("button", { name: "Retry status" }));
+    await waitFor(() => expect(harness.refresh).toHaveBeenCalledWith(expect.any(Array), { force: true }));
+    harness.refresh.mockClear();
     fireEvent.click(within(card).getByRole("button", { name: "Retry status" }));
     await waitFor(() => expect(harness.refresh).toHaveBeenCalledWith(expect.any(Array), { force: true }));
     act(() => { harness.snapshot = { ...harness.snapshot, refreshing: true }; harness.listeners.forEach(listener => listener()); });
     expect(within(card).getByRole("button", { name: "Review result 0 Saved task 0" })).toBeVisible();
+  });
+
+  it("keeps a quiet workspace card free of status rows", async () => {
+    const { fake } = setup();
+    const fresh = { status: "fresh" as const, refreshing: true, updatedAt: Date.now(), error: "", detail: "" };
+    harness.snapshot.items = harness.snapshot.items.filter(item => item.workspaceId !== "space-1");
+    harness.snapshot.sources["space-1"] = { agent: fresh, verification: fresh, gitlab: fresh };
+    render(<LocalWorkspace client={fake.client} />);
+    await screen.findByRole("region", { name: "Project 0 attention" });
+    expect(screen.queryByRole("region", { name: "Project 1 attention" })).not.toBeInTheDocument();
   });
   it("opens the exact unread MR thread in Changes", async () => {
     const { fake } = setup();

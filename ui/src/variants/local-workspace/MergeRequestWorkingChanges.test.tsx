@@ -14,7 +14,7 @@ const workingChangesStylesheet = readFileSync(
   "utf8",
 );
 
-vi.mock("./RepositoryPatchViewer", async (original) => ({ ...await original<typeof import("./RepositoryPatchViewer")>(), RepositoryPatchViewer: ({ patch, singleFileActions }: { patch: string; singleFileActions?: ReactNode }) => <>{singleFileActions}<pre aria-label="Displayed comparison">{patch}</pre></> }));
+vi.mock("./RepositoryPatchViewer", async (original) => ({ ...await original<typeof import("./RepositoryPatchViewer")>(), RepositoryPatchViewer: ({ patch, singleFileActions, aiReview }: { patch: string; singleFileActions?: ReactNode; aiReview?: { findings: unknown[] } | null }) => <>{singleFileActions}<pre aria-label="Displayed comparison" data-ai-findings={aiReview ? aiReview.findings.length : undefined}>{patch}</pre></> }));
 const oid = (letter: string) => letter.repeat(40);
 const patch = (path: string, before: string, after: string) => `diff --git a/${path} b/${path}\nindex 1111111..2222222 100644\n--- a/${path}\n+++ b/${path}\n@@ -1 +1 @@\n-${before}\n+${after}\n`;
 function fixture(status: WorkspaceGitlabComparison["status"] = "ready") {
@@ -33,6 +33,30 @@ function fixture(status: WorkspaceGitlabComparison["status"] = "ready") {
 function changeView(value: string) { fireEvent.change(screen.getByRole("combobox", { name: "Code comparison" }), { target: { value } }); }
 
 describe("MR and local code comparisons", () => {
+  it("shows the AI review of the published MR on In the MR and opens the file of a focused finding", async () => {
+    const f = fixture();
+    const review = {
+      workspaceId: f.workspaceId, provider: "codex" as const, scope: "recentChanges" as const, mode: "skill" as const, summary: "One question.", actionableSteps: [], reviewedAtUnixMs: 1,
+      findings: [{ findingId: "q-1", severity: "suggestion" as const, label: "question" as const, repositoryId: "repo_checkout", filePath: "src/reverted.ts", line: 1, side: "additions" as const, anchored: true, title: "Why revert?", explanation: "Unclear." }],
+      repositories: [{ repositoryId: "repo_checkout", repositoryLabel: "checkout", baseCommitOid: oid("a"), headCommitOid: oid("b"), patchSha256: "sha256:x", changedLines: 2, sizeGateExceeded: false, strictness: "normal" as const, mergeRequest: { iid: 9, baseCommitOid: oid("a"), startCommitOid: oid("a"), headCommitOid: oid("b") } }],
+    };
+    const onFileChange = vi.fn();
+    const view = render(<MergeRequestWorkingChanges {...f.props} aiReview={review} onFileChange={onFileChange} />);
+    expect(await screen.findByLabelText("Displayed comparison")).not.toHaveAttribute("data-ai-findings");
+    expect(screen.getByText(/The AI review of the published MR has 1 finding/)).toBeVisible();
+
+    view.rerender(<MergeRequestWorkingChanges {...f.props} aiReview={review} onFileChange={onFileChange} aiReviewFocus={{ requestId: 1, findingId: "q-1" }} />);
+    await waitFor(() => expect(screen.getByRole("combobox", { name: "Code comparison" })).toHaveValue("inMr"));
+    expect(screen.getByRole("button", { name: /^src\/reverted.ts/ })).toHaveAttribute("aria-current", "true");
+    expect(within(screen.getByRole("button", { name: /^src\/reverted.ts/ })).getByText("AI 1")).toBeVisible();
+    expect(screen.getByLabelText("Displayed comparison")).toHaveAttribute("data-ai-findings", "1");
+    expect(onFileChange).toHaveBeenCalledWith("src/reverted.ts");
+
+    // A review of another MR version does not attach to this MR.
+    view.rerender(<MergeRequestWorkingChanges {...f.props} aiReview={{ ...review, repositories: [{ ...review.repositories[0]!, mergeRequest: { ...review.repositories[0]!.mergeRequest, iid: 10 } }] }} />);
+    await waitFor(() => expect(screen.getByLabelText("Displayed comparison")).not.toHaveAttribute("data-ai-findings"));
+  });
+
   it("keeps the user-selected file and its draft after a fresh comparison response", async () => {
     const f = fixture(); const onFileChange = vi.fn(); const view = render(<MergeRequestWorkingChanges {...f.props} initialFile="src/checkout.ts" onFileChange={onFileChange} />); await screen.findByLabelText("Displayed comparison");
     fireEvent.click(screen.getByRole("button", { name: "src/new.ts Local only" })); fireEvent.click(screen.getByRole("button", { name: "Edit locally" })); fireEvent.change(await screen.findByRole("textbox", { name: "Local file editor" }), { target: { value: "Keep this new file draft" } });
@@ -173,25 +197,59 @@ describe("MR and local code comparisons", () => {
     expect(await screen.findByLabelText("Displayed comparison")).toHaveTextContent("-base +latest");
     expect(screen.getByRole("button", { name: /src\/checkout.ts In MR \+ local/ })).toBeVisible();
     expect(screen.getByRole("button", { name: /src\/new.ts Local only/ })).toBeVisible();
+    expect(screen.getByText("MR changes and local changes")).toBeVisible();
     changeView("inMr");
     expect(screen.getByLabelText("Displayed comparison")).toHaveTextContent("-base +published");
+    expect(screen.getByText(/^MR at [0-9a-f]{8}$/)).toBeVisible();
+    // The file count states how many files the selected view changes.
+    expect(screen.getByTitle(/changed in this view · \d+ in the review/)).toBeVisible();
     expect(screen.queryByRole("button", { name: "Edit locally" })).not.toBeInTheDocument();
     changeView("sinceMr");
     expect(screen.getByLabelText("Displayed comparison")).toHaveTextContent("-published +latest");
     changeView("latestWork");
     fireEvent.click(screen.getByRole("button", { name: /src\/reverted.ts/ }));
-    expect(screen.getByText("This file has no change in Latest work. It remains in the published MR.")).toBeVisible();
+    expect(screen.getByText("This file has no local change. It remains in the published MR.")).toBeVisible();
     expect(f.getWorkspaceGitlabComparison).toHaveBeenCalledWith("ws_checkout", "repo_checkout", 9, false);
   });
 
   it.each(["missingCommits", "diverged"] as const)("keeps the published MR accessible when local history is %s", async (status) => {
     const f = fixture(status); render(<MergeRequestWorkingChanges {...f.props} />);
-    expect(await screen.findByRole("alert")).toHaveTextContent(status === "missingCommits" ? "MR commits are unavailable locally" : "Local history differs from the published MR");
+    // The first read opens the published MR, so the reviewer never lands on an empty diff.
+    expect(await screen.findByLabelText("Displayed comparison")).toHaveTextContent("+published");
+    expect(screen.getByText(/WTS shows the published changes at bbbbbbbb/)).toBeVisible();
+    expect(screen.getByText(status === "missingCommits" ? /The MR commits are not in this local checkout/ : /The local history differs from the published MR/)).toBeVisible();
+    changeView("latestWork");
+    expect(await screen.findByRole("alert")).toHaveTextContent(status === "missingCommits" ? "The MR commits are not in this local checkout." : "The local history differs from the published MR.");
     expect(screen.getByText("Local comparison unavailable")).toBeVisible();
     expect(screen.queryByText("No changes since the MR")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Displayed comparison")).not.toBeInTheDocument();
-    changeView("inMr");
+    fireEvent.click(screen.getByRole("button", { name: "Show published changes" }));
     expect(screen.getByLabelText("Displayed comparison")).toHaveTextContent("+published");
+    expect(screen.queryByRole("button", { name: "Show published changes" })).not.toBeInTheDocument();
+  });
+
+  it("explains a slow first comparison while GitLab answers", async () => {
+    const f = fixture();
+    let resolve!: (value: WorkspaceGitlabComparison) => void;
+    f.getWorkspaceGitlabComparison.mockReturnValueOnce(new Promise((next) => { resolve = next; }));
+    render(<MergeRequestWorkingChanges {...f.props} />);
+    expect(await screen.findByRole("status")).toHaveTextContent("WTS reads MR !9 from GitLab and compares it with the local work.");
+    await act(async () => resolve(f.comparison));
+    expect(await screen.findByLabelText("Displayed comparison")).toBeVisible();
+  });
+
+  it("retries a failed comparison in place and keeps GitLab settings out of a local host limit", async () => {
+    const f = fixture();
+    const busy = Object.assign(new Error("WTS is already running the maximum number of local operations. Retry shortly."), { code: "operation_capacity_exhausted" });
+    f.getWorkspaceGitlabComparison.mockRejectedValueOnce(busy);
+    const onOpenIntegrations = vi.fn();
+    render(<MergeRequestWorkingChanges {...f.props} onOpenIntegrations={onOpenIntegrations} />);
+    expect(await screen.findByRole("alert")).toHaveTextContent("maximum number of local operations");
+    expect(screen.queryByRole("button", { name: "Check GitLab connection" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Retry changes" }));
+    expect(await screen.findByLabelText("Displayed comparison")).toBeVisible();
+    expect(f.getWorkspaceGitlabComparison).toHaveBeenLastCalledWith("ws_checkout", "repo_checkout", 9, true);
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
   it("keeps the displayed comparison through refresh and restores the view and draft on return", async () => {

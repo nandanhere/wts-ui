@@ -135,10 +135,31 @@ function revision(comment: GitlabReviewDiscussionComment): string {
   return `${value.length}:${(first >>> 0).toString(16).padStart(8, "0")}${(second >>> 0).toString(16).padStart(8, "0")}`;
 }
 
+export function gitlabCommentsAfterOwnReply(comments: GitlabReviewDiscussionComment[], viewerLogin: string): GitlabReviewDiscussionComment[] {
+  const viewer = viewerLogin.toLowerCase();
+  const ownReplies = comments.filter((comment) => comment.authorLogin.toLowerCase() === viewer);
+  const latestReply = ownReplies.reduce<GitlabReviewDiscussionComment | undefined>((latest, comment) => {
+    const time = Date.parse(comment.createdAt);
+    if (!Number.isFinite(time)) return latest;
+    if (!latest) return comment;
+    const latestTime = Date.parse(latest.createdAt);
+    return time > latestTime || (time === latestTime && comment.id > latest.id) ? comment : latest;
+  }, undefined);
+  return comments.filter((comment) => {
+    if (comment.authorLogin.toLowerCase() === viewer) return false;
+    if (!latestReply) return true;
+    const time = Date.parse(comment.createdAt);
+    const replyTime = Date.parse(latestReply.createdAt);
+    // Note IDs preserve order when GitLab timestamps have the same precision.
+    return !Number.isFinite(time) || time > replyTime || (time === replyTime && comment.id > latestReply.id);
+  });
+}
+
 function unreadIds(snapshot: GitlabDiscussions, markers: ReadMarkers): number[] {
   const seen = markers[snapshot.scopeId] ?? {};
-  return [...new Set(snapshot.discussions.flatMap((thread) => thread.comments)
-    .filter((comment) => comment.authorLogin.toLowerCase() !== snapshot.viewerLogin.toLowerCase() && !seen[comment.id]?.includes(revision(comment)))
+  // Bot notes are not review work, so they never count as unread.
+  return [...new Set(snapshot.discussions.filter((thread) => !thread.automated).flatMap((thread) => gitlabCommentsAfterOwnReply(thread.comments, snapshot.viewerLogin))
+    .filter((comment) => !seen[comment.id]?.includes(revision(comment)))
     .map((comment) => comment.id))];
 }
 
@@ -319,7 +340,9 @@ export function useWorkspaceGitlabDiscussions({ client, workspaceId, materializa
         ...thread, comments: [...thread.comments.filter((comment) => comment.id !== result.comment.id), result.comment],
       } : thread),
     };
-    markersRef.current = remember(markersRef.current!, snapshot.scopeId, [result.comment], client);
+    const thread = snapshot.discussions.find((discussion) => discussion.id === result.discussionId)!;
+    const pendingIds = new Set(gitlabCommentsAfterOwnReply(thread.comments, snapshot.viewerLogin).map((comment) => comment.id));
+    markersRef.current = remember(markersRef.current!, snapshot.scopeId, thread.comments.filter((comment) => !pendingIds.has(comment.id)), client);
     updateEntries(entriesRef.current.map((item) => item.target.key === targetKey ? { ...item, snapshot, unreadCommentIds: unreadIds(snapshot, markersRef.current!) } : item));
   }, [updateEntries]);
 

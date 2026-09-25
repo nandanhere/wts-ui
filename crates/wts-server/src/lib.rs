@@ -38,9 +38,9 @@ use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
 use uuid::Uuid;
 use wts_app::{
-    AgentProvider, AgentRunResult, AgentSession, AgentSessionCategory, AgentSessionDetail,
+    AgentModelCatalog, AgentProvider, AgentRunResult, AgentSession, AgentSessionCategory, AgentSessionDetail,
     AgentSessionFailure, AgentSessionList, CloneRepositoryRequest, CloneRepositoryResult,
-    CodeReviewScope, CodeWorkspaceImportRequest, CodeWorkspaceImportResult,
+    CodeReviewOptions, CodeReviewScope, CodeWorkspaceImportRequest, CodeWorkspaceImportResult,
     ConfirmWorkspaceJiraLinkRequest, ConfirmWorkspaceWorkItemLinkResult,
     CreateWorkspaceReviewThreadRequest, GraphIndexResult, JiraCreateProposal, JiraIssueImport,
     LocalWtsError, LocalWtsService, MAX_PLANNING_DOCUMENT_BYTES, MaterializeWorkspaceResult,
@@ -97,6 +97,10 @@ const IDEMPOTENCY_HEADER: &str = "idempotency-key";
 const DEFAULT_READ_OPERATION_LIMIT: usize = 16;
 const DEFAULT_SCAN_OPERATION_LIMIT: usize = 4;
 const DEFAULT_HEAVY_OPERATION_LIMIT: usize = 4;
+// Remote reads wait on GitLab or GitHub, not on local disk. One review view
+// starts several of them at once, so they get their own lane and queue briefly.
+const DEFAULT_REMOTE_READ_OPERATION_LIMIT: usize = 8;
+const REMOTE_READ_ADMISSION_WAIT: std::time::Duration = std::time::Duration::from_secs(20);
 const OVERLOAD_RETRY_AFTER_SECONDS: &str = "1";
 
 pub type ServerResult<T> = Result<T, Box<dyn Error + Send + Sync>>;
@@ -251,6 +255,7 @@ pub enum MvpFailure {
     RepositoryFileConflict,
     InvalidRepositoryFileRevision,
     GitlabComparisonUnavailable,
+    GitlabMergeRequestLinkUnavailable,
     RepositoryChanged,
     RepositorySyncBlocked,
     RepositorySyncDiverged,
@@ -409,6 +414,7 @@ pub trait MvpBackend: RegistryBackend {
     type GitlabDiscussionReply: Serialize + Send + 'static;
     type GitlabReviewCommentPublication: Serialize + Send + 'static;
     type GitlabMergeRequestInbox: Serialize + Send + 'static;
+    type GitlabMergeRequestLink: Serialize + Send + 'static;
     type GitlabMergeRequestOpen: Serialize + Send + 'static;
     type GitlabIntegrationStatus: Serialize + Send + 'static;
     type RepositoryCatalog: Serialize + Send + 'static;
@@ -494,6 +500,12 @@ pub trait MvpBackend: RegistryBackend {
         &self,
         workspace_id: Uuid,
     ) -> Result<Self::GitlabMergeRequestInbox, MvpFailure>;
+    fn link_workspace_gitlab_merge_request(
+        &self,
+        workspace_id: Uuid,
+        repository_id: &str,
+        iid: u64,
+    ) -> Result<Self::GitlabMergeRequestLink, MvpFailure>;
     fn gitlab_integration_status(
         &self,
         workspace_id: Uuid,
@@ -930,10 +942,26 @@ pub trait MvpBackend: RegistryBackend {
         workspace_id: Uuid,
         provider: AgentProvider,
         scope: CodeReviewScope,
-        agent: Option<&str>,
+        options: CodeReviewOptions,
     ) -> Result<Self::CodeReview, MvpFailure> {
-        let _ = (workspace_id, provider, scope, agent);
+        let _ = (workspace_id, provider, scope, options);
         Err(MvpFailure::Unavailable)
+    }
+    fn get_code_review(&self, workspace_id: Uuid) -> Result<Option<Self::CodeReview>, MvpFailure> {
+        let _ = workspace_id;
+        Err(MvpFailure::Unavailable)
+    }
+    fn agent_models(&self, refresh: bool) -> Result<AgentModelCatalog, MvpFailure> {
+        let _ = refresh;
+        Err(MvpFailure::Unavailable)
+    }
+    fn code_review_trace(
+        &self,
+        workspace_id: Uuid,
+        after: Option<u32>,
+    ) -> Result<Option<wts_app::CodeReviewTrace>, MvpFailure> {
+        let _ = (workspace_id, after);
+        Ok(None)
     }
     fn run_verification(&self, workspace_id: Uuid) -> Result<Self::Evidence, MvpFailure>;
     fn run_verification_check(
@@ -1060,6 +1088,7 @@ impl MvpBackend for LocalWtsService {
     type GitlabDiscussionReply = wts_app::ReplyGitlabDiscussionResult;
     type GitlabReviewCommentPublication = wts_app::PublishGitlabReviewCommentResult;
     type GitlabMergeRequestInbox = wts_app::GitlabMergeRequestInbox;
+    type GitlabMergeRequestLink = wts_integrations::GitlabMergeRequest;
     type GitlabMergeRequestOpen = OpenWorkspaceGitlabMergeRequestResult;
     type GitlabIntegrationStatus = GitlabIntegrationStatus;
     type RepositoryCatalog = RepositoryCatalog;
@@ -1161,6 +1190,16 @@ impl MvpBackend for LocalWtsService {
         workspace_id: Uuid,
     ) -> Result<Self::GitlabMergeRequestInbox, MvpFailure> {
         LocalWtsService::gitlab_merge_requests(self, workspace_id).map_err(map_local_mvp_error)
+    }
+
+    fn link_workspace_gitlab_merge_request(
+        &self,
+        workspace_id: Uuid,
+        repository_id: &str,
+        iid: u64,
+    ) -> Result<Self::GitlabMergeRequestLink, MvpFailure> {
+        LocalWtsService::link_workspace_gitlab_merge_request(self, workspace_id, repository_id, iid)
+            .map_err(map_local_mvp_error)
     }
 
     fn publish_gitlab_review_comment(
@@ -1853,10 +1892,27 @@ impl MvpBackend for LocalWtsService {
         workspace_id: Uuid,
         provider: AgentProvider,
         scope: CodeReviewScope,
-        agent: Option<&str>,
+        options: CodeReviewOptions,
     ) -> Result<Self::CodeReview, MvpFailure> {
-        self.run_workspace_code_review(workspace_id, provider, scope, agent)
+        self.run_workspace_code_review_with_options(workspace_id, provider, scope, options)
             .map_err(map_local_mvp_error)
+    }
+
+    fn get_code_review(&self, workspace_id: Uuid) -> Result<Option<Self::CodeReview>, MvpFailure> {
+        self.get_workspace_code_review(workspace_id)
+            .map_err(map_local_mvp_error)
+    }
+
+    fn agent_models(&self, refresh: bool) -> Result<AgentModelCatalog, MvpFailure> {
+        Ok(self.agent_model_catalog(refresh))
+    }
+
+    fn code_review_trace(
+        &self,
+        workspace_id: Uuid,
+        after: Option<u32>,
+    ) -> Result<Option<wts_app::CodeReviewTrace>, MvpFailure> {
+        Ok(self.workspace_code_review_trace(workspace_id, after))
     }
 
     fn run_verification(&self, workspace_id: Uuid) -> Result<Self::Evidence, MvpFailure> {
@@ -2003,6 +2059,9 @@ fn map_local_mvp_error(error: LocalWtsError) -> MvpFailure {
         LocalWtsError::RepositoryFileConflict => MvpFailure::RepositoryFileConflict,
         LocalWtsError::InvalidRepositoryFileRevision => MvpFailure::InvalidRepositoryFileRevision,
         LocalWtsError::GitlabComparisonUnavailable => MvpFailure::GitlabComparisonUnavailable,
+        LocalWtsError::GitlabMergeRequestLinkUnavailable => {
+            MvpFailure::GitlabMergeRequestLinkUnavailable
+        }
         LocalWtsError::RepositoryChanged => MvpFailure::RepositoryChanged,
         LocalWtsError::InvalidRepositoryBase => MvpFailure::InvalidRepositoryBase,
         LocalWtsError::RepositoryBaseNotFound => MvpFailure::RepositoryBaseNotFound,
@@ -2246,6 +2305,7 @@ struct AdmissionLimits {
     reads: usize,
     scans: usize,
     heavy: usize,
+    remote: usize,
 }
 
 impl Default for AdmissionLimits {
@@ -2254,6 +2314,7 @@ impl Default for AdmissionLimits {
             reads: DEFAULT_READ_OPERATION_LIMIT,
             scans: DEFAULT_SCAN_OPERATION_LIMIT,
             heavy: DEFAULT_HEAVY_OPERATION_LIMIT,
+            remote: DEFAULT_REMOTE_READ_OPERATION_LIMIT,
         }
     }
 }
@@ -2263,6 +2324,7 @@ enum OperationClass {
     Read,
     Scan,
     Heavy,
+    RemoteRead,
 }
 
 #[derive(Clone)]
@@ -2270,6 +2332,7 @@ struct AdmissionController {
     reads: Arc<Semaphore>,
     scans: Arc<Semaphore>,
     heavy: Arc<Semaphore>,
+    remote: Arc<Semaphore>,
 }
 
 impl AdmissionController {
@@ -2277,10 +2340,12 @@ impl AdmissionController {
         assert!(limits.reads > 0, "read admission limit must be non-zero");
         assert!(limits.scans > 0, "scan admission limit must be non-zero");
         assert!(limits.heavy > 0, "heavy admission limit must be non-zero");
+        assert!(limits.remote > 0, "remote read admission limit must be non-zero");
         Self {
             reads: Arc::new(Semaphore::new(limits.reads)),
             scans: Arc::new(Semaphore::new(limits.scans)),
             heavy: Arc::new(Semaphore::new(limits.heavy)),
+            remote: Arc::new(Semaphore::new(limits.remote)),
         }
     }
 
@@ -2289,10 +2354,28 @@ impl AdmissionController {
             OperationClass::Read => &self.reads,
             OperationClass::Scan => &self.scans,
             OperationClass::Heavy => &self.heavy,
+            OperationClass::RemoteRead => &self.remote,
         };
         Arc::clone(semaphore)
             .try_acquire_owned()
             .map_err(|_| ApiError::capacity_exhausted(class))
+    }
+
+    /// Remote reads queue for a short time. A user who opens a review view
+    /// should see the data a moment later instead of a capacity error.
+    async fn admit(&self, class: OperationClass) -> Result<OwnedSemaphorePermit, ApiError> {
+        if !matches!(class, OperationClass::RemoteRead) {
+            return self.try_acquire(class);
+        }
+        match tokio::time::timeout(
+            REMOTE_READ_ADMISSION_WAIT,
+            Arc::clone(&self.remote).acquire_owned(),
+        )
+        .await
+        {
+            Ok(Ok(permit)) => Ok(permit),
+            _ => Err(ApiError::capacity_exhausted(class)),
+        }
     }
 }
 
@@ -2327,6 +2410,7 @@ fn build_router_with_admission_limits<R: MvpBackend>(
 
     let protected_registry = Router::new()
         .route("/setup", get(setup_snapshot::<R>))
+        .route("/agent-models", get(get_agent_models::<R>))
         .route("/reviews/github", get(get_github_review_inbox::<R>))
         .route("/reviews/gitlab", get(get_gitlab_review_inbox::<R>))
         .route(
@@ -2349,6 +2433,10 @@ fn build_router_with_admission_limits<R: MvpBackend>(
         .route(
             "/workspaces/{workspace_id}/merge-requests/gitlab",
             get(get_gitlab_merge_requests::<R>),
+        )
+        .route(
+            "/workspaces/{workspace_id}/gitlab-merge-requests/{repository_id}/{iid}/link",
+            axum::routing::post(link_workspace_gitlab_merge_request::<R>),
         )
         .route(
             "/workspaces/{workspace_id}/integrations/gitlab",
@@ -2668,6 +2756,14 @@ fn build_router_with_admission_limits<R: MvpBackend>(
             axum::routing::post(run_workspace_code_review::<R>),
         )
         .route(
+            "/workspaces/{workspace_id}/code-review",
+            get(get_workspace_code_review::<R>),
+        )
+        .route(
+            "/workspaces/{workspace_id}/code-review/trace",
+            get(get_workspace_code_review_trace::<R>),
+        )
+        .route(
             "/workspaces/{workspace_id}/verification/checks/{check_id}/run",
             axum::routing::post(run_workspace_verification_check::<R>),
         )
@@ -2786,7 +2882,7 @@ async fn get_github_review_inbox<R: MvpBackend>(
     State(state): State<AppState<R>>,
 ) -> Result<Json<R::GithubReviewInbox>, ApiError> {
     let backend = Arc::clone(&state.registry);
-    run_mvp_operation(&state.admission, OperationClass::Heavy, move || {
+    run_mvp_operation(&state.admission, OperationClass::RemoteRead, move || {
         backend.github_review_inbox()
     })
     .await
@@ -2809,7 +2905,7 @@ async fn get_gitlab_review_inbox<R: MvpBackend>(
     State(state): State<AppState<R>>,
 ) -> Result<Json<R::GitlabReviewInbox>, ApiError> {
     let backend = Arc::clone(&state.registry);
-    run_mvp_operation(&state.admission, OperationClass::Heavy, move || {
+    run_mvp_operation(&state.admission, OperationClass::RemoteRead, move || {
         backend.gitlab_review_inbox()
     })
     .await
@@ -2841,7 +2937,7 @@ async fn get_gitlab_discussions<R: MvpBackend>(
     Query(query): Query<GitlabDiscussionsQuery>,
 ) -> Result<Json<R::GitlabDiscussions>, ApiError> {
     let backend = Arc::clone(&state.registry);
-    run_mvp_operation(&state.admission, OperationClass::Heavy, move || {
+    run_mvp_operation(&state.admission, OperationClass::RemoteRead, move || {
         backend.gitlab_discussions(&repository_id, iid, query.workspace_id)
     })
     .await
@@ -2866,8 +2962,20 @@ async fn get_gitlab_merge_requests<R: MvpBackend>(
     AxumPath(workspace_id): AxumPath<Uuid>,
 ) -> Result<Json<R::GitlabMergeRequestInbox>, ApiError> {
     let backend = Arc::clone(&state.registry);
-    run_mvp_operation(&state.admission, OperationClass::Heavy, move || {
+    run_mvp_operation(&state.admission, OperationClass::RemoteRead, move || {
         backend.gitlab_merge_requests(workspace_id)
+    })
+    .await
+    .map(Json)
+}
+
+async fn link_workspace_gitlab_merge_request<R: MvpBackend>(
+    State(state): State<AppState<R>>,
+    AxumPath((workspace_id, repository_id, iid)): AxumPath<(Uuid, String, u64)>,
+) -> Result<Json<R::GitlabMergeRequestLink>, ApiError> {
+    let backend = Arc::clone(&state.registry);
+    run_mvp_operation(&state.admission, OperationClass::Heavy, move || {
+        backend.link_workspace_gitlab_merge_request(workspace_id, &repository_id, iid)
     })
     .await
     .map(Json)
@@ -2878,7 +2986,7 @@ async fn get_gitlab_integration_status<R: MvpBackend>(
     AxumPath(workspace_id): AxumPath<Uuid>,
 ) -> Result<Json<R::GitlabIntegrationStatus>, ApiError> {
     let backend = Arc::clone(&state.registry);
-    run_mvp_operation(&state.admission, OperationClass::Heavy, move || {
+    run_mvp_operation(&state.admission, OperationClass::RemoteRead, move || {
         backend.gitlab_integration_status(workspace_id)
     })
     .await
@@ -3469,7 +3577,7 @@ async fn get_workspace_gitlab_comparison<R: MvpBackend>(
 ) -> Result<Json<R::GitlabComparison>, ApiError> {
     let workspace_id = parse_workspace_id(&workspace_id)?;
     let backend = Arc::clone(&state.registry);
-    run_mvp_operation(&state.admission, OperationClass::Heavy, move || {
+    run_mvp_operation(&state.admission, OperationClass::RemoteRead, move || {
         backend.gitlab_comparison(workspace_id, &repository_id, iid, query.refresh)
     })
     .await
@@ -4218,14 +4326,62 @@ async fn run_workspace_code_review<R: MvpBackend>(
 ) -> Result<Json<R::CodeReview>, ApiError> {
     let workspace_id = parse_workspace_id(&workspace_id)?;
     let backend = Arc::clone(&state.registry);
-    let model = request.model.or(request.agent);
+    let options = request.options();
     run_mvp_operation(&state.admission, OperationClass::Heavy, move || {
-        backend.run_code_review(
-            workspace_id,
-            request.provider,
-            request.scope,
-            model.as_deref(),
-        )
+        backend.run_code_review(workspace_id, request.provider, request.scope, options)
+    })
+    .await
+    .map(Json)
+}
+
+async fn get_workspace_code_review<R: MvpBackend>(
+    State(state): State<AppState<R>>,
+    AxumPath(workspace_id): AxumPath<String>,
+) -> Result<Json<Option<R::CodeReview>>, ApiError> {
+    let workspace_id = parse_workspace_id(&workspace_id)?;
+    let backend = Arc::clone(&state.registry);
+    run_mvp_operation(&state.admission, OperationClass::Read, move || {
+        backend.get_code_review(workspace_id)
+    })
+    .await
+    .map(Json)
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct AgentModelsQuery {
+    #[serde(default)]
+    refresh: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct CodeReviewTraceQuery {
+    #[serde(default)]
+    after: Option<u32>,
+}
+
+async fn get_workspace_code_review_trace<R: MvpBackend>(
+    State(state): State<AppState<R>>,
+    AxumPath(workspace_id): AxumPath<String>,
+    Query(query): Query<CodeReviewTraceQuery>,
+) -> Result<Json<Option<wts_app::CodeReviewTrace>>, ApiError> {
+    let workspace_id = parse_workspace_id(&workspace_id)?;
+    let backend = Arc::clone(&state.registry);
+    run_mvp_operation(&state.admission, OperationClass::Read, move || {
+        backend.code_review_trace(workspace_id, query.after)
+    })
+    .await
+    .map(Json)
+}
+
+async fn get_agent_models<R: MvpBackend>(
+    State(state): State<AppState<R>>,
+    Query(query): Query<AgentModelsQuery>,
+) -> Result<Json<AgentModelCatalog>, ApiError> {
+    let backend = Arc::clone(&state.registry);
+    run_mvp_operation(&state.admission, OperationClass::Scan, move || {
+        backend.agent_models(query.refresh)
     })
     .await
     .map(Json)
@@ -4852,7 +5008,7 @@ async fn run_mvp_operation<T>(
 where
     T: Send + 'static,
 {
-    let permit = admission.try_acquire(class)?;
+    let permit = admission.admit(class).await?;
     tokio::task::spawn_blocking(move || {
         // The permit deliberately lives inside the blocking worker; dropping
         // an HTTP request must not admit replacement work prematurely.
@@ -5108,6 +5264,11 @@ impl ApiError {
                 "operation_capacity_exhausted",
                 "WTS is already running the maximum number of local operations. Retry shortly.",
             ),
+            OperationClass::RemoteRead => Self::new(
+                StatusCode::TOO_MANY_REQUESTS,
+                "remote_read_capacity_exhausted",
+                "WTS is already waiting on the maximum number of GitLab or GitHub reads. Retry shortly.",
+            ),
         }
     }
 
@@ -5253,6 +5414,11 @@ impl ApiError {
                 StatusCode::BAD_GATEWAY,
                 "gitlab_comparison_unavailable",
                 "WTS could not load the merge request comparison. Refresh the merge request and check the local branch.",
+            ),
+            MvpFailure::GitlabMergeRequestLinkUnavailable => Self::new(
+                StatusCode::BAD_GATEWAY,
+                "gitlab_merge_request_link_unavailable",
+                "WTS could not link the merge request. Check the GitLab connection and merge request, then retry.",
             ),
             MvpFailure::RepositoryChanged => Self::new(
                 StatusCode::CONFLICT,
@@ -6008,6 +6174,19 @@ pub fn server_paths_from_env() -> Result<ServerPaths, StartupError> {
     })
 }
 
+/// The desktop app stores workspaces under "local-default". Set
+/// WTS_WORKSPACE_ROOT_ID to that value to serve a desktop registry.
+fn workspace_root_id_from_env() -> String {
+    workspace_root_id_from_value(env::var("WTS_WORKSPACE_ROOT_ID").ok())
+}
+
+fn workspace_root_id_from_value(value: Option<String>) -> String {
+    value
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| DEFAULT_WORKSPACE_ROOT_ID.to_owned())
+}
+
 fn checked_repository_root_list(value: &OsStr) -> Result<Vec<PathBuf>, StartupError> {
     env::split_paths(value)
         .map(|path| checked_absolute(path, "WTS_REPOSITORY_ROOTS"))
@@ -6019,6 +6198,26 @@ fn checked_absolute(path: PathBuf, variable: &'static str) -> Result<PathBuf, St
         Ok(path)
     } else {
         Err(StartupError::RelativePath(variable))
+    }
+}
+
+/// Reads the optional host override for the Codex executable.
+///
+/// Only the process that starts WTS sets this value. The browser cannot change it.
+pub fn agent_adapter_from_env() -> Result<wts_app::ProcessWorkspaceAdapter, StartupError> {
+    agent_adapter_from_value(env::var_os("WTS_CODEX_EXECUTABLE"))
+}
+
+fn agent_adapter_from_value(
+    codex: Option<std::ffi::OsString>,
+) -> Result<wts_app::ProcessWorkspaceAdapter, StartupError> {
+    let adapter = wts_app::ProcessWorkspaceAdapter::default();
+    match codex.filter(|value| !value.is_empty()) {
+        Some(value) => {
+            let path = checked_absolute(PathBuf::from(value), "WTS_CODEX_EXECUTABLE")?;
+            Ok(adapter.with_agent_executable(AgentProvider::Codex, path))
+        }
+        None => Ok(adapter),
     }
 }
 
@@ -6078,11 +6277,15 @@ pub async fn run() -> ServerResult<()> {
     // Bind before building authority-bearing state so port 0 and dual-stack
     // behavior cannot make the accepted Host/Origin differ from the listener.
     let paths = server_paths_from_env()?;
-    let registry = Arc::new(LocalWtsService::open_with_repository_roots(
+    let adapter = agent_adapter_from_env()?;
+    let workspace_root_id = workspace_root_id_from_env();
+    let registry = Arc::new(LocalWtsService::open_with_repository_roots_launcher_and_adapter(
         &paths.data_dir,
-        DEFAULT_WORKSPACE_ROOT_ID,
+        workspace_root_id.as_str(),
         &paths.workspace_root,
         paths.repository_roots,
+        wts_app::ProcessExternalLauncher,
+        adapter,
     )?);
     if let Some(source) = env::var_os("WTS_UI_REPOSITORY_ROOT").map(PathBuf::from) {
         let _ = registry.configure_ui_development_repository(source, None);
@@ -6202,6 +6405,16 @@ async fn shutdown_signal() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn workspace_root_id_uses_the_desktop_value_when_set() {
+        assert_eq!(workspace_root_id_from_value(None), "default");
+        assert_eq!(workspace_root_id_from_value(Some("  ".into())), "default");
+        assert_eq!(
+            workspace_root_id_from_value(Some("local-default".into())),
+            "local-default"
+        );
+    }
     use axum::{
         body::{Body, to_bytes},
         http::{
@@ -6259,6 +6472,8 @@ mod tests {
         create_failure: Mutex<Option<RegistryFailure>>,
         sequence: AtomicUsize,
         discussion_calls: AtomicUsize,
+        merge_request_link_calls: Mutex<Vec<(Uuid, String, u64)>>,
+        merge_request_link_failure: Mutex<Option<MvpFailure>>,
         source_calls: AtomicUsize,
         turn_changes: Mutex<Option<wts_app::AgentTurnChanges>>,
         turn_decisions: Mutex<Option<wts_app::AgentTurnDecisions>>,
@@ -6318,6 +6533,7 @@ mod tests {
             failure: None,
             needs_input: None,
             change_request_proposals: Vec::new(),
+            mr_link_proposals: Vec::new(),
         }
     }
 
@@ -6423,6 +6639,63 @@ mod tests {
     }
 
     impl MvpBackend for FakeRegistry {
+        fn run_code_review(
+            &self,
+            workspace_id: Uuid,
+            provider: AgentProvider,
+            scope: CodeReviewScope,
+            options: CodeReviewOptions,
+        ) -> Result<Self::CodeReview, MvpFailure> {
+            let call = json!({"operation":"runCodeReview","workspaceId":workspace_id,"provider":provider,"scope":scope,"model":options.model,"repositoryId":options.repository_id,"ignoreSizeGate":options.ignore_size_gate,"skill":options.skill,"mergeRequestIid":options.merge_request_iid});
+            self.turn_recovery_calls.lock().unwrap().push(call.clone());
+            Ok(json!({"workspaceId": workspace_id, "mode": "raptik", "findings": [], "request": call}))
+        }
+        fn get_code_review(&self, workspace_id: Uuid) -> Result<Option<Self::CodeReview>, MvpFailure> {
+            Ok(Some(json!({"workspaceId": workspace_id, "mode": "raptik", "findings": []})))
+        }
+        fn agent_models(&self, refresh: bool) -> Result<wts_app::AgentModelCatalog, MvpFailure> {
+            Ok(wts_app::AgentModelCatalog {
+                providers: vec![wts_app::AgentProviderModels {
+                    provider: AgentProvider::Codex,
+                    installed: true,
+                    default_model: Some(if refresh { "refreshed" } else { "gpt-5.6-sol" }.to_owned()),
+                    default_source: Some("~/.codex/config.toml".to_owned()),
+                    models: vec!["gpt-5.6-sol".to_owned()],
+                    model_selectable: true,
+                }],
+                raptik_skill_loaded: true,
+                review_skills: Vec::new(),
+                default_review_skill: Some("raptik-review".to_owned()),
+            })
+        }
+        fn code_review_trace(
+            &self,
+            workspace_id: Uuid,
+            after: Option<u32>,
+        ) -> Result<Option<wts_app::CodeReviewTrace>, MvpFailure> {
+            let after = after.unwrap_or(0);
+            Ok(Some(wts_app::CodeReviewTrace {
+                workspace_id,
+                run_id: Uuid::nil(),
+                provider: AgentProvider::Codex,
+                model: Some("gpt-5.6-sol".to_owned()),
+                state: wts_app::CodeReviewRunState::Running,
+                started_at_unix_ms: 1,
+                steps: (1..=3)
+                    .filter(|sequence| *sequence > after)
+                    .map(|sequence| wts_app::CodeReviewTraceStep {
+                        sequence,
+                        kind: wts_app::CodeReviewTraceKind::Command,
+                        text: format!("step {sequence}"),
+                        detail: None,
+                        item_id: None,
+                        running: sequence == 3,
+                        at_unix_ms: 1,
+                    })
+                    .collect(),
+                dropped_steps: 0,
+            }))
+        }
         type Setup = Value;
         type GithubReviewInbox = Value;
         type GithubReviewOpen = Value;
@@ -6431,6 +6704,7 @@ mod tests {
         type GitlabDiscussionReply = Value;
         type GitlabReviewCommentPublication = Value;
         type GitlabMergeRequestInbox = Value;
+        type GitlabMergeRequestLink = Value;
         type GitlabMergeRequestOpen = Value;
         type GitlabIntegrationStatus = Value;
         type RepositoryCatalog = Value;
@@ -6809,6 +7083,37 @@ mod tests {
                 }],
                 "fetchedAtUnixMs": 1,
                 "detail": "GitLab returned the current authored merge requests."
+            }))
+        }
+
+        fn link_workspace_gitlab_merge_request(
+            &self,
+            workspace_id: Uuid,
+            repository_id: &str,
+            iid: u64,
+        ) -> Result<Self::GitlabMergeRequestLink, MvpFailure> {
+            self.merge_request_link_calls.lock().unwrap().push((
+                workspace_id,
+                repository_id.to_owned(),
+                iid,
+            ));
+            if let Some(failure) = *self.merge_request_link_failure.lock().unwrap() {
+                return Err(failure);
+            }
+            Ok(json!({
+                "id": "1043",
+                "repositoryId": repository_id,
+                "projectPath": "sre-tools/senzu",
+                "webUrl": "https://gitlab.example.com/sre-tools/senzu/-/merge_requests/43",
+                "iid": iid,
+                "title": "Senzu complete flow",
+                "authorUsername": "alice",
+                "sourceBranch": "review/senzu-complete-flow",
+                "targetBranch": "develop",
+                "sourceHeadCommitOid": "0123456789abcdef0123456789abcdef01234567",
+                "updatedAt": "2026-09-23T09:00:00Z",
+                "draft": false,
+                "status": "open"
             }))
         }
 
@@ -8089,6 +8394,7 @@ mod tests {
                 failure: None,
                 needs_input: None,
                 change_request_proposals: Vec::new(),
+                mr_link_proposals: Vec::new(),
             })
         }
 
@@ -8132,6 +8438,7 @@ mod tests {
                 failure: None,
                 needs_input: None,
                 change_request_proposals: Vec::new(),
+                mr_link_proposals: Vec::new(),
             })
         }
 
@@ -9928,6 +10235,17 @@ mod tests {
     }
 
     #[test]
+    fn codex_executable_override_must_be_absolute() {
+        assert!(matches!(
+            agent_adapter_from_value(Some("bin/codex".into())),
+            Err(StartupError::RelativePath("WTS_CODEX_EXECUTABLE"))
+        ));
+        assert!(agent_adapter_from_value(Some("/opt/fake/codex".into())).is_ok());
+        assert!(agent_adapter_from_value(Some("".into())).is_ok());
+        assert!(agent_adapter_from_value(None).is_ok());
+    }
+
+    #[test]
     fn repository_root_list_uses_the_platform_path_separator() {
         let first = env::temp_dir().join("wts-root-one");
         let second = env::temp_dir().join("wts-root-two");
@@ -11525,6 +11843,63 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn link_merge_request_forwards_workspace_repository_and_iid_and_returns_verified_mr() {
+        let backend = Arc::new(FakeRegistry::default());
+        let router = build_router(Arc::clone(&backend), policy(), None);
+        let workspace_id = Uuid::new_v4();
+        let path = format!("/api/v1/workspaces/{workspace_id}/gitlab-merge-requests/repo-1/43/link");
+        let response = router
+            .oneshot(
+                protected_request(Method::POST, &path)
+                    .header(ORIGIN, policy().origin())
+                    .body(Body::empty())
+                    .expect("build request"),
+            )
+            .await
+            .expect("router response");
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response_json(response).await;
+        assert_eq!(body["repositoryId"], "repo-1");
+        assert_eq!(body["iid"], 43);
+        assert_eq!(body["sourceBranch"], "review/senzu-complete-flow");
+        assert_eq!(
+            *backend.merge_request_link_calls.lock().unwrap(),
+            vec![(workspace_id, "repo-1".to_owned(), 43)]
+        );
+    }
+
+    #[tokio::test]
+    async fn link_merge_request_reports_provider_failure_without_claiming_success() {
+        assert_eq!(
+            map_local_mvp_error(LocalWtsError::GitlabMergeRequestLinkUnavailable),
+            MvpFailure::GitlabMergeRequestLinkUnavailable
+        );
+        let backend = Arc::new(FakeRegistry::default());
+        *backend.merge_request_link_failure.lock().unwrap() =
+            Some(MvpFailure::GitlabMergeRequestLinkUnavailable);
+        let router = build_router(backend, policy(), None);
+        let workspace_id = Uuid::new_v4();
+        let response = router
+            .oneshot(
+                protected_request(
+                    Method::POST,
+                    &format!(
+                        "/api/v1/workspaces/{workspace_id}/gitlab-merge-requests/repo-1/43/link"
+                    ),
+                )
+                .header(ORIGIN, policy().origin())
+                .body(Body::empty())
+                .expect("build request"),
+            )
+            .await
+            .expect("router response");
+        assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+        let body = response_json(response).await;
+        assert_eq!(body["error"]["code"], "gitlab_merge_request_link_unavailable");
+        assert!(body["error"]["message"].as_str().unwrap().contains("retry"));
+    }
+
+    #[tokio::test]
     async fn gitlab_merge_requests_use_workspace_scope_and_a_server_owned_open_action() {
         let workspace_id = Uuid::new_v4();
         let response = app()
@@ -12048,6 +12423,104 @@ mod tests {
             .expect("router response");
         assert_eq!(over_authorized.status(), StatusCode::UNPROCESSABLE_ENTITY);
         assert_eq!(error_code(over_authorized).await, "invalid_payload");
+    }
+
+    #[tokio::test]
+    async fn code_review_routes_forward_review_options_and_expose_saved_reviews_and_models() {
+        let registry = Arc::new(FakeRegistry::default());
+        let router = build_router(registry.clone(), policy(), None);
+        let workspace_id = Uuid::new_v4();
+        let run_uri = format!("/api/v1/workspaces/{workspace_id}/code-review/run");
+        let run = router
+            .clone()
+            .oneshot(
+                protected_request(Method::POST, &run_uri)
+                    .header(ORIGIN, policy().origin())
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        json!({"provider":"codex","scope":"recentChanges","model":"gpt-5.6-sol","repositoryId":"repo_api","ignoreSizeGate":true,"skill":"team-review","mergeRequestIid":41}).to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(run.status(), StatusCode::OK);
+        let wire = response_json(run).await;
+        assert_eq!(wire["request"]["model"], "gpt-5.6-sol");
+        assert_eq!(wire["request"]["repositoryId"], "repo_api");
+        assert_eq!(wire["request"]["ignoreSizeGate"], true);
+        assert_eq!(wire["request"]["skill"], "team-review");
+        assert_eq!(wire["request"]["mergeRequestIid"], 41);
+
+        let legacy = router
+            .clone()
+            .oneshot(
+                protected_request(Method::POST, &run_uri)
+                    .header(ORIGIN, policy().origin())
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(json!({"provider":"copilot","scope":"totalCode","agent":"auto"}).to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response_json(legacy).await["request"]["model"], "auto");
+
+        let saved = router
+            .clone()
+            .oneshot(protected_request(Method::GET, &format!("/api/v1/workspaces/{workspace_id}/code-review")).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(saved.status(), StatusCode::OK);
+        assert_eq!(response_json(saved).await["mode"], "raptik");
+
+        let models = router
+            .clone()
+            .oneshot(protected_request(Method::GET, "/api/v1/agent-models?refresh=true").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(models.status(), StatusCode::OK);
+        let models = response_json(models).await;
+        assert_eq!(models["providers"][0]["provider"], "codex");
+        assert_eq!(models["providers"][0]["defaultModel"], "refreshed");
+        assert_eq!(models["providers"][0]["modelSelectable"], true);
+        assert_eq!(models["defaultReviewSkill"], "raptik-review");
+
+        let untrusted = router
+            .oneshot(Request::builder().method(Method::GET).uri("/api/v1/agent-models").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_ne!(untrusted.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn code_review_trace_route_returns_steps_after_the_given_sequence() {
+        let registry = Arc::new(FakeRegistry::default());
+        let router = build_router(registry, policy(), None);
+        let workspace_id = Uuid::new_v4();
+        let uri = format!("/api/v1/workspaces/{workspace_id}/code-review/trace?after=1");
+        let trace = router
+            .clone()
+            .oneshot(protected_request(Method::GET, &uri).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(trace.status(), StatusCode::OK);
+        let trace = response_json(trace).await;
+        assert_eq!(trace["state"], "running");
+        assert_eq!(trace["provider"], "codex");
+        assert_eq!(trace["steps"].as_array().unwrap().len(), 2);
+        assert_eq!(trace["steps"][0]["sequence"], 2);
+        assert_eq!(trace["steps"][0]["kind"], "command");
+        assert_eq!(trace["steps"][1]["running"], true);
+
+        let unknown = router
+            .oneshot(
+                protected_request(Method::GET, &format!("/api/v1/workspaces/{workspace_id}/code-review/trace?since=1"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_ne!(unknown.status(), StatusCode::OK);
     }
 
     #[tokio::test]
@@ -13030,6 +13503,7 @@ mod tests {
                 reads: 1,
                 scans: 1,
                 heavy: 2,
+                remote: 1,
             },
         );
         let verification_uri = format!("/api/v1/workspaces/{workspace_id}/verification/run");
@@ -13119,6 +13593,21 @@ mod tests {
             scan.status(),
             StatusCode::OK,
             "heavy saturation must not consume scan capacity"
+        );
+
+        let remote = router
+            .clone()
+            .oneshot(
+                protected_request(Method::GET, "/api/v1/reviews/gitlab/repo-1/17/discussions")
+                    .body(Body::empty())
+                    .expect("build remote read request"),
+            )
+            .await
+            .expect("remote read response");
+        assert_eq!(
+            remote.status(),
+            StatusCode::OK,
+            "heavy saturation must not block the GitLab reads of a review view"
         );
         assert_eq!(probe.calls.load(Ordering::SeqCst), 2);
         assert_eq!(probe.peak.load(Ordering::SeqCst), 2);

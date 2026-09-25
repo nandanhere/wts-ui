@@ -858,6 +858,47 @@ function jsonResponse(body: unknown, status = 200): Response {
 }
 
 describe("HTTP workspace client", () => {
+  it("waits for a busy local host before it shows a read failure", async () => {
+    vi.useFakeTimers();
+    try {
+      const busy = () => new Response(JSON.stringify({ error: { code: "operation_capacity_exhausted", message: "WTS is already running the maximum number of local operations. Retry shortly." } }), {
+        status: 429,
+        headers: { "Content-Type": "application/json", "Retry-After": "1" },
+      });
+      const fetchMock = vi
+        .fn<typeof fetch>()
+        .mockResolvedValueOnce(jsonResponse({ sessionToken: "session-123" }))
+        .mockResolvedValueOnce(busy())
+        .mockResolvedValueOnce(jsonResponse(workspaceList));
+      const client = createWorkspaceClient({ runtime: "http", fetch: fetchMock });
+
+      const listed = client.listWorkspaces();
+      await vi.advanceTimersByTimeAsync(1000);
+      await expect(listed).resolves.toEqual(workspaceList);
+      expect(fetchMock).toHaveBeenCalledTimes(3);
+
+      const exhausted = vi
+        .fn<typeof fetch>()
+        .mockResolvedValueOnce(jsonResponse({ sessionToken: "session-123" }))
+        .mockImplementation(async () => busy());
+      const failing = createWorkspaceClient({ runtime: "http", fetch: exhausted });
+      const failed = failing.listWorkspaces().catch((error: unknown) => error);
+      await vi.advanceTimersByTimeAsync(10_000);
+      await expect(failed).resolves.toMatchObject({ code: "operation_capacity_exhausted", status: 429 });
+      expect(exhausted).toHaveBeenCalledTimes(5);
+
+      const mutation = vi
+        .fn<typeof fetch>()
+        .mockResolvedValueOnce(jsonResponse({ sessionToken: "session-123" }))
+        .mockResolvedValueOnce(busy());
+      const mutating = createWorkspaceClient({ runtime: "http", fetch: mutation });
+      await expect(mutating.createWorkspace(createRequest, "busy-idem")).rejects.toMatchObject({ status: 429 });
+      expect(mutation).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("reads a bounded repository diff through the opaque workspace route", async () => {
     const response = {
       schemaVersion: 1,
@@ -4189,6 +4230,97 @@ describe("Tauri workspace client", () => {
       model: "claude-3.7-sonnet",
       agent: "claude-3.7-sonnet",
     });
+  });
+
+  it("sends Raptik review options over HTTP and reads saved reviews and inferred models", async () => {
+    const review = {
+      schemaVersion: 2,
+      workspaceId: "3f0f1c2e-2a4b-4c55-9a1e-9d2f55d0c001",
+      provider: "codex",
+      scope: "recentChanges",
+      mode: "skill",
+      skill: { id: "team-review", label: "Team review", reviewer: "Asha" },
+      outcome: "reviewed",
+      summary: "One finding.",
+      findings: [{ findingId: "f-1", severity: "critical", label: "blocking", filePath: "src/a.rs", line: 4, side: "additions", anchored: true, title: "Unbounded wait", explanation: "It can hang.", precedent: { body: "Add a timeout.", url: "https://gitlab.example/n/1", score: 5.2 } }, { title: "" }],
+      actionableSteps: [],
+      repositories: [{ repositoryId: "repo_a", repositoryLabel: "a", baseCommitOid: "b", headCommitOid: "h", patchSha256: "sha256:x", changedLines: 4, sizeGateExceeded: false, strictness: "strict", mergeRequest: { iid: 41, baseCommitOid: "b", startCommitOid: "s", headCommitOid: "h" } }],
+      reviewedAtUnixMs: 9,
+    };
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(jsonResponse({ sessionToken: "session-123" }))
+      .mockResolvedValueOnce(jsonResponse(review))
+      .mockResolvedValueOnce(jsonResponse(null))
+      .mockResolvedValueOnce(jsonResponse({ raptikSkillLoaded: true, defaultReviewSkill: "team-review", reviewSkills: [{ id: "team-review", label: "Team review", reviewer: "Asha", source: "~/skills/team-review", hasManifest: true, precedentCount: 3, sizeGateLines: 400 }, { label: "no id" }], providers: [{ provider: "codex", installed: true, defaultModel: "gpt-5.5", defaultSource: "~/.codex/config.toml", models: ["gpt-5.5"], modelSelectable: true }, { provider: "unknown", installed: true, models: [] }] }));
+    const client = createWorkspaceClient({ runtime: "http", fetch: fetchMock });
+    const workspaceId = review.workspaceId;
+
+    const result = await client.runWorkspaceCodeReview?.(workspaceId, "codex", "recentChanges", " gpt-5.5 ", { repositoryId: "repo_a", ignoreSizeGate: true, skill: "team-review", mergeRequestIid: 41 });
+    expect(result?.findings).toHaveLength(1);
+    expect(result?.findings[0]).toMatchObject({ label: "blocking", anchored: true, side: "additions", precedent: { url: "https://gitlab.example/n/1" } });
+    expect(result?.mode).toBe("skill");
+    expect(result?.skill).toEqual({ id: "team-review", label: "Team review", reviewer: "Asha" });
+    expect(result?.repositories?.[0]?.mergeRequest).toEqual({ iid: 41, baseCommitOid: "b", startCommitOid: "s", headCommitOid: "h" });
+    await expect(client.getWorkspaceCodeReview?.(workspaceId)).resolves.toBeNull();
+    await expect(client.listAgentModels?.(true)).resolves.toEqual({
+      raptikSkillLoaded: true,
+      reviewSkills: [{ id: "team-review", label: "Team review", reviewer: "Asha", source: "~/skills/team-review", hasManifest: true, precedentCount: 3, sizeGateLines: 400 }],
+      defaultReviewSkill: "team-review",
+      providers: [{ provider: "codex", installed: true, defaultModel: "gpt-5.5", defaultSource: "~/.codex/config.toml", models: ["gpt-5.5"], modelSelectable: true }],
+    });
+
+    expect(fetchMock.mock.calls.slice(1).map(([url]) => url)).toEqual([
+      `/api/v1/workspaces/${workspaceId}/code-review/run`,
+      `/api/v1/workspaces/${workspaceId}/code-review`,
+      "/api/v1/agent-models?refresh=true",
+    ]);
+    expect(JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body))).toEqual({
+      provider: "codex",
+      scope: "recentChanges",
+      model: "gpt-5.5",
+      agent: "gpt-5.5",
+      repositoryId: "repo_a",
+      ignoreSizeGate: true,
+      skill: "team-review",
+      mergeRequestIid: 41,
+    });
+    expect(new Headers(fetchMock.mock.calls[1]?.[1]?.headers).get("Content-Type")).toBe("application/json");
+  });
+
+  it("reads the live code review trace after a sequence number", async () => {
+    const workspaceId = "3f0f1c2e-2a4b-4c55-9a1e-9d2f55d0c001";
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(jsonResponse({ sessionToken: "session-123" }))
+      .mockResolvedValueOnce(jsonResponse({
+        workspaceId,
+        runId: "run-1",
+        provider: "codex",
+        model: "gpt-5.5",
+        state: "running",
+        startedAtUnixMs: 5,
+        droppedSteps: 0,
+        steps: [
+          { sequence: 3, kind: "command", text: "git diff", itemId: "item-1", running: true, atUnixMs: 6 },
+          { sequence: 4, kind: "unknown", text: "Other" },
+          { sequence: "bad", text: "skip" },
+        ],
+      }))
+      .mockResolvedValueOnce(jsonResponse(null));
+    const client = createWorkspaceClient({ runtime: "http", fetch: fetchMock });
+
+    const trace = await client.getWorkspaceCodeReviewTrace?.(workspaceId, 2);
+    expect(trace).toMatchObject({ runId: "run-1", model: "gpt-5.5", state: "running" });
+    expect(trace?.steps).toEqual([
+      { sequence: 3, kind: "command", text: "git diff", itemId: "item-1", running: true, atUnixMs: 6 },
+      { sequence: 4, kind: "status", text: "Other", running: false, atUnixMs: 0 },
+    ]);
+    await expect(client.getWorkspaceCodeReviewTrace?.(workspaceId)).resolves.toBeNull();
+    expect(fetchMock.mock.calls.slice(1).map(([url]) => url)).toEqual([
+      `/api/v1/workspaces/${workspaceId}/code-review/trace?after=2`,
+      `/api/v1/workspaces/${workspaceId}/code-review/trace`,
+    ]);
   });
 
   it("imports a VS Code workspace file through the matching Tauri command", async () => {

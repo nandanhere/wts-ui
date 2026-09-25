@@ -405,6 +405,18 @@
           "markdownDescription": "Enables the get_workspace command without any pre-configured scope."
         },
         {
+          "description": "Enables the get_workspace_code_review command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-workspace-code-review",
+          "markdownDescription": "Enables the get_workspace_code_review command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the get_workspace_code_review_trace command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-workspace-code-review-trace",
+          "markdownDescription": "Enables the get_workspace_code_review_trace command without any pre-configured scope."
+        },
+        {
           "description": "Enables the get_workspace_evidence command without any pre-configured scope.",
           "type": "string",
           "const": "allow-get-workspace-evidence",
@@ -501,6 +513,12 @@
           "markdownDescription": "Enables the launch_agent_session command without any pre-configured scope."
         },
         {
+          "description": "Enables the link_workspace_gitlab_merge_request command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-link-workspace-gitlab-merge-request",
+          "markdownDescription": "Enables the link_workspace_gitlab_merge_request command without any pre-configured scope."
+        },
+        {
           "description": "Enables the list_active_jira_issues command without any pre-configured scope.",
           "type": "string",
           "const": "allow-list-active-jira-issues",
@@ -511,6 +529,12 @@
           "type": "string",
           "const": "allow-list-agent-conversations",
           "markdownDescription": "Enables the list_agent_conversations command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the list_agent_models command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-list-agent-models",
+          "markdownDescription": "Enables the list_agent_models command without any pre-configured scope."
         },
         {
           "description": "Enables the list_agent_sessions command without any pre-configured scope.",
@@ -1131,6 +1155,18 @@
           "markdownDescription": "Denies the get_workspace command without any pre-configured scope."
         },
         {
+          "description": "Denies the get_workspace_code_review command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-workspace-code-review",
+          "markdownDescription": "Denies the get_workspace_code_review command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_workspace_code_review_trace command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-workspace-code-review-trace",
+          "markdownDescription": "Denies the get_workspace_code_review_trace command without any pre-configured scope."
+        },
+        {
           "description": "Denies the get_workspace_evidence command without any pre-configured scope.",
           "type": "string",
           "const": "deny-get-workspace-evidence",
@@ -1227,6 +1263,12 @@
           "markdownDescription": "Denies the launch_agent_session command without any pre-configured scope."
         },
         {
+          "description": "Denies the link_workspace_gitlab_merge_request command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-link-workspace-gitlab-merge-request",
+          "markdownDescription": "Denies the link_workspace_gitlab_merge_request command without any pre-configured scope."
+        },
+        {
           "description": "Denies the list_active_jira_issues command without any pre-configured scope.",
           "type": "string",
           "const": "deny-list-active-jira-issues",
@@ -1237,6 +1279,12 @@
           "type": "string",
           "const": "deny-list-agent-conversations",
           "markdownDescription": "Denies the list_agent_conversations command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the list_agent_models command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-list-agent-models",
+          "markdownDescription": "Denies the list_agent_models command without any pre-configured scope."
         },
         {
           "description": "Denies the list_agent_sessions command without any pre-configured scope.",

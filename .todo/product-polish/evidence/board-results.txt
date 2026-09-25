@@ -1,5 +1,5 @@
 
- RUN  v3.2.7 /Users/example/wts/source/ui
+ RUN  v3.2.7 /Users/nandan.herekar/cd/vs-code-wts-ui-5546754b-6acd-4890-b7b4-acb54e5ec8b7/wts-ui--repo_c4a77d2/ui
 
  ✓ src/variants/local-workspace/LocalWorkspaceBoard.test.tsx (45 tests) 49654ms
    ✓ personal local workspace registry > runs a due My time review while Spaces is open  615ms

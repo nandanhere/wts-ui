@@ -26,6 +26,20 @@ function deferred<T>() {
 describe("workspace GitLab conversation activity", () => {
   beforeEach(() => { localStorage.clear(); vi.restoreAllMocks(); });
 
+  it("does not count automated bot notes as unread review work", async () => {
+    const read = vi.fn().mockResolvedValue(snapshot([comment(1)], {
+      discussions: [
+        { id: "bot", automated: true, resolvable: false, resolved: false, comments: [comment(9, "hello from cibot", "cibot")] },
+        { id: "human", automated: false, resolvable: true, resolved: false, comments: [comment(1, "log the error")] },
+      ],
+    }));
+    const { client } = harness(read);
+    const hook = renderHook(() => useWorkspaceGitlabDiscussions({ client, workspaceId: "workspace-1", materialization, enabled: true }));
+    await waitFor(() => expect(hook.result.current.entries[0]?.snapshot).toBeTruthy());
+    expect(hook.result.current.unreadCount).toBe(1);
+    expect(hook.result.current.entries[0]!.unreadCommentIds).toEqual([1]);
+  });
+
   it("updates another mounted view when a comment is read in the same window", async () => {
     const { client } = harness();
     const options = { client, workspaceId: "workspace-1", materialization, enabled: true };
@@ -154,7 +168,41 @@ describe("workspace GitLab conversation activity", () => {
     expect(read).toHaveBeenCalledWith("repo-api", 16, "workspace-1");
     read.mockResolvedValue(snapshot([comment(1), comment(2), comment(3, "My reply", "me")]));
     act(() => result.current.refresh());
-    await waitFor(() => expect(result.current.unreadCount).toBe(2));
+    await waitFor(() => expect(result.current.unreadCount).toBe(0));
+  });
+
+
+  it("treats an existing GitLab reply as read only in its own thread and account", async () => {
+    const original = snapshot([
+      { ...comment(3, "My reply", "ME"), createdAt: "2026-09-18T08:00:00Z" },
+      comment(1),
+      { ...comment(4), createdAt: "2026-09-19T08:00:00Z" },
+      comment(2),
+    ]);
+    original.discussions.push({ ...original.discussions[0]!, id: "thread-2", comments: [comment(5)] });
+    const { client, read } = harness(vi.fn().mockResolvedValue(original));
+    const options = { client, workspaceId: "workspace-1", materialization, enabled: true };
+    const first = renderHook(() => useWorkspaceGitlabDiscussions(options));
+    await waitFor(() => expect(first.result.current.entries[0]?.state).toBe("ready"));
+    expect(first.result.current.entries[0]?.unreadCommentIds).toEqual([4, 5]);
+    first.unmount();
+    const restored = renderHook(() => useWorkspaceGitlabDiscussions(options));
+    expect(restored.result.current.entries[0]?.unreadCommentIds).toEqual([4, 5]);
+    await waitFor(() => expect(restored.result.current.entries[0]?.state).toBe("ready"));
+    read.mockResolvedValue({ ...original, viewerLogin: "another", scopeId: "b".repeat(64) });
+    act(() => restored.result.current.refresh());
+    await waitFor(() => expect(restored.result.current.unreadCount).toBe(5));
+  });
+
+  it("keeps comments unread when reply timestamps cannot establish their order", async () => {
+    const { client } = harness(vi.fn().mockResolvedValue(snapshot([
+      { ...comment(1), createdAt: "invalid" },
+      { ...comment(2, "My reply", "me"), createdAt: "invalid" },
+      comment(3),
+    ])));
+    const { result } = renderHook(() => useWorkspaceGitlabDiscussions({ client, workspaceId: "workspace-1", materialization, enabled: true }));
+    await waitFor(() => expect(result.current.entries[0]?.state).toBe("ready"));
+    expect(result.current.entries[0]?.unreadCommentIds).toEqual([1, 3]);
   });
 
   it("acknowledges only displayed revisions and restores markers after remount", async () => {
@@ -178,19 +226,19 @@ describe("workspace GitLab conversation activity", () => {
     expect(second.result.current.unreadCount).toBe(2);
   });
 
-  it("does not let own replies or resolved state acknowledge incoming comments", async () => {
+  it("acknowledges earlier comments after a confirmed reply but keeps later comments unread", async () => {
     const { client, read } = harness();
     const { result } = renderHook(() => useWorkspaceGitlabDiscussions({ client, workspaceId: "workspace-1", materialization, enabled: true }));
     await waitFor(() => expect(result.current.unreadCount).toBe(1));
     const entry = result.current.entries[0]!;
     act(() => result.current.acceptReply(entry.target.key, { schemaVersion: 1, repositoryId: "repo-api", iid: 16, discussionId: "thread-1", comment: comment(2, "Reply", "me") }, entry.snapshot!.scopeId));
-    expect(result.current.unreadCount).toBe(1);
+    expect(result.current.unreadCount).toBe(0);
     expect(result.current.entries[0]?.snapshot?.discussions[0]?.comments).toHaveLength(2);
     const updated = snapshot([comment(1), comment(2, "Reply", "me"), comment(3)]);
     updated.discussions[0]!.resolved = true;
     read.mockResolvedValue(updated);
     act(() => result.current.refresh());
-    await waitFor(() => expect(result.current.unreadCount).toBe(2));
+    await waitFor(() => expect(result.current.unreadCount).toBe(1));
   });
 
   it("keeps account scopes separate and rejects acknowledgements from the old account", async () => {
@@ -246,7 +294,7 @@ describe("workspace GitLab conversation activity", () => {
     act(() => result.current.acceptReply(entry.target.key, { schemaVersion: 1, repositoryId: "repo-api", iid: 16, discussionId: "thread-1", comment: comment(2, "Confirmed reply", "me") }, entry.snapshot!.scopeId));
     await act(async () => old.resolve(snapshot()));
     expect(result.current.entries[0]?.snapshot?.discussions[0]?.comments.map((item) => item.id)).toEqual([1, 2]);
-    expect(result.current.unreadCount).toBe(1);
+    expect(result.current.unreadCount).toBe(0);
   });
 
   it("refreshes on focus without parallel requests or acknowledging hidden content", async () => {

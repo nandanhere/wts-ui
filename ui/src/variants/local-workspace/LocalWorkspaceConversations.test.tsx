@@ -21,7 +21,8 @@ it("shows new MR replies on the Changes tab while the workspace overview stays a
   await waitFor(() => expect(read).toHaveBeenCalledWith(repositoryId, 16, workspace.workspaceId));
   await act(async () => { initialRead.resolve(snapshot); await initialRead.promise; });
   const changes = screen.getByRole("tab", { name: /Changes.*1 unread merge request comment/i });
-  expect(changes).toHaveTextContent("1 unread");
+  // The tab shows the count as a badge. Its accessible name carries the full phrase.
+  expect(changes).toHaveTextContent(/Changes\s*1/);
   expect(changes).toHaveAttribute("data-state", "inactive");
   expect(screen.getByRole("tab", { name: "Workspace" })).toHaveAttribute("data-state", "active");
   expect(screen.getByRole("tab", { name: "Plans" })).toBeVisible();

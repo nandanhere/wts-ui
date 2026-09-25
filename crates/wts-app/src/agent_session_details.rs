@@ -1,4 +1,4 @@
-use crate::{AgentChangeRequestProposal, AgentProvider, AgentSession};
+use crate::{AgentChangeRequestProposal, AgentMrLinkProposal, AgentProvider, AgentSession};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
@@ -83,6 +83,7 @@ pub struct AgentProcessEvent {
     pub kind: AgentProcessEventKind,
     pub summary: String,
     pub change_request_proposals: Vec<AgentChangeRequestProposal>,
+    pub mr_link_proposals: Vec<AgentMrLinkProposal>,
 }
 
 #[derive(Clone, Default)]
@@ -264,6 +265,7 @@ mod tests {
             failure: None,
             needs_input: None,
             change_request_proposals: Vec::new(),
+            mr_link_proposals: Vec::new(),
         }
     }
 
@@ -278,6 +280,7 @@ mod tests {
                 kind: AgentProcessEventKind::AgentUpdate,
                 summary: "I found the failing boundary.".to_owned(),
                 change_request_proposals: Vec::new(),
+                mr_link_proposals: Vec::new(),
             },
         );
 
@@ -304,6 +307,7 @@ mod tests {
                     kind: AgentProcessEventKind::UsesTool,
                     summary: format!("Uses tool {index}.\0private"),
                     change_request_proposals: Vec::new(),
+                    mr_link_proposals: Vec::new(),
                 },
             );
         }
@@ -337,6 +341,7 @@ mod tests {
                 kind: AgentProcessEventKind::NeedsQuestion,
                 summary: "Should I use the private production token?".to_owned(),
                 change_request_proposals: Vec::new(),
+                mr_link_proposals: Vec::new(),
             },
         );
 

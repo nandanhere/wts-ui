@@ -16,6 +16,35 @@ const MAX_SESSION_FILE_BYTES: u64 = 4 * 1024 * 1024;
 const MAX_RETAINED_SESSIONS: usize = 4_096;
 const STALE_HEARTBEAT_AFTER_MS: i64 = 5 * 60 * 1_000;
 pub(crate) const CHANGE_REQUEST_PROPOSAL_PREFIX: &str = "WTS_CHANGE_REQUEST_PROPOSAL:";
+pub(crate) const MR_LINK_PROPOSAL_PREFIX: &str = "WTS_MR_LINK_PROPOSAL:";
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AgentMrLinkProposal {
+    pub schema_version: u32,
+    pub repository_id: String,
+    pub iid: u64,
+}
+
+pub(crate) fn parse_agent_mr_link_proposals(value: &str) -> Vec<AgentMrLinkProposal> {
+    value
+        .lines()
+        .filter_map(|line| line.trim().strip_prefix(MR_LINK_PROPOSAL_PREFIX))
+        .filter(|json| json.len() <= 512)
+        .filter_map(|json| serde_json::from_str::<AgentMrLinkProposal>(json.trim()).ok())
+        .filter(valid_mr_link_proposal)
+        .take(16)
+        .collect()
+}
+
+fn valid_mr_link_proposal(proposal: &AgentMrLinkProposal) -> bool {
+    proposal.schema_version == 1
+        && !proposal.repository_id.is_empty()
+        && proposal.repository_id.len() <= 160
+        && proposal.repository_id.trim() == proposal.repository_id
+        && proposal.iid > 0
+        && proposal.iid <= 9_007_199_254_740_991
+}
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -101,6 +130,8 @@ pub struct AgentSession {
     pub needs_input: Option<crate::AgentNeedsInput>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub change_request_proposals: Vec<AgentChangeRequestProposal>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mr_link_proposals: Vec<AgentMrLinkProposal>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -201,6 +232,7 @@ impl AgentSessionStore {
             failure: None,
             needs_input: None,
             change_request_proposals: Vec::new(),
+            mr_link_proposals: Vec::new(),
         };
         list.sessions.push(session.clone());
         self.write_locked(&list)?;
@@ -321,6 +353,34 @@ impl AgentSessionStore {
         Ok(session)
     }
 
+    pub(crate) fn set_mr_link_proposals(
+        &self,
+        session_id: Uuid,
+        proposals: Vec<AgentMrLinkProposal>,
+    ) -> Result<AgentSession, AgentSessionStoreError> {
+        if proposals.len() > 16 || proposals.iter().any(|proposal| !valid_mr_link_proposal(proposal))
+        {
+            return Err(AgentSessionStoreError::Invalid);
+        }
+        let _guard = self.acquire()?;
+        let mut list = self.read_locked()?;
+        let session = list
+            .sessions
+            .iter_mut()
+            .find(|session| session.session_id == session_id)
+            .ok_or(AgentSessionStoreError::NotFound)?;
+        if !matches!(
+            session.status,
+            AgentSessionStatus::Running | AgentSessionStatus::Stopping
+        ) {
+            return Err(AgentSessionStoreError::NotRunning);
+        }
+        session.mr_link_proposals = proposals;
+        let session = session.clone();
+        self.write_locked(&list)?;
+        Ok(session)
+    }
+
     pub(crate) fn finish(&self, session_id: Uuid) -> Result<AgentSession, AgentSessionStoreError> {
         self.update_running_at(
             session_id,
@@ -412,6 +472,7 @@ impl AgentSessionStore {
             failure: None,
             needs_input: None,
             change_request_proposals: Vec::new(),
+            mr_link_proposals: Vec::new(),
         };
         list.sessions.push(session.clone());
         self.write_locked(&list)?;
@@ -616,6 +677,25 @@ fn valid_session(session: &AgentSession) -> bool {
             .is_none_or(|ended| ended >= session.last_heartbeat_at_unix_ms)
         && session.change_request_proposals.len() <= 16
         && session.change_request_proposals.iter().all(valid_proposal)
+        && session.mr_link_proposals.len() <= 16
+        && session.mr_link_proposals.iter().all(valid_mr_link_proposal)
+}
+
+#[cfg(test)]
+mod mr_link_tests {
+    use super::*;
+
+    #[test]
+    fn parses_only_bounded_numeric_mr_hints() {
+        let parsed = parse_agent_mr_link_proposals(
+            "WTS_MR_LINK_PROPOSAL: {\"schemaVersion\":1,\"repositoryId\":\"repo_senzu\",\"iid\":43}\n\
+             WTS_MR_LINK_PROPOSAL: {\"schemaVersion\":1,\"repositoryId\":\"repo_senzu\",\"iid\":0}\n\
+             WTS_MR_LINK_PROPOSAL: {\"schemaVersion\":1,\"repositoryId\":\"repo_senzu\",\"iid\":44,\"url\":\"https://other.example\"}",
+        );
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0].repository_id, "repo_senzu");
+        assert_eq!(parsed[0].iid, 43);
+    }
 }
 
 pub(crate) fn valid_proposal(proposal: &AgentChangeRequestProposal) -> bool {
@@ -986,6 +1066,50 @@ mod tests {
                 .expect("other session")
                 .change_request_proposals
                 .is_empty()
+        );
+    }
+
+    #[test]
+    fn mr_link_hint_is_persisted_only_for_the_reporting_session() {
+        let (fixture, store) = store();
+        let workspace_id = Uuid::new_v4();
+        let reporting = store
+            .start(
+                workspace_id,
+                AgentProvider::Codex,
+                TerminalProvider::Terminal,
+                AgentSessionCategory::Implementation,
+            )
+            .expect("start reporting session");
+        let other = store
+            .start(
+                workspace_id,
+                AgentProvider::Codex,
+                TerminalProvider::Terminal,
+                AgentSessionCategory::Review,
+            )
+            .expect("start other session");
+        store
+            .set_mr_link_proposals(
+                reporting.session_id,
+                vec![AgentMrLinkProposal {
+                    schema_version: 1,
+                    repository_id: "repo_senzu".to_owned(),
+                    iid: 43,
+                }],
+            )
+            .expect("save hint");
+        store.finish(reporting.session_id).expect("finish session");
+        let reopened = AgentSessionStore::open(fixture.path()).expect("reopen ledger");
+        let sessions = reopened.list(Some(workspace_id)).expect("list sessions");
+        assert_eq!(
+            sessions.sessions.iter().find(|session| session.session_id == reporting.session_id)
+                .unwrap().mr_link_proposals[0].iid,
+            43
+        );
+        assert!(
+            sessions.sessions.iter().find(|session| session.session_id == other.session_id)
+                .unwrap().mr_link_proposals.is_empty()
         );
     }
 

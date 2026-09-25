@@ -4,12 +4,15 @@ export type WorkingComparisonView = "latestWork" | "inMr" | "sinceMr";
 export interface WorkingComparisonState {
   comparison?: WorkspaceGitlabComparison;
   view: WorkingComparisonView;
+  /** True after the user picks a view. WTS then stops choosing one for them. */
+  viewChosen?: boolean;
   selectedFile: string;
   panel?: "editor" | "conversations";
   pending: boolean;
   refreshQueued?: boolean;
   requestToken?: object;
   error: string;
+  errorCode?: string;
   revision: number;
 }
 interface ReviewSession {

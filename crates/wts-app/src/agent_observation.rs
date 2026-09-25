@@ -1,6 +1,9 @@
 use crate::{
-    AgentChangeRequestProposal,
-    agent_sessions::{CHANGE_REQUEST_PROPOSAL_PREFIX, parse_agent_change_request_proposals},
+    AgentChangeRequestProposal, AgentMrLinkProposal,
+    agent_sessions::{
+        CHANGE_REQUEST_PROPOSAL_PREFIX, MR_LINK_PROPOSAL_PREFIX,
+        parse_agent_change_request_proposals, parse_agent_mr_link_proposals,
+    },
 };
 use serde::{Deserialize, Serialize, de::IgnoredAny};
 use std::{
@@ -148,6 +151,8 @@ pub struct ObservedAgentSession {
     pub needs_input: Option<AgentNeedsInput>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub change_request_proposals: Vec<AgentChangeRequestProposal>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mr_link_proposals: Vec<AgentMrLinkProposal>,
     pub started_at_unix_ms: i64,
     pub last_event_at_unix_ms: i64,
 }
@@ -329,6 +334,7 @@ fn observe_candidate(
         update_kind: event_state.update_kind,
         needs_input: event_state.pending_input.values().next().cloned(),
         change_request_proposals: event_state.change_request_proposals,
+        mr_link_proposals: event_state.mr_link_proposals,
         started_at_unix_ms: candidate.created_at,
         last_event_at_unix_ms: candidate.modified_at,
     })
@@ -442,6 +448,7 @@ struct EventState {
     update_kind: Option<AgentObservationUpdateKind>,
     pending_input: BTreeMap<String, AgentNeedsInput>,
     change_request_proposals: Vec<AgentChangeRequestProposal>,
+    mr_link_proposals: Vec<AgentMrLinkProposal>,
 }
 
 fn read_event_state(path: &Path) -> Option<EventState> {
@@ -482,6 +489,7 @@ fn read_event_state(path: &Path) -> Option<EventState> {
                 state.update_kind = None;
                 state.pending_input.clear();
                 state.change_request_proposals.clear();
+                state.mr_link_proposals.clear();
             }
             (Some("event_msg"), Some("task_complete")) => {
                 if let Some(turn_id) = payload.turn_id {
@@ -491,6 +499,7 @@ fn read_event_state(path: &Path) -> Option<EventState> {
                 state.activity = None;
                 state.pending_input.clear();
                 if let Some(message) = payload.last_agent_message.as_deref() {
+                    state.mr_link_proposals = parse_agent_mr_link_proposals(message);
                     let proposals = parse_agent_change_request_proposals(message);
                     if !proposals.is_empty() {
                         state.change_request_proposals = proposals;
@@ -538,6 +547,10 @@ fn read_event_state(path: &Path) -> Option<EventState> {
                     })
                 });
                 if let Some(text) = proposal_text {
+                    let mr_proposals = parse_agent_mr_link_proposals(text);
+                    if !mr_proposals.is_empty() {
+                        state.mr_link_proposals = mr_proposals;
+                    }
                     let proposals = parse_agent_change_request_proposals(text);
                     if !proposals.is_empty() {
                         state.change_request_proposals = proposals;
@@ -648,7 +661,11 @@ fn bounded_agent_update(value: &str) -> Option<String> {
     let lines = value
         .lines()
         .map(str::trim)
-        .filter(|line| !line.is_empty() && !line.starts_with(CHANGE_REQUEST_PROPOSAL_PREFIX))
+        .filter(|line| {
+            !line.is_empty()
+                && !line.starts_with(CHANGE_REQUEST_PROPOSAL_PREFIX)
+                && !line.starts_with(MR_LINK_PROPOSAL_PREFIX)
+        })
         .take(MAX_AGENT_UPDATE_LINES)
         .collect::<Vec<_>>();
     let normalized = lines.join("\n");
@@ -805,7 +822,7 @@ mod tests {
                 "payload": {
                     "type": "task_complete",
                     "turn_id": "turn-1",
-                    "last_agent_message": "Implemented the workspace overview and all checks passed.\nWTS_CHANGE_REQUEST_PROPOSAL: {\"schemaVersion\":1,\"repositoryId\":\"repo_checkout\",\"sourceHeadCommitOid\":\"0123456789abcdef0123456789abcdef01234567\",\"title\":\"PLATFORM-42: Validate admission\",\"body\":\"## Summary\\n\\nValidate admission.\",\"issueKeys\":[\"PLATFORM-42\"]}"
+                    "last_agent_message": "Implemented the workspace overview and all checks passed.\nWTS_CHANGE_REQUEST_PROPOSAL: {\"schemaVersion\":1,\"repositoryId\":\"repo_checkout\",\"sourceHeadCommitOid\":\"0123456789abcdef0123456789abcdef01234567\",\"title\":\"PLATFORM-42: Validate admission\",\"body\":\"## Summary\\n\\nValidate admission.\",\"issueKeys\":[\"PLATFORM-42\"]}\nWTS_MR_LINK_PROPOSAL: {\"schemaVersion\":1,\"repositoryId\":\"repo_checkout\",\"iid\":43}"
                 }
             })
             .to_string(),
@@ -829,6 +846,7 @@ mod tests {
             Some(AgentObservationUpdateKind::Completion)
         );
         assert_eq!(observed[0].change_request_proposals.len(), 1);
+        assert_eq!(observed[0].mr_link_proposals[0].iid, 43);
         assert_eq!(
             observed[0].change_request_proposals[0].repository_id,
             "repo_checkout"
@@ -840,6 +858,7 @@ mod tests {
                 .unwrap_or_default()
                 .contains("WTS_CHANGE_REQUEST_PROPOSAL")
         );
+        assert!(!observed[0].latest_update.as_deref().unwrap_or_default().contains("WTS_MR_LINK_PROPOSAL"));
     }
 
     #[test]

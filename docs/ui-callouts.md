@@ -76,6 +76,7 @@ field, or button. A user can name those controls from their visible text.
 | `spaces.toolbar` | `Spaces toolbar` | “Make the Spaces toolbar shorter.” |
 | `spaces.lanes` | `Workspace columns` | “The workspace columns need more space.” |
 | `workspace.tab-content` | `Workspace content` | “The workspace content is too wide.” |
+| `workspace.link-merge-request-dialog` | `Link merge request dialog` | “The link merge request dialog needs a clearer branch note.” |
 
 Prefer a product name over a code name. Use `Spaces toolbar`, not
 `boardToolbar` or `toolbar div`.

@@ -113,6 +113,20 @@ describe("RepositoryReviewScreen repository selection", () => {
     };
   }
 
+  it("points an empty repository to the repositories that have changes", async () => {
+    const workspaceId = "ws_empty_jump";
+    const fake = fakeWorkspaceClient();
+    fake.getWorkspaceRepositoryDiff.mockImplementation(async (_workspace, repositoryId) => repositoryDiff(workspaceId, repositoryId, repositoryId === "senzu"));
+    const onRepositoryChange = vi.fn();
+    const worktrees = materialization(workspaceId, [worktree("bmc-api"), worktree("senzu", { changedFileCount: 3, commitsAhead: 1 })]);
+    // The workspace passes the selected repository back, as the real screen does.
+    const { rerender } = render(<RepositoryReviewScreen client={fake.client} workspaceId={workspaceId} materialization={worktrees} initialRepositoryId="bmc-api" onRepositoryChange={(id, navigation) => { onRepositoryChange(id, navigation); rerender(<RepositoryReviewScreen client={fake.client} workspaceId={workspaceId} materialization={worktrees} initialRepositoryId={id} onRepositoryChange={onRepositoryChange} />); }} />);
+    expect(await screen.findByText("No local changes")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: /senzu\s*3 files/ }));
+    expect(onRepositoryChange).toHaveBeenCalledWith("senzu", "user");
+    expect((await screen.findAllByText(/src\/senzu\.ts/)).length).toBeGreaterThan(0);
+  });
+
   it("returns to the unread thread file after the user selects another code file", async () => {
     const workspaceId = "ws_unread_return_file"; const fake = fakeWorkspaceClient(); const controller = unreadController(workspaceId); controller.entries = controller.entries.filter(entry => entry.target.iid === 16);
     const local = repositoryDiff(workspaceId, "nimbus-api"); local.patch = local.patch.replaceAll("src/nimbus-api.ts", "src/api.ts") + local.patch.replaceAll("src/nimbus-api.ts", "src/other.ts");
@@ -122,6 +136,29 @@ describe("RepositoryReviewScreen repository selection", () => {
     fireEvent.click(await screen.findByRole("button", { name: /^src\/other.ts In MR/ })); expect(screen.getByRole("button", { name: /^src\/other.ts In MR/ })).toHaveAttribute("aria-current", "true");
     fireEvent.click(screen.getByRole("button", { name: "Open 7 unread comments in nimbus-api !16" })); await screen.findByRole("button", { name: /src\/api.ts:\+34/ }); fireEvent.click(screen.getByRole("tab", { name: "Code" }));
     expect(screen.getByRole("button", { name: /^src\/api.ts In MR/ })).toHaveAttribute("aria-current", "true");
+  });
+
+  it("puts the MR identity in the workspace header and runs the AI review on the published MR", async () => {
+    const user = userEvent.setup();
+    const workspaceId = "ws_mr_ai_review";
+    const fake = fakeWorkspaceClient();
+    const controller = unreadController(workspaceId);
+    controller.entries = [controller.entries[1]!];
+    fake.client.getWorkspaceGitlabComparison = vi.fn().mockRejectedValue(new Error("The comparison is not in this test."));
+    const slot = document.createElement("div");
+    document.body.append(slot);
+    render(<RepositoryReviewScreen client={fake.client} gitlabConversations={controller} identitySlot={slot} initialRepositoryId="nimbus-api" materialization={materialization(workspaceId, [worktree("nimbus-api")])} onRepositoryChange={vi.fn()} workspaceId={workspaceId} workspaceKey="MR-16" />);
+    const identity = within(slot).getByTestId("repository-review-toolbar");
+    expect(within(identity).getByRole("heading", { name: "Merge request !16" })).toBeVisible();
+    expect(within(identity).getByRole("combobox", { name: "Repository to review" })).toBeVisible();
+    expect(within(screen.getByTestId("repository-review-screen")).queryByTestId("repository-review-toolbar")).toBeNull();
+
+    const bar = screen.getByRole("tablist", { name: "Change views" }).parentElement!;
+    expect(within(bar).getByRole("navigation", { name: "Unread MR comments" })).toHaveTextContent("7 unread comments");
+    await user.click(within(bar).getByRole("button", { name: "AI review" }));
+    await user.click(await screen.findByRole("button", { name: "Review code" }));
+    await waitFor(() => expect(fake.runWorkspaceCodeReview).toHaveBeenCalledWith(workspaceId, "codex", "recentChanges", undefined, { repositoryId: "nimbus-api", mergeRequestIid: 16, skill: "raptik-review" }));
+    slot.remove();
   });
 
   it("omits the single MR selector while keeping repository choice and the exact unread conversation reachable", async () => {

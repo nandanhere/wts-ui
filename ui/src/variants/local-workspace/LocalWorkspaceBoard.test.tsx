@@ -710,6 +710,10 @@ describe("personal local workspace registry", () => {
       within(cardSurface).queryByText("Not scanned"),
     ).not.toBeInTheDocument();
     expect(fake.getWorkspaceMaterialization).not.toHaveBeenCalled();
+    // Every column shows its count. The jump bar names all columns; CSS shows it only at laptop width.
+    const jump = screen.getByLabelText("Jump to a column");
+    expect([...jump.querySelectorAll("a")].map((link) => link.textContent)).toEqual(["Ready1", "Review0", "Active0", "Parked0"]);
+    expect(screen.getByLabelText("1 items")).toBeVisible();
   });
 
   it("shows assigned reviews in Ready and prepares a source-branch review workspace", async () => {
@@ -902,7 +906,7 @@ describe("personal local workspace registry", () => {
       }),
     );
     expect(screen.getAllByRole("tab").map((tab) => tab.textContent)).toEqual([
-      "Review",
+      "Overview",
       "Agent review",
       "Code review",
     ]);
@@ -1012,9 +1016,9 @@ describe("personal local workspace registry", () => {
     expect(await screen.findByRole("button", { name: "src/checkout.ts In MR" })).toBeVisible();
     expect(screen.getByRole("button", { name: "Edit locally" })).toBeVisible();
     await user.click(screen.getByRole("combobox", { name: "Code comparison" }));
-    await user.click(screen.getByRole("option", { name: "In the MR" }));
+    await user.click(screen.getByRole("option", { name: "Published MR" }));
     expect(screen.getByRole("combobox", { name: "Code comparison" })).toHaveValue("inMr");
-    expect(screen.getByText("Published code")).toBeVisible();
+    expect(screen.getByText(/^MR at [0-9a-f]{8}$/)).toBeVisible();
     expect(screen.queryByRole("button", { name: "Edit locally" })).not.toBeInTheDocument();
     expect(screen.queryByRole("textbox", { name: "Local file editor" })).not.toBeInTheDocument();
     expect(fake.getWorkspaceGitlabComparison).toHaveBeenCalledWith(reviewWorkspace.workspaceId, "repo_checkout", 17, false);
@@ -1073,7 +1077,7 @@ describe("personal local workspace registry", () => {
       />,
     );
 
-    expect(await screen.findByRole("tab", { name: "Review" })).toHaveAttribute(
+    expect(await screen.findByRole("tab", { name: "Overview" })).toHaveAttribute(
       "data-state",
       "active",
     );
@@ -1168,7 +1172,7 @@ describe("personal local workspace registry", () => {
       ),
     );
     const parkedLane = screen.getByRole("region", { name: "Parked" });
-    const pendingCard = within(parkedLane).getByRole("button", {
+    const pendingCard = await within(parkedLane).findByRole("button", {
       name: "Open Pending MR: Wait for merge details",
     });
     const pendingCardSurface = pendingCard.closest("article") as HTMLElement;
@@ -1498,7 +1502,7 @@ describe("personal local workspace registry", () => {
     expect(reviewAction).toHaveTextContent(
       "GitLab merged this change. No review action remains.",
     );
-    expect(screen.getByRole("tab", { name: "Review" })).toBeVisible();
+    expect(screen.getByRole("tab", { name: "Overview" })).toBeVisible();
     expect(screen.getByRole("region", { name: "Review scope" })).toBeVisible();
     expect(screen.getByRole("region", {
       name: "Review issue context",
@@ -1629,6 +1633,87 @@ describe("personal local workspace registry", () => {
     });
     expect(within(reviewAction).getByText(label)).toBeVisible();
     expect(reviewAction).toHaveTextContent(detail);
+  });
+
+  it("lets the reviewer retry an unknown MR status from the overview", async () => {
+    const user = userEvent.setup();
+    const reviewWorkspace = workspaceFixture({
+      workspaceId: "ws_review_unknown",
+      intent: { type: "repositorySet", label: "Review sre-tools/ppxe-verify !22" },
+      title: "Review sre-tools/ppxe-verify !22",
+      repositories: [{
+        requestId: "repo_ppxe_verify",
+        repositoryId: "repo_ppxe_verify",
+        label: "ppxe-verify",
+        baseRef: "fix/health-endpoint-fallback",
+        worktreeLeaf: "ppxe-verify",
+      }],
+      lifecycle: { materializationState: "materialized", worktreeCount: 1, observedAtUnixMs: 1_787_029_200_000 },
+    });
+    const fake = fakeWorkspaceClient({
+      list: workspaceListFixture([reviewWorkspace]),
+      persistedMaterialization: assistantMaterialization(reviewWorkspace),
+      gitlabReviewInbox: { schemaVersion: 1, state: "stale", reviews: [], fetchedAtUnixMs: 1_787_029_200_000, detail: "GitLab is unavailable." },
+    });
+
+    render(<LocalWorkspace client={fake.client} />);
+    await user.click(await screen.findByRole("button", {
+      name: "Open Review sre-tools/ppxe-verify !22: Review sre-tools/ppxe-verify !22 details",
+    }));
+    const reviewAction = await screen.findByRole("region", { name: "Workspace review action" });
+    expect(within(reviewAction).getByText("Status unavailable")).toBeVisible();
+    const calls = fake.getGitlabReviewInbox.mock.calls.length;
+    await user.click(within(reviewAction).getByRole("button", { name: "Retry status" }));
+    await waitFor(() => expect(fake.getGitlabReviewInbox.mock.calls.length).toBeGreaterThan(calls));
+  });
+
+  it("says WTS checks the MR status while the first GitLab read is slow", async () => {
+    const user = userEvent.setup();
+    const reviewWorkspace = workspaceFixture({
+      workspaceId: "ws_review_slow",
+      intent: { type: "repositorySet", label: "Review ppxe-verify !22" },
+      title: "Review sre-tools/ppxe-verify !22",
+      repositories: [{ requestId: "repo_ppxe_verify", repositoryId: "repo_ppxe_verify", label: "ppxe-verify", baseRef: "fix/health-endpoint-fallback", worktreeLeaf: "ppxe-verify" }],
+      lifecycle: { materializationState: "materialized", worktreeCount: 1, observedAtUnixMs: 1_787_029_200_000 },
+    });
+    const fake = fakeWorkspaceClient({
+      list: workspaceListFixture([reviewWorkspace]),
+      persistedMaterialization: assistantMaterialization(reviewWorkspace),
+    });
+    fake.getGitlabReviewInbox.mockReturnValue(new Promise(() => undefined));
+    render(<LocalWorkspace client={fake.client} />);
+    await user.click(await screen.findByRole("button", {
+      name: "Open Review ppxe-verify !22: Review sre-tools/ppxe-verify !22 details",
+    }));
+    const reviewAction = await screen.findByRole("region", { name: "Workspace review action" });
+    expect(within(reviewAction).getByText("Checking status")).toBeVisible();
+    expect(within(reviewAction).queryByText("Status unavailable")).not.toBeInTheDocument();
+    expect(within(reviewAction).queryByRole("button", { name: "Retry status" })).not.toBeInTheDocument();
+  });
+
+  it("says a finished review left the inbox instead of reporting a GitLab failure", async () => {
+    const user = userEvent.setup();
+    const reviewWorkspace = workspaceFixture({
+      workspaceId: "ws_review_done",
+      intent: { type: "repositorySet", label: "Review sre-tools/ppxe-verify !22" },
+      title: "Review sre-tools/ppxe-verify !22",
+      repositories: [{ requestId: "repo_ppxe_verify", repositoryId: "repo_ppxe_verify", label: "ppxe-verify", baseRef: "fix/health-endpoint-fallback", worktreeLeaf: "ppxe-verify" }],
+      lifecycle: { materializationState: "materialized", worktreeCount: 1, observedAtUnixMs: 1_787_029_200_000 },
+    });
+    const fake = fakeWorkspaceClient({
+      list: workspaceListFixture([reviewWorkspace]),
+      persistedMaterialization: assistantMaterialization(reviewWorkspace),
+      gitlabReviewInbox: { schemaVersion: 1, state: "fresh", reviews: [], fetchedAtUnixMs: 1_787_029_200_000, detail: "GitLab returned no review." },
+    });
+
+    render(<LocalWorkspace client={fake.client} />);
+    await user.click(await screen.findByRole("button", {
+      name: "Open Review sre-tools/ppxe-verify !22: Review sre-tools/ppxe-verify !22 details",
+    }));
+    const reviewAction = await screen.findByRole("region", { name: "Workspace review action" });
+    expect(within(reviewAction).getByText("Not in your reviews")).toBeVisible();
+    expect(reviewAction).toHaveTextContent("GitLab no longer asks you to review this MR.");
+    expect(within(reviewAction).queryByRole("button", { name: "Retry status" })).toBeNull();
   });
 
   it("shows an open VS Code session without letting finished WTS history mask live work", async () => {

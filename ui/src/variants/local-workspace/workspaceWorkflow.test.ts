@@ -100,6 +100,17 @@ describe("workspace workflow projection", () => {
     };
 
     expect(gitlabReviewForWorkspace(workspace, [review])).toEqual(review);
+    // Real review workspaces keep a short label and a full-path title.
+    expect(
+      gitlabReviewForWorkspace(
+        {
+          ...workspace,
+          intent: { type: "repositorySet", label: "Review obx-api !9" },
+          title: "Review sre-tools/obx-api !9",
+        },
+        [review],
+      ),
+    ).toEqual(review);
     expect(
       gitlabReviewForWorkspace(
         {
@@ -135,6 +146,21 @@ describe("workspace workflow projection", () => {
       repository: "sre-tools/obx-api",
       number: 9,
     });
+    expect(
+      gitlabReviewTargetForWorkspace(
+        {
+          ...workspace,
+          intent: { type: "repositorySet", label: "Local repositories · obx-api" },
+          title: "Review sre-tools/obx-api !9",
+          repositoryPlans: [{ repositoryId: "local_clone_obx_api", label: "obx-api", baseRef: "SRETOOLS-6349" }],
+        },
+        [],
+        [
+          { id: "8", repositoryId: "local_clone_obx_api", projectPath: "sre-tools/obx-api", webUrl: "https://gitlab.example/8", iid: 8, title: "Other", sourceBranch: "x", targetBranch: "main", authorUsername: "ana", updatedAt: "2026-09-01T00:00:00Z", draft: false, status: "open" },
+          { id: "9", repositoryId: "local_clone_obx_api", projectPath: "sre-tools/obx-api", webUrl: "https://gitlab.example/9", iid: 9, title: "Add retries", sourceBranch: "SRETOOLS-6349", targetBranch: "main", authorUsername: "ana", updatedAt: "2026-09-02T00:00:00Z", draft: false, status: "merged" },
+        ],
+      ),
+    ).toMatchObject({ number: 9, status: "merged", title: "Add retries" });
     expect(
       gitlabReviewForWorkspace(
         {

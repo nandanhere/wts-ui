@@ -81,6 +81,22 @@ describe("Extracted presentational components in isolation", () => {
     expect(screen.getByText("Test Workspace Title")).toBeTruthy();
   });
 
+  it("puts one next step on each card, with a question from the agent first", () => {
+    const agent = { workspaceId: "ws-test-1", provider: "codex" as const, headline: "Codex needs attention", activity: "Asks a question",
+      lastEventAtUnixMs: 1, observedLocally: false };
+    const review = { id: "r", repositoryId: "repo", repository: "team/api", number: 4, title: "Fix", authorLogin: "a", sourceBranch: "s", targetBranch: "main", updatedAt: "2026-09-01T00:00:00Z", draft: false, reviewState: "requested" as const, status: "open" as const };
+    const { rerender } = render(<WorkspaceCard workspace={sampleWorkspace} agent={{ ...agent, state: "attention", needsInput: "question" }} gitlabReview={review} onOpen={vi.fn()} />);
+    expect(screen.getByText("Answer the agent")).toBeVisible();
+    rerender(<WorkspaceCard workspace={sampleWorkspace} agent={{ ...agent, state: "idle" }} gitlabReview={review} onOpen={vi.fn()} />);
+    expect(screen.getByText("Review the MR")).toBeVisible();
+    rerender(<WorkspaceCard workspace={sampleWorkspace} agent={{ ...agent, state: "working" }} onOpen={vi.fn()} />);
+    expect(screen.getByText("Agent works")).toBeVisible();
+    rerender(<WorkspaceCard workspace={sampleWorkspace} agent={{ ...agent, state: "idle", updateKind: "completion" }} onOpen={vi.fn()} />);
+    expect(screen.getByText("Check the agent result")).toBeVisible();
+    rerender(<WorkspaceCard workspace={sampleWorkspace} onOpen={vi.fn()} />);
+    expect(screen.queryByText(/Answer the agent|Review the MR|Agent works|Check the agent result/)).not.toBeInTheDocument();
+  });
+
   it("keeps only distinct workspace actions in one keyboard-accessible row", async () => {
     const user = userEvent.setup();
     const openWorkspace = vi.fn();

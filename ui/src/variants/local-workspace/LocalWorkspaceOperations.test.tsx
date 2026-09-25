@@ -768,6 +768,87 @@ describe("personal local workspace registry", () => {
     ).toBeVisible();
   });
 
+  it("clones a repository from a URL in the add repository dialog", async () => {
+    const user = userEvent.setup();
+    const persisted = workspaceFixture({
+      repositories: [{
+        requestId: "repo_checkout",
+        repositoryId: "repo_checkout",
+        label: "checkout-api",
+        baseRef: "main",
+        worktreeLeaf: "checkout-api",
+      }],
+      lifecycle: {
+        materializationState: "materialized",
+        worktreeCount: 1,
+        observedAtUnixMs: 1_721_776_500_000,
+      },
+    });
+    const materialization = assistantMaterialization(persisted, "ready");
+    const cloned = {
+      id: "repo_status",
+      label: "asset-status",
+      checkoutLeaf: "asset_status",
+      displayPath: "~/cd/asset_status",
+      originUrl: "https://gitlab.example.com/sre-tools/asset-status.git",
+      defaultBranch: {
+        name: "main",
+        fullRef: "refs/heads/main",
+        commitOid: "2123456789abcdef0123456789abcdef01234567",
+      },
+    };
+    const fake = fakeWorkspaceClient({
+      list: workspaceListFixture([persisted]),
+      get: persisted,
+      repositories: repositoryCatalogFixture(),
+      persistedMaterialization: materialization,
+      repositoryClone: {
+        repository: cloned,
+        repositoryRootDisplayPath: "~/cd",
+        reusedExisting: false,
+      },
+      repositoryAdditionPreflight: {
+        workspaceId: persisted.workspaceId,
+        repositoryId: "repo_status",
+        repositoryLabel: "asset-status",
+        baseRef: "main",
+        resolvedBaseRef: "refs/heads/main",
+        baseCommitOid: cloned.defaultBranch.commitOid,
+        targetDisplayPath: `${materialization.workspaceDisplayPath}/asset_status`,
+        branchName: materialization.branchName,
+        effectDigest: `sha256:${"b".repeat(64)}`,
+      },
+    });
+
+    render(<LocalWorkspace client={fake.client} />);
+    await user.click(
+      await screen.findByRole("button", { name: /^Open PLATFORM-42.* details$/i }),
+    );
+    await user.click(await screen.findByRole("button", { name: "Add repositories" }));
+    const addDialog = await screen.findByRole("dialog", {
+      name: "Add repository to PLATFORM-42",
+    });
+    await user.type(
+      within(addDialog).getByRole("textbox", { name: "Repository URL" }),
+      cloned.originUrl,
+    );
+    await user.click(within(addDialog).getByRole("button", { name: "Clone" }));
+    await waitFor(() =>
+      expect(fake.cloneRepository).toHaveBeenCalledWith({ remoteUrl: cloned.originUrl }),
+    );
+    expect(
+      await within(addDialog).findByRole("combobox", { name: "Repository to add" }),
+    ).toHaveValue("sre-tools/asset-status · main · asset_status");
+    await user.click(within(addDialog).getByRole("button", { name: "Review repository" }));
+    await waitFor(() =>
+      expect(fake.preflightWorkspaceRepositoryAddition).toHaveBeenCalledWith(
+        persisted.workspaceId,
+        "repo_status",
+        "main",
+      ),
+    );
+  });
+
   it("registers expected Git drift and re-indexes from the recovery state", async () => {
     const user = userEvent.setup();
     const persisted = workspaceFixture({
@@ -908,15 +989,18 @@ describe("personal local workspace registry", () => {
       ),
     ).toBeVisible();
 
-    await user.click(
-      screen.getByRole("button", { name: "Register changes & re-index" }),
-    );
+    const recoveryActions = screen.getAllByRole("button", {
+      name: "Register changes & re-index",
+    });
+    expect(recoveryActions).toHaveLength(2);
+    await user.click(recoveryActions[0]!);
 
     await waitFor(() =>
       expect(fake.reindexWorkspaceGraph).toHaveBeenCalledWith(
         persisted.workspaceId,
       ),
     );
+    expect(fake.preflightWorkspace).not.toHaveBeenCalled();
     expect(
       await screen.findByRole("columnheader", { name: "Base" }),
     ).toBeVisible();
@@ -1629,7 +1713,7 @@ describe("personal local workspace registry", () => {
             iid: 42,
             title: "Validate admission",
             authorUsername: "octocat",
-            sourceBranch: "feat/PLATFORM-7197",
+            sourceBranch: materialization.worktrees[0]!.branchName,
             sourceHeadCommitOid: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             targetBranch: "develop",
             updatedAt: "2026-08-14T08:15:00Z",
@@ -1644,7 +1728,7 @@ describe("personal local workspace registry", () => {
             iid: 43,
             title: "Follow-up draft",
             authorUsername: "octocat",
-            sourceBranch: "feat/PLATFORM-7197",
+            sourceBranch: materialization.worktrees[0]!.branchName,
             targetBranch: "develop",
             updatedAt: "2026-08-14T09:15:00Z",
             draft: true,

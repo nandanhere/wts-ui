@@ -1,4 +1,4 @@
-   Compiling wts-integrations v0.1.0 (/Users/example/wts/source/crates/wts-integrations)
+   Compiling wts-integrations v0.1.0 (/Users/nandan.herekar/cd/vs-code-wts-ui-5546754b-6acd-4890-b7b4-acb54e5ec8b7/wts-ui--repo_c4a77d2/crates/wts-integrations)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 7.24s
      Running unittests src/lib.rs (target/debug/deps/wts_integrations-ca11c34e5400ef46)
 
