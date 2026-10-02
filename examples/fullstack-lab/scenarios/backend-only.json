@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 1,
+  "id": "backend-only",
+  "issue": "API-202",
+  "title": "Include the loyalty threshold",
+  "repositories": ["checkout-api"],
+  "briefFile": "scenarios/backend-only.md",
+  "acceptance": [
+    {
+      "repository": "checkout-api",
+      "source": "acceptance/backend-only/wts_api_202.rs",
+      "target": "tests/wts_api_202.rs"
+    }
+  ],
+  "checks": [
+    {
+      "id": "api-tests",
+      "label": "Checkout API tests",
+      "repository": "checkout-api",
+      "executable": "cargo",
+      "args": ["test", "--quiet"]
+    }
+  ],
+  "referenceChanges": [
+    {
+      "repository": "checkout-api",
+      "path": "src/lib.rs",
+      "find": "subtotal_cents > 10_000",
+      "replace": "subtotal_cents >= 10_000"
+    }
+  ],
+  "expectedChangedSources": ["checkout-api:src/lib.rs"]
+}

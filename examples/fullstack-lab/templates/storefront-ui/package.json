@@ -1,0 +1,8 @@
+{
+  "name": "wts-storefront-ui",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test"
+  }
+}

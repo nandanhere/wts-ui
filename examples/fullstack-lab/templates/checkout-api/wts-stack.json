@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "id": "checkout-api",
+  "description": "The local checkout API service used by the browser journey.",
+  "ports": [
+    {
+      "id": "api",
+      "environment": "CHECKOUT_API_PORT",
+      "offset": 0
+    }
+  ],
+  "processes": [
+    {
+      "id": "checkout-api",
+      "workingDirectory": ".",
+      "executable": "cargo",
+      "arguments": ["run"],
+      "dependencies": [],
+      "health": {
+        "port": "api",
+        "path": "/health"
+      }
+    }
+  ],
+  "smoke": {
+    "workingDirectory": ".",
+    "executable": "cargo",
+    "arguments": ["test"]
+  }
+}

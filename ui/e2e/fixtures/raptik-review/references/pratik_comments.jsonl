@@ -1,0 +1,8 @@
+{"body":"Blocking: Number(order.total) can be NaN when total is missing, check the total before toFixed","file":"web/cart.js","url":"https://gitlab.example.test/sre-tools/storefront/-/merge_requests/7#note_42"}
+{"body":"move this magic value to a constant","file":"web/labels.py"}
+{"body":"close the response body","file":"client.go"}
+{"body":"add a timeout to this http client","file":"a.go"}
+{"body":"use utc here","file":"e.py"}
+{"body":"nice work","file":"f.go"}
+{"body":"why is this ignored","file":"b.go"}
+{"body":"log the error before returning","file":"c.go"}

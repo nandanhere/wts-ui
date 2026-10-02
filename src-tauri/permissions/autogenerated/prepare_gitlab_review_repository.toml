@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-prepare-gitlab-review-repository"
+description = "Enables the prepare_gitlab_review_repository command without any pre-configured scope."
+commands.allow = ["prepare_gitlab_review_repository"]
+
+[[permission]]
+identifier = "deny-prepare-gitlab-review-repository"
+description = "Denies the prepare_gitlab_review_repository command without any pre-configured scope."
+commands.deny = ["prepare_gitlab_review_repository"]

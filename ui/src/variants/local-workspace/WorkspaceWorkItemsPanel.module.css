@@ -1,0 +1,598 @@
+.panel {
+  display: grid;
+  width: 100%;
+  box-sizing: border-box;
+  gap: 0;
+  max-width: none;
+  margin: 0 auto;
+  padding: 0;
+  color: var(--wts-ink);
+  background: var(--wts-surface);
+  border: 1px solid var(--wts-line);
+  border-radius: var(--wts-radius-md);
+  box-shadow: none;
+  overflow: hidden;
+}
+
+.panel[data-compact] {
+  max-width: none;
+  gap: 0;
+  margin: 0;
+  padding: 0;
+}
+
+.panel[data-compact] .header h2 {
+  font-size: 12px;
+  letter-spacing: 0;
+}
+
+.panel[data-compact] .header > div:first-child {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+}
+
+.panel[data-compact] .error {
+  padding: 10px 12px;
+}
+
+.header,
+.subhead,
+.preview header,
+.proposalSection > div:first-child,
+.actionRow,
+.headerActions {
+  display: flex;
+  align-items: center;
+}
+
+.header,
+.subhead,
+.preview header,
+.proposalSection > div:first-child {
+  justify-content: space-between;
+  gap: 20px;
+}
+
+.header {
+  min-height: 44px;
+  padding: 7px 11px;
+  border-bottom: 1px solid var(--wts-line);
+}
+
+.header h2,
+.subhead h3,
+.proposalSection h3,
+.preview h4,
+.preview h5 {
+  margin: 0;
+}
+
+.header h2 {
+  color: var(--wts-ink);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0;
+}
+
+.header p,
+.subhead p,
+.proposalSection p {
+  margin: 5px 0 0;
+  color: var(--wts-muted);
+}
+
+.eyebrow {
+  margin: 0 !important;
+  color: var(--wts-faint) !important;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.primaryButton,
+.secondaryButton,
+.dangerButton,
+.error button,
+.subhead button,
+.unlinkConfirm button,
+.moreButton {
+  min-height: 36px;
+  border: 1px solid var(--wts-line-strong);
+  border-radius: var(--wts-radius-sm);
+  padding: 0 14px;
+  color: var(--wts-ink);
+  background: var(--wts-surface-muted);
+  font: inherit;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.headerActions {
+  flex: 0 0 auto;
+  gap: 8px;
+}
+
+.linkCount {
+  color: var(--wts-faint);
+  font-size: 12px;
+}
+
+.moreButton {
+  display: inline-grid;
+  width: 36px;
+  padding: 0;
+  place-items: center;
+}
+
+.primaryButton {
+  border-color: var(--wts-blue);
+  color: var(--wts-on-primary);
+  background: var(--wts-blue);
+}
+
+.secondaryButton:hover,
+.subhead button:hover,
+.moreButton:hover {
+  border-color: var(--wts-blue);
+  background: var(--wts-surface-hover);
+}
+
+.primaryButton:disabled,
+.secondaryButton:disabled,
+.dangerButton:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
+}
+
+.dangerButton {
+  border-color: var(--wts-red-line);
+  color: var(--wts-red);
+  background: var(--wts-red-soft);
+}
+
+.state,
+.empty {
+  margin: 0;
+  padding: 12px 11px;
+  color: var(--wts-faint);
+  font-size: 13px;
+}
+
+.error {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  border: 1px solid var(--wts-red-line);
+  border-radius: var(--wts-radius-md);
+  padding: 22px;
+  color: var(--wts-red);
+  background: var(--wts-red-soft);
+}
+
+.error p {
+  margin: 0;
+}
+
+.menuContent {
+  z-index: 130;
+  min-width: 210px;
+  border: 1px solid var(--wts-line-strong);
+  border-radius: var(--wts-radius-sm);
+  padding: 6px;
+  background: var(--wts-surface);
+  box-shadow: var(--wts-shadow-md);
+}
+
+.menuItem {
+  display: flex;
+  min-height: 34px;
+  align-items: center;
+  gap: 8px;
+  border-radius: var(--wts-radius-sm);
+  padding: 0 9px;
+  color: var(--wts-ink);
+  outline: none;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.menuItem[data-highlighted] {
+  color: var(--wts-blue);
+  background: var(--wts-blue-soft);
+}
+
+.linkList {
+  display: flex;
+  flex-direction: column;
+}
+
+.linkTableHeader,
+.linkRow {
+  display: grid;
+  grid-template-columns: minmax(280px, 1.6fr) minmax(110px, 0.6fr) minmax(120px, 0.7fr) 34px;
+  align-items: center;
+  min-width: 0;
+  column-gap: 12px;
+}
+
+.linkTableHeader {
+  min-height: 27px;
+  padding: 0 11px;
+  color: var(--wts-faint);
+  background: var(--wts-surface-subtle);
+  border-bottom: 1px solid var(--wts-line);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+}
+
+.linkGroup {
+  border-bottom: 1px solid var(--wts-line);
+}
+
+.linkGroup:last-child {
+  border-bottom: 0;
+}
+
+.linkRow {
+  min-height: 42px;
+  padding: 4px 11px;
+  color: var(--wts-muted);
+  font-size: 12px;
+}
+
+.issueCell {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+}
+
+.issueCopy {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+}
+
+.issueCopy strong {
+  color: var(--wts-faint);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.jiraBadge {
+  display: inline-grid;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 auto;
+  border-radius: 5px;
+  padding: 0;
+  font-size: 11px;
+  font-weight: 750;
+  place-items: center;
+}
+
+.jiraBadge {
+  color: var(--wts-blue);
+  background: var(--wts-blue-soft);
+}
+
+.issueSummary,
+.issueTitle {
+  overflow: hidden;
+  margin: 1px 0 0;
+  color: var(--wts-ink);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.issueTitle {
+  display: inline-flex;
+  width: fit-content;
+  max-width: 100%;
+  align-items: center;
+  gap: 5px;
+  text-decoration: none;
+}
+
+.issueTitle:hover,
+.issueTitle:focus-visible {
+  color: var(--wts-blue);
+}
+
+.issueTitle svg {
+  flex: 0 0 auto;
+}
+
+.roleCell {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.statusCell {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+}
+
+.statusCell > span {
+  overflow: hidden;
+  max-width: 100%;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.deliveryStatus {
+  color: var(--wts-blue);
+  font-size: 11px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.rowActions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.rowMoreButton {
+  display: inline-grid;
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: 5px;
+  padding: 0;
+  color: var(--wts-muted);
+  background: transparent;
+  cursor: pointer;
+  place-items: center;
+}
+
+.rowMoreButton:hover,
+.rowMoreButton:focus-visible {
+  color: var(--wts-ink);
+  background: var(--wts-surface-hover);
+}
+
+.linkButton {
+  min-height: auto;
+  border: 0;
+  padding: 0;
+  color: var(--wts-blue);
+  background: transparent;
+  font: inherit;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.actionRow {
+  gap: 9px;
+}
+
+.unlinkConfirm {
+  display: grid;
+  gap: 8px;
+  padding: 10px 11px;
+  color: var(--wts-muted);
+  background: var(--wts-surface-subtle);
+  border-top: 1px solid var(--wts-line);
+  font-size: 13px;
+}
+
+.unlinkConfirm label {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.unlinkConfirm p {
+  margin: 0;
+  color: var(--wts-red);
+}
+
+.addPanel,
+.proposalSection {
+  display: grid;
+  gap: 16px;
+  margin: 12px;
+  border: 1px solid var(--wts-line);
+  border-radius: var(--wts-radius-md);
+  padding: 20px;
+  background: var(--wts-surface-subtle);
+}
+
+.proposalSection {
+  gap: 12px;
+  padding: 16px;
+}
+
+.formGrid {
+  display: grid;
+  grid-template-columns: minmax(240px, 1fr) auto;
+  gap: 16px;
+  align-items: end;
+}
+
+.formGrid > label,
+.proposal label {
+  display: grid;
+  gap: 7px;
+  color: var(--wts-muted);
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.formGrid input[type="text"],
+.formGrid > label input,
+.proposal input,
+.proposal textarea {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid var(--wts-line-strong);
+  border-radius: var(--wts-radius-sm);
+  padding: 10px 12px;
+  color: var(--wts-ink);
+  background: var(--wts-surface);
+  font: inherit;
+}
+
+.formGrid fieldset {
+  display: flex;
+  gap: 14px;
+  min-height: 41px;
+  box-sizing: border-box;
+  margin: 0;
+  border: 1px solid var(--wts-line);
+  border-radius: var(--wts-radius-sm);
+  padding: 9px 12px;
+}
+
+.formGrid legend {
+  padding: 0 4px;
+  color: var(--wts-faint);
+  font-size: 11px;
+}
+
+.formGrid fieldset label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.preview {
+  display: grid;
+  gap: 12px;
+  border: 1px solid color-mix(in srgb, var(--wts-blue) 52%, var(--wts-line));
+  border-radius: var(--wts-radius-md);
+  padding: 18px;
+  background: color-mix(in srgb, var(--wts-surface) 92%, var(--wts-blue-soft));
+}
+
+.preview header > div {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.preview h5 {
+  font-size: 16px;
+}
+
+.status {
+  width: fit-content;
+  margin: 0;
+  border-radius: 999px;
+  padding: 4px 9px;
+  color: var(--wts-green);
+  background: var(--wts-green-soft);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.preview pre {
+  max-height: 320px;
+  overflow: auto;
+  margin: 0;
+  border: 1px solid var(--wts-line);
+  border-radius: var(--wts-radius-sm);
+  padding: 14px;
+  color: var(--wts-ink);
+  background: var(--wts-canvas);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+
+.actionRow {
+  flex-wrap: wrap;
+}
+
+.actionRow span {
+  color: var(--wts-faint);
+  font-size: 12px;
+}
+
+.errorText {
+  margin: 0;
+  color: var(--wts-red);
+  font-size: 13px;
+}
+
+.proposalSection {
+  border-color: var(--wts-line);
+  background: var(--wts-surface-subtle);
+}
+
+.proposal {
+  display: grid;
+  gap: 10px;
+}
+
+.proposal textarea {
+  resize: vertical;
+  line-height: 1.5;
+}
+
+.proposalNote {
+  margin: 0 !important;
+  border-left: 2px solid var(--wts-line-strong);
+  padding: 6px 10px;
+  color: var(--wts-muted);
+  font-size: 13px;
+}
+
+.proposalSection > .secondaryButton,
+.proposal > .secondaryButton {
+  justify-self: start;
+}
+
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+textarea:focus-visible {
+  outline: 2px solid var(--wts-blue);
+  outline-offset: 2px;
+}
+
+@media (max-width: 720px) {
+  .panel {
+    padding: 0;
+  }
+
+  .header,
+  .subhead {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .panel[data-compact] .header > div:first-child {
+    display: block;
+  }
+
+  .linkList {
+    overflow-x: auto;
+  }
+
+  .linkTableHeader,
+  .linkRow {
+    width: 620px;
+    grid-template-columns: minmax(280px, 1.6fr) minmax(110px, 0.6fr) minmax(120px, 0.7fr) 34px;
+  }
+
+  .formGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .unlinkConfirm {
+    max-width: none;
+    border-left: 0;
+  }
+}

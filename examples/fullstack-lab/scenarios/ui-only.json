@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 1,
+  "id": "ui-only",
+  "issue": "UI-101",
+  "title": "Clarify the checkout action",
+  "repositories": ["storefront-ui"],
+  "briefFile": "scenarios/ui-only.md",
+  "acceptance": [
+    {
+      "repository": "storefront-ui",
+      "source": "acceptance/ui-only/wts_ui_101.test.js",
+      "target": "test/wts_ui_101.test.js"
+    }
+  ],
+  "checks": [
+    {
+      "id": "ui-tests",
+      "label": "Storefront UI tests",
+      "repository": "storefront-ui",
+      "executable": "node",
+      "args": ["--test"]
+    }
+  ],
+  "referenceChanges": [
+    {
+      "repository": "storefront-ui",
+      "path": "src/checkout.js",
+      "find": "Submit order",
+      "replace": "Place order"
+    }
+  ],
+  "expectedChangedSources": ["storefront-ui:src/checkout.js"]
+}

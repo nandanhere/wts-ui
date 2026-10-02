@@ -1,0 +1,1305 @@
+{
+  "schemaVersion": 1,
+  "date": "2026-09-19",
+  "reports": [
+    {
+      "phase": "baseline",
+      "artifact": "/tmp/wts-workspace-performance-baseline/workspace-performance-100--c4b1a-local-and-report-board-cost-chromium/workspace-performance.json",
+      "machine": {
+        "platform": "darwin",
+        "release": "24.6.0",
+        "cpu": "Apple M1 Pro",
+        "logicalCpus": 10,
+        "memoryBytes": 17179869184,
+        "node": "v22.13.1",
+        "browser": "149.0.7827.55"
+      },
+      "conditions": "One Chromium worker. Full App with Vite development modules. All API reads use seeded fixtures with 80 ms delay. Writes fail. Timings include browser automation observation and two animation frames. These are local upper-bound observations, not native paint or backend measurements.",
+      "workspaceCount": 100,
+      "measurements": {
+        "boardReadyMs": 1547,
+        "startupRequests": {
+          "/api/v1/bootstrap": 1,
+          "/api/v1/agent-conversations": 2,
+          "/api/v1/reviews/github": 2,
+          "/api/v1/reviews/gitlab": 2,
+          "/api/v1/workspaces": 2,
+          "/api/v1/setup": 2,
+          "/api/v1/repositories": 2,
+          "/api/v1/agent-sessions": 1,
+          "/api/v1/workspaces/:id/merge-requests/gitlab": 100
+        },
+        "startupMaxActiveRequests": 101,
+        "searchMs": 53,
+        "minuteRefreshRequests": {
+          "/api/v1/agent-conversations": 1,
+          "/api/v1/reviews/github": 1,
+          "/api/v1/reviews/gitlab": 1,
+          "/api/v1/workspaces/:id/merge-requests/gitlab": 100
+        }
+      },
+      "browser": {
+        "interactions": [],
+        "longTasks": [
+          354,
+          200,
+          67,
+          66,
+          74,
+          161,
+          215,
+          103
+        ],
+        "layoutShifts": [
+          0.018464583467292527
+        ]
+      },
+      "requestCounts": {
+        "/api/v1/bootstrap": 1,
+        "/api/v1/agent-conversations": 3,
+        "/api/v1/reviews/github": 3,
+        "/api/v1/reviews/gitlab": 3,
+        "/api/v1/workspaces": 2,
+        "/api/v1/setup": 2,
+        "/api/v1/repositories": 2,
+        "/api/v1/agent-sessions": 1,
+        "/api/v1/workspaces/:id/merge-requests/gitlab": 200
+      },
+      "maxActiveRequests": 103,
+      "unexpected": [],
+      "errors": []
+    },
+    {
+      "phase": "baseline",
+      "artifact": "/tmp/wts-workspace-performance-baseline/workspace-performance-30-m-d7ff4-local-and-report-board-cost-chromium/workspace-performance.json",
+      "machine": {
+        "platform": "darwin",
+        "release": "24.6.0",
+        "cpu": "Apple M1 Pro",
+        "logicalCpus": 10,
+        "memoryBytes": 17179869184,
+        "node": "v22.13.1",
+        "browser": "149.0.7827.55"
+      },
+      "conditions": "One Chromium worker. Full App with Vite development modules. All API reads use seeded fixtures with 80 ms delay. Writes fail. Timings include browser automation observation and two animation frames. These are local upper-bound observations, not native paint or backend measurements.",
+      "workspaceCount": 30,
+      "measurements": {
+        "boardReadyMs": 1296,
+        "startupRequests": {
+          "/api/v1/bootstrap": 1,
+          "/api/v1/agent-conversations": 2,
+          "/api/v1/reviews/github": 2,
+          "/api/v1/reviews/gitlab": 2,
+          "/api/v1/workspaces": 2,
+          "/api/v1/setup": 2,
+          "/api/v1/repositories": 2,
+          "/api/v1/agent-sessions": 1,
+          "/api/v1/workspaces/:id/merge-requests/gitlab": 30
+        },
+        "startupMaxActiveRequests": 31,
+        "searchMs": 33,
+        "minuteRefreshRequests": {
+          "/api/v1/agent-conversations": 1,
+          "/api/v1/reviews/github": 1,
+          "/api/v1/reviews/gitlab": 1,
+          "/api/v1/workspaces/:id/merge-requests/gitlab": 30
+        }
+      },
+      "browser": {
+        "interactions": [],
+        "longTasks": [
+          155,
+          111,
+          92,
+          54,
+          104,
+          83
+        ],
+        "layoutShifts": [
+          0.018464583467292527
+        ]
+      },
+      "requestCounts": {
+        "/api/v1/bootstrap": 1,
+        "/api/v1/agent-conversations": 3,
+        "/api/v1/reviews/github": 3,
+        "/api/v1/reviews/gitlab": 3,
+        "/api/v1/workspaces": 2,
+        "/api/v1/setup": 2,
+        "/api/v1/repositories": 2,
+        "/api/v1/agent-sessions": 1,
+        "/api/v1/workspaces/:id/merge-requests/gitlab": 60
+      },
+      "maxActiveRequests": 33,
+      "unexpected": [],
+      "errors": []
+    },
+    {
+      "phase": "baseline",
+      "artifact": "/tmp/wts-workspace-performance-baseline/workspace-performance-5-ma-96115-local-and-report-board-cost-chromium/workspace-performance.json",
+      "machine": {
+        "platform": "darwin",
+        "release": "24.6.0",
+        "cpu": "Apple M1 Pro",
+        "logicalCpus": 10,
+        "memoryBytes": 17179869184,
+        "node": "v22.13.1",
+        "browser": "149.0.7827.55"
+      },
+      "conditions": "One Chromium worker. Full App with Vite development modules. All API reads use seeded fixtures with 80 ms delay. Writes fail. Timings include browser automation observation and two animation frames. These are local upper-bound observations, not native paint or backend measurements.",
+      "workspaceCount": 5,
+      "measurements": {
+        "boardReadyMs": 4922,
+        "startupRequests": {
+          "/api/v1/bootstrap": 1,
+          "/api/v1/agent-conversations": 2,
+          "/api/v1/reviews/github": 2,
+          "/api/v1/reviews/gitlab": 2,
+          "/api/v1/workspaces": 2,
+          "/api/v1/setup": 2,
+          "/api/v1/repositories": 2,
+          "/api/v1/agent-sessions": 1,
+          "/api/v1/workspaces/:id/merge-requests/gitlab": 5
+        },
+        "startupMaxActiveRequests": 10,
+        "searchMs": 27,
+        "minuteRefreshRequests": {
+          "/api/v1/agent-conversations": 1,
+          "/api/v1/reviews/github": 1,
+          "/api/v1/reviews/gitlab": 1,
+          "/api/v1/workspaces/:id/merge-requests/gitlab": 5
+        }
+      },
+      "browser": {
+        "interactions": [],
+        "longTasks": [
+          68,
+          170,
+          54,
+          50,
+          50
+        ],
+        "layoutShifts": [
+          0.018464583467292527
+        ]
+      },
+      "requestCounts": {
+        "/api/v1/bootstrap": 1,
+        "/api/v1/agent-conversations": 3,
+        "/api/v1/reviews/github": 3,
+        "/api/v1/reviews/gitlab": 3,
+        "/api/v1/workspaces": 2,
+        "/api/v1/setup": 2,
+        "/api/v1/repositories": 2,
+        "/api/v1/agent-sessions": 1,
+        "/api/v1/workspaces/:id/merge-requests/gitlab": 10
+      },
+      "maxActiveRequests": 10,
+      "unexpected": [],
+      "errors": []
+    },
+    {
+      "phase": "baseline",
+      "artifact": "/tmp/wts-workspace-performance-baseline/workspace-performance-five-8b210--before-status-reads-finish-chromium/workspace-performance.json",
+      "machine": {
+        "platform": "darwin",
+        "release": "24.6.0",
+        "cpu": "Apple M1 Pro",
+        "logicalCpus": 10,
+        "memoryBytes": 17179869184,
+        "node": "v22.13.1",
+        "browser": "149.0.7827.55"
+      },
+      "conditions": "One Chromium worker. Full App with Vite development modules. All API reads use seeded fixtures with 80 ms delay. Writes fail. Timings include browser automation observation and two animation frames. These are local upper-bound observations, not native paint or backend measurements.",
+      "workspaceCount": 5,
+      "measurements": {
+        "warmupRequests": {
+          "/api/v1/bootstrap": 1,
+          "/api/v1/agent-conversations": 2,
+          "/api/v1/reviews/github": 2,
+          "/api/v1/reviews/gitlab": 2,
+          "/api/v1/workspaces": 2,
+          "/api/v1/setup": 2,
+          "/api/v1/repositories": 2,
+          "/api/v1/agent-sessions": 21,
+          "/api/v1/workspaces/:id/merge-requests/gitlab": 35,
+          "/api/v1/workspaces/:id/work-items": 10,
+          "/api/v1/workspaces/:id/materialization": 5
+        },
+        "cachedReturnRequests": {
+          "/api/v1/workspaces/:id/work-items": 20,
+          "/api/v1/agent-sessions": 40,
+          "/api/v1/workspaces/:id/merge-requests/gitlab": 60,
+          "/api/v1/workspaces/:id/materialization": 10
+        }
+      },
+      "browser": {
+        "interactions": [
+          {
+            "label": "cold workspace 1",
+            "durationMs": 393
+          },
+          {
+            "label": "cold workspace 2",
+            "durationMs": 259
+          },
+          {
+            "label": "cold workspace 3",
+            "durationMs": 298
+          },
+          {
+            "label": "cold workspace 4",
+            "durationMs": 236
+          },
+          {
+            "label": "cold workspace 5",
+            "durationMs": 234
+          },
+          {
+            "label": "cached workspace 1, cycle 1",
+            "durationMs": 95
+          },
+          {
+            "label": "cached workspace 2, cycle 1",
+            "durationMs": 63
+          },
+          {
+            "label": "cached workspace 3, cycle 1",
+            "durationMs": 63
+          },
+          {
+            "label": "cached workspace 4, cycle 1",
+            "durationMs": 58
+          },
+          {
+            "label": "cached workspace 5, cycle 1",
+            "durationMs": 69
+          },
+          {
+            "label": "cached workspace 1, cycle 2",
+            "durationMs": 59
+          },
+          {
+            "label": "cached workspace 2, cycle 2",
+            "durationMs": 61
+          },
+          {
+            "label": "cached workspace 3, cycle 2",
+            "durationMs": 79
+          },
+          {
+            "label": "cached workspace 4, cycle 2",
+            "durationMs": 48
+          },
+          {
+            "label": "cached workspace 5, cycle 2",
+            "durationMs": 88
+          }
+        ],
+        "longTasks": [
+          106,
+          131,
+          92,
+          161,
+          78,
+          116,
+          65,
+          50,
+          83,
+          104,
+          154,
+          50,
+          60,
+          50,
+          50,
+          69
+        ],
+        "layoutShifts": [
+          0.018464583467292527
+        ]
+      },
+      "requestCounts": {
+        "/api/v1/bootstrap": 1,
+        "/api/v1/agent-conversations": 2,
+        "/api/v1/reviews/github": 2,
+        "/api/v1/reviews/gitlab": 2,
+        "/api/v1/workspaces": 2,
+        "/api/v1/setup": 2,
+        "/api/v1/repositories": 2,
+        "/api/v1/agent-sessions": 61,
+        "/api/v1/workspaces/:id/merge-requests/gitlab": 95,
+        "/api/v1/workspaces/:id/work-items": 30,
+        "/api/v1/workspaces/:id/materialization": 15
+      },
+      "maxActiveRequests": 10,
+      "unexpected": [],
+      "errors": []
+    },
+    {
+      "phase": "intermediate",
+      "artifact": "/tmp/wts-workspace-performance-after/workspace-performance-100--c4b1a-local-and-report-board-cost-chromium/workspace-performance.json",
+      "machine": {
+        "platform": "darwin",
+        "release": "24.6.0",
+        "cpu": "Apple M1 Pro",
+        "logicalCpus": 10,
+        "memoryBytes": 17179869184,
+        "node": "v22.13.1",
+        "browser": "149.0.7827.55"
+      },
+      "conditions": "One Chromium worker. Full App with Vite development modules. All API reads use seeded fixtures with 80 ms delay. Writes fail. Timings include browser automation observation and two animation frames. These are local upper-bound observations, not native paint or backend measurements.",
+      "workspaceCount": 100,
+      "measurements": {
+        "boardReadyMs": 2135,
+        "startupRequests": {
+          "/api/v1/bootstrap": 1,
+          "/api/v1/agent-conversations": 3,
+          "/api/v1/reviews/github": 2,
+          "/api/v1/reviews/gitlab": 2,
+          "/api/v1/workspaces": 2,
+          "/api/v1/setup": 2,
+          "/api/v1/repositories": 2,
+          "/api/v1/agent-sessions": 1,
+          "/api/v1/workspaces/:id/verification/summary": 14,
+          "/api/v1/workspaces/:id/merge-requests/gitlab": 13
+        },
+        "startupMaxActiveRequests": 10,
+        "searchMs": 1452
+      },
+      "browser": {
+        "interactions": [],
+        "longTasks": [
+          330,
+          205,
+          82,
+          79,
+          72,
+          73,
+          83,
+          72,
+          73,
+          72,
+          69,
+          73,
+          197,
+          70,
+          81,
+          76,
+          70,
+          86,
+          77,
+          70,
+          80,
+          80,
+          77,
+          75,
+          191,
+          78,
+          75,
+          73,
+          82,
+          76,
+          68,
+          84,
+          77,
+          80,
+          75,
+          69,
+          215,
+          73,
+          77,
+          73,
+          69,
+          79,
+          74,
+          71,
+          81,
+          72,
+          68,
+          74,
+          203,
+          77,
+          85,
+          77,
+          87,
+          76,
+          84,
+          76,
+          85,
+          80,
+          89,
+          216,
+          81,
+          76,
+          84,
+          77,
+          74,
+          79,
+          80,
+          78,
+          81,
+          76,
+          216,
+          80,
+          75,
+          95,
+          81
+        ],
+        "layoutShifts": [
+          0.029133169635202332,
+          0.03647530864197531
+        ]
+      },
+      "requestCounts": {
+        "/api/v1/bootstrap": 1,
+        "/api/v1/agent-conversations": 3,
+        "/api/v1/reviews/github": 2,
+        "/api/v1/reviews/gitlab": 2,
+        "/api/v1/workspaces": 2,
+        "/api/v1/setup": 2,
+        "/api/v1/repositories": 2,
+        "/api/v1/agent-sessions": 1,
+        "/api/v1/workspaces/:id/verification/summary": 96,
+        "/api/v1/workspaces/:id/merge-requests/gitlab": 96
+      },
+      "maxActiveRequests": 10,
+      "unexpected": [],
+      "errors": []
+    },
+    {
+      "phase": "intermediate",
+      "artifact": "/tmp/wts-workspace-performance-after/workspace-performance-30-m-d7ff4-local-and-report-board-cost-chromium/workspace-performance.json",
+      "machine": {
+        "platform": "darwin",
+        "release": "24.6.0",
+        "cpu": "Apple M1 Pro",
+        "logicalCpus": 10,
+        "memoryBytes": 17179869184,
+        "node": "v22.13.1",
+        "browser": "149.0.7827.55"
+      },
+      "conditions": "One Chromium worker. Full App with Vite development modules. All API reads use seeded fixtures with 80 ms delay. Writes fail. Timings include browser automation observation and two animation frames. These are local upper-bound observations, not native paint or backend measurements.",
+      "workspaceCount": 30,
+      "measurements": {
+        "boardReadyMs": 1415,
+        "startupRequests": {
+          "/api/v1/bootstrap": 1,
+          "/api/v1/agent-conversations": 3,
+          "/api/v1/reviews/github": 2,
+          "/api/v1/reviews/gitlab": 2,
+          "/api/v1/workspaces": 2,
+          "/api/v1/setup": 2,
+          "/api/v1/repositories": 2,
+          "/api/v1/agent-sessions": 1,
+          "/api/v1/workspaces/:id/verification/summary": 30,
+          "/api/v1/workspaces/:id/merge-requests/gitlab": 30
+        },
+        "startupMaxActiveRequests": 10,
+        "searchMs": 70,
+        "minuteRefreshRequests": {
+          "/api/v1/agent-conversations": 2,
+          "/api/v1/reviews/github": 1,
+          "/api/v1/reviews/gitlab": 1,
+          "/api/v1/workspaces/:id/verification/summary": 30,
+          "/api/v1/workspaces/:id/merge-requests/gitlab": 30
+        }
+      },
+      "browser": {
+        "interactions": [],
+        "longTasks": [
+          139,
+          124,
+          84,
+          107,
+          69,
+          99,
+          74,
+          113,
+          96,
+          114,
+          66,
+          104,
+          70,
+          107,
+          77
+        ],
+        "layoutShifts": [
+          0.029133169635202332,
+          3.094216177983539e-05
+        ]
+      },
+      "requestCounts": {
+        "/api/v1/bootstrap": 1,
+        "/api/v1/agent-conversations": 5,
+        "/api/v1/reviews/github": 3,
+        "/api/v1/reviews/gitlab": 3,
+        "/api/v1/workspaces": 2,
+        "/api/v1/setup": 2,
+        "/api/v1/repositories": 2,
+        "/api/v1/agent-sessions": 1,
+        "/api/v1/workspaces/:id/verification/summary": 60,
+        "/api/v1/workspaces/:id/merge-requests/gitlab": 60
+      },
+      "maxActiveRequests": 10,
+      "unexpected": [],
+      "errors": []
+    },
+    {
+      "phase": "intermediate",
+      "artifact": "/tmp/wts-workspace-performance-after/workspace-performance-5-ma-96115-local-and-report-board-cost-chromium/workspace-performance.json",
+      "machine": {
+        "platform": "darwin",
+        "release": "24.6.0",
+        "cpu": "Apple M1 Pro",
+        "logicalCpus": 10,
+        "memoryBytes": 17179869184,
+        "node": "v22.13.1",
+        "browser": "149.0.7827.55"
+      },
+      "conditions": "One Chromium worker. Full App with Vite development modules. All API reads use seeded fixtures with 80 ms delay. Writes fail. Timings include browser automation observation and two animation frames. These are local upper-bound observations, not native paint or backend measurements.",
+      "workspaceCount": 5,
+      "measurements": {
+        "boardReadyMs": 5165,
+        "startupRequests": {
+          "/api/v1/bootstrap": 1,
+          "/api/v1/agent-conversations": 3,
+          "/api/v1/reviews/github": 2,
+          "/api/v1/reviews/gitlab": 2,
+          "/api/v1/workspaces": 2,
+          "/api/v1/setup": 2,
+          "/api/v1/repositories": 2,
+          "/api/v1/agent-sessions": 1,
+          "/api/v1/workspaces/:id/verification/summary": 5,
+          "/api/v1/workspaces/:id/merge-requests/gitlab": 5
+        },
+        "startupMaxActiveRequests": 10,
+        "searchMs": 64,
+        "minuteRefreshRequests": {
+          "/api/v1/agent-conversations": 2,
+          "/api/v1/reviews/github": 1,
+          "/api/v1/reviews/gitlab": 1,
+          "/api/v1/workspaces/:id/verification/summary": 4,
+          "/api/v1/workspaces/:id/merge-requests/gitlab": 3
+        }
+      },
+      "browser": {
+        "interactions": [],
+        "longTasks": [
+          57,
+          106,
+          59,
+          91,
+          53,
+          51,
+          52
+        ],
+        "layoutShifts": [
+          0.029133169635202332
+        ]
+      },
+      "requestCounts": {
+        "/api/v1/bootstrap": 1,
+        "/api/v1/agent-conversations": 5,
+        "/api/v1/reviews/github": 3,
+        "/api/v1/reviews/gitlab": 3,
+        "/api/v1/workspaces": 2,
+        "/api/v1/setup": 2,
+        "/api/v1/repositories": 2,
+        "/api/v1/agent-sessions": 1,
+        "/api/v1/workspaces/:id/verification/summary": 9,
+        "/api/v1/workspaces/:id/merge-requests/gitlab": 8
+      },
+      "maxActiveRequests": 10,
+      "unexpected": [],
+      "errors": []
+    },
+    {
+      "phase": "intermediate",
+      "artifact": "/tmp/wts-workspace-performance-after/workspace-performance-five-8b210--before-status-reads-finish-chromium/workspace-performance.json",
+      "machine": {
+        "platform": "darwin",
+        "release": "24.6.0",
+        "cpu": "Apple M1 Pro",
+        "logicalCpus": 10,
+        "memoryBytes": 17179869184,
+        "node": "v22.13.1",
+        "browser": "149.0.7827.55"
+      },
+      "conditions": "One Chromium worker. Full App with Vite development modules. All API reads use seeded fixtures with 80 ms delay. Writes fail. Timings include browser automation observation and two animation frames. These are local upper-bound observations, not native paint or backend measurements.",
+      "workspaceCount": 5,
+      "measurements": {
+        "warmupRequests": {
+          "/api/v1/bootstrap": 1,
+          "/api/v1/agent-conversations": 3,
+          "/api/v1/reviews/github": 2,
+          "/api/v1/reviews/gitlab": 2,
+          "/api/v1/workspaces": 2,
+          "/api/v1/setup": 2,
+          "/api/v1/repositories": 2,
+          "/api/v1/agent-sessions": 11,
+          "/api/v1/workspaces/:id/verification/summary": 5,
+          "/api/v1/workspaces/:id/merge-requests/gitlab": 5,
+          "/api/v1/workspaces/:id/work-items": 10,
+          "/api/v1/workspaces/:id/materialization": 5
+        },
+        "cachedReturnRequests": {
+          "/api/v1/workspaces/:id/work-items": 20,
+          "/api/v1/agent-sessions": 21,
+          "/api/v1/workspaces/:id/materialization": 10
+        }
+      },
+      "browser": {
+        "interactions": [
+          {
+            "label": "cold workspace 1",
+            "durationMs": 186
+          },
+          {
+            "label": "cold workspace 2",
+            "durationMs": 241
+          },
+          {
+            "label": "cold workspace 3",
+            "durationMs": 370
+          },
+          {
+            "label": "cold workspace 4",
+            "durationMs": 238
+          },
+          {
+            "label": "cold workspace 5",
+            "durationMs": 303
+          },
+          {
+            "label": "cached workspace 1, cycle 1",
+            "durationMs": 60
+          },
+          {
+            "label": "cached workspace 2, cycle 1",
+            "durationMs": 65
+          },
+          {
+            "label": "cached workspace 3, cycle 1",
+            "durationMs": 61
+          },
+          {
+            "label": "cached workspace 4, cycle 1",
+            "durationMs": 62
+          },
+          {
+            "label": "cached workspace 5, cycle 1",
+            "durationMs": 67
+          },
+          {
+            "label": "cached workspace 1, cycle 2",
+            "durationMs": 63
+          },
+          {
+            "label": "cached workspace 2, cycle 2",
+            "durationMs": 61
+          },
+          {
+            "label": "cached workspace 3, cycle 2",
+            "durationMs": 65
+          },
+          {
+            "label": "cached workspace 4, cycle 2",
+            "durationMs": 62
+          },
+          {
+            "label": "cached workspace 5, cycle 2",
+            "durationMs": 61
+          }
+        ],
+        "longTasks": [
+          104,
+          55,
+          50,
+          53,
+          51,
+          157,
+          87,
+          119,
+          77,
+          139,
+          182,
+          177
+        ],
+        "layoutShifts": [
+          0.029133169635202332
+        ]
+      },
+      "requestCounts": {
+        "/api/v1/bootstrap": 1,
+        "/api/v1/agent-conversations": 3,
+        "/api/v1/reviews/github": 2,
+        "/api/v1/reviews/gitlab": 2,
+        "/api/v1/workspaces": 2,
+        "/api/v1/setup": 2,
+        "/api/v1/repositories": 2,
+        "/api/v1/agent-sessions": 32,
+        "/api/v1/workspaces/:id/verification/summary": 5,
+        "/api/v1/workspaces/:id/merge-requests/gitlab": 5,
+        "/api/v1/workspaces/:id/work-items": 30,
+        "/api/v1/workspaces/:id/materialization": 15
+      },
+      "maxActiveRequests": 10,
+      "unexpected": [],
+      "errors": []
+    },
+    {
+      "phase": "final_flow",
+      "artifact": "/tmp/wts-workspace-performance-final/workspace-performance-100--c4b1a-local-and-report-board-cost-chromium/workspace-performance.json",
+      "machine": {
+        "platform": "darwin",
+        "release": "24.6.0",
+        "cpu": "Apple M1 Pro",
+        "logicalCpus": 10,
+        "memoryBytes": 17179869184,
+        "node": "v22.13.1",
+        "browser": "149.0.7827.55"
+      },
+      "conditions": "One Chromium worker. Full App with Vite development modules. All API reads use seeded fixtures with 80 ms delay. Writes fail. Timings include browser automation observation and two animation frames. These are local upper-bound observations, not native paint or backend measurements.",
+      "workspaceCount": 100,
+      "measurements": {
+        "boardReadyMs": 1438,
+        "attentionReadyMs": 5872,
+        "startupRequests": {
+          "/api/v1/bootstrap": 1,
+          "/api/v1/agent-conversations": 3,
+          "/api/v1/reviews/github": 2,
+          "/api/v1/reviews/gitlab": 2,
+          "/api/v1/workspaces": 2,
+          "/api/v1/setup": 2,
+          "/api/v1/repositories": 2,
+          "/api/v1/agent-sessions": 1,
+          "/api/v1/workspaces/:id/verification/summary": 96,
+          "/api/v1/workspaces/:id/merge-requests/gitlab": 96
+        },
+        "startupMaxActiveRequests": 10,
+        "searchMs": 58,
+        "minuteRefreshRequests": {
+          "/api/v1/agent-conversations": 2,
+          "/api/v1/reviews/github": 1,
+          "/api/v1/reviews/gitlab": 1,
+          "/api/v1/workspaces/:id/verification/summary": 96,
+          "/api/v1/workspaces/:id/merge-requests/gitlab": 96
+        }
+      },
+      "browser": {
+        "interactions": [],
+        "longTasks": [
+          308,
+          201,
+          68,
+          197,
+          172,
+          81,
+          159,
+          51
+        ],
+        "layoutShifts": [
+          0.029133169635202332,
+          3.094216177983539e-05
+        ]
+      },
+      "requestCounts": {
+        "/api/v1/bootstrap": 1,
+        "/api/v1/agent-conversations": 5,
+        "/api/v1/reviews/github": 3,
+        "/api/v1/reviews/gitlab": 3,
+        "/api/v1/workspaces": 2,
+        "/api/v1/setup": 2,
+        "/api/v1/repositories": 2,
+        "/api/v1/agent-sessions": 1,
+        "/api/v1/workspaces/:id/verification/summary": 192,
+        "/api/v1/workspaces/:id/merge-requests/gitlab": 192
+      },
+      "maxActiveRequests": 10,
+      "unexpected": [],
+      "errors": []
+    },
+    {
+      "phase": "final_flow",
+      "artifact": "/tmp/wts-workspace-performance-final/workspace-performance-30-m-d7ff4-local-and-report-board-cost-chromium/workspace-performance.json",
+      "machine": {
+        "platform": "darwin",
+        "release": "24.6.0",
+        "cpu": "Apple M1 Pro",
+        "logicalCpus": 10,
+        "memoryBytes": 17179869184,
+        "node": "v22.13.1",
+        "browser": "149.0.7827.55"
+      },
+      "conditions": "One Chromium worker. Full App with Vite development modules. All API reads use seeded fixtures with 80 ms delay. Writes fail. Timings include browser automation observation and two animation frames. These are local upper-bound observations, not native paint or backend measurements.",
+      "workspaceCount": 30,
+      "measurements": {
+        "boardReadyMs": 1214,
+        "attentionReadyMs": 2553,
+        "startupRequests": {
+          "/api/v1/bootstrap": 1,
+          "/api/v1/agent-conversations": 3,
+          "/api/v1/reviews/github": 2,
+          "/api/v1/reviews/gitlab": 2,
+          "/api/v1/workspaces": 2,
+          "/api/v1/setup": 2,
+          "/api/v1/repositories": 2,
+          "/api/v1/agent-sessions": 1,
+          "/api/v1/workspaces/:id/verification/summary": 30,
+          "/api/v1/workspaces/:id/merge-requests/gitlab": 30
+        },
+        "startupMaxActiveRequests": 10,
+        "searchMs": 70,
+        "minuteRefreshRequests": {
+          "/api/v1/agent-conversations": 2,
+          "/api/v1/reviews/github": 1,
+          "/api/v1/reviews/gitlab": 1,
+          "/api/v1/workspaces/:id/verification/summary": 4,
+          "/api/v1/workspaces/:id/merge-requests/gitlab": 3
+        }
+      },
+      "browser": {
+        "interactions": [],
+        "longTasks": [
+          144,
+          131,
+          83,
+          122
+        ],
+        "layoutShifts": [
+          0.029133169635202332
+        ]
+      },
+      "requestCounts": {
+        "/api/v1/bootstrap": 1,
+        "/api/v1/agent-conversations": 5,
+        "/api/v1/reviews/github": 3,
+        "/api/v1/reviews/gitlab": 3,
+        "/api/v1/workspaces": 2,
+        "/api/v1/setup": 2,
+        "/api/v1/repositories": 2,
+        "/api/v1/agent-sessions": 1,
+        "/api/v1/workspaces/:id/verification/summary": 34,
+        "/api/v1/workspaces/:id/merge-requests/gitlab": 33
+      },
+      "maxActiveRequests": 10,
+      "unexpected": [],
+      "errors": []
+    },
+    {
+      "phase": "final_flow",
+      "artifact": "/tmp/wts-workspace-performance-final/workspace-performance-5-ma-96115-local-and-report-board-cost-chromium/workspace-performance.json",
+      "machine": {
+        "platform": "darwin",
+        "release": "24.6.0",
+        "cpu": "Apple M1 Pro",
+        "logicalCpus": 10,
+        "memoryBytes": 17179869184,
+        "node": "v22.13.1",
+        "browser": "149.0.7827.55"
+      },
+      "conditions": "One Chromium worker. Full App with Vite development modules. All API reads use seeded fixtures with 80 ms delay. Writes fail. Timings include browser automation observation and two animation frames. These are local upper-bound observations, not native paint or backend measurements.",
+      "workspaceCount": 5,
+      "measurements": {
+        "boardReadyMs": 5415,
+        "attentionReadyMs": 5748,
+        "startupRequests": {
+          "/api/v1/bootstrap": 1,
+          "/api/v1/agent-conversations": 3,
+          "/api/v1/reviews/github": 2,
+          "/api/v1/reviews/gitlab": 2,
+          "/api/v1/workspaces": 2,
+          "/api/v1/setup": 2,
+          "/api/v1/repositories": 2,
+          "/api/v1/agent-sessions": 1,
+          "/api/v1/workspaces/:id/verification/summary": 5,
+          "/api/v1/workspaces/:id/merge-requests/gitlab": 5
+        },
+        "startupMaxActiveRequests": 10,
+        "searchMs": 68,
+        "minuteRefreshRequests": {
+          "/api/v1/agent-conversations": 2,
+          "/api/v1/reviews/github": 1,
+          "/api/v1/reviews/gitlab": 1,
+          "/api/v1/workspaces/:id/verification/summary": 4,
+          "/api/v1/workspaces/:id/merge-requests/gitlab": 3
+        }
+      },
+      "browser": {
+        "interactions": [],
+        "longTasks": [
+          63,
+          109,
+          58,
+          93,
+          53
+        ],
+        "layoutShifts": [
+          0.029133169635202332
+        ]
+      },
+      "requestCounts": {
+        "/api/v1/bootstrap": 1,
+        "/api/v1/agent-conversations": 5,
+        "/api/v1/reviews/github": 3,
+        "/api/v1/reviews/gitlab": 3,
+        "/api/v1/workspaces": 2,
+        "/api/v1/setup": 2,
+        "/api/v1/repositories": 2,
+        "/api/v1/agent-sessions": 1,
+        "/api/v1/workspaces/:id/verification/summary": 9,
+        "/api/v1/workspaces/:id/merge-requests/gitlab": 8
+      },
+      "maxActiveRequests": 10,
+      "unexpected": [],
+      "errors": []
+    },
+    {
+      "phase": "final_flow",
+      "artifact": "/tmp/wts-workspace-performance-final/workspace-performance-five-8b210--before-status-reads-finish-chromium/workspace-performance.json",
+      "machine": {
+        "platform": "darwin",
+        "release": "24.6.0",
+        "cpu": "Apple M1 Pro",
+        "logicalCpus": 10,
+        "memoryBytes": 17179869184,
+        "node": "v22.13.1",
+        "browser": "149.0.7827.55"
+      },
+      "conditions": "One Chromium worker. Full App with Vite development modules. All API reads use seeded fixtures with 80 ms delay. Writes fail. Timings include browser automation observation and two animation frames. These are local upper-bound observations, not native paint or backend measurements.",
+      "workspaceCount": 5,
+      "measurements": {
+        "warmupRequests": {
+          "/api/v1/bootstrap": 1,
+          "/api/v1/agent-conversations": 3,
+          "/api/v1/reviews/github": 2,
+          "/api/v1/reviews/gitlab": 2,
+          "/api/v1/workspaces": 2,
+          "/api/v1/setup": 2,
+          "/api/v1/repositories": 2,
+          "/api/v1/agent-sessions": 6,
+          "/api/v1/workspaces/:id/verification/summary": 5,
+          "/api/v1/workspaces/:id/merge-requests/gitlab": 5,
+          "/api/v1/workspaces/:id/work-items": 10,
+          "/api/v1/workspaces/:id/materialization": 5
+        },
+        "cachedReturnRequests": {
+          "/api/v1/workspaces/:id/work-items": 20,
+          "/api/v1/workspaces/:id/materialization": 10,
+          "/api/v1/agent-sessions": 1
+        }
+      },
+      "browser": {
+        "interactions": [
+          {
+            "label": "cold workspace 1",
+            "durationMs": 378
+          },
+          {
+            "label": "cold workspace 2",
+            "durationMs": 239
+          },
+          {
+            "label": "cold workspace 3",
+            "durationMs": 348
+          },
+          {
+            "label": "cold workspace 4",
+            "durationMs": 240
+          },
+          {
+            "label": "cold workspace 5",
+            "durationMs": 369
+          },
+          {
+            "label": "cached workspace 1, cycle 1",
+            "durationMs": 63
+          },
+          {
+            "label": "cached workspace 2, cycle 1",
+            "durationMs": 66
+          },
+          {
+            "label": "cached workspace 3, cycle 1",
+            "durationMs": 61
+          },
+          {
+            "label": "cached workspace 4, cycle 1",
+            "durationMs": 66
+          },
+          {
+            "label": "cached workspace 5, cycle 1",
+            "durationMs": 62
+          },
+          {
+            "label": "cached workspace 1, cycle 2",
+            "durationMs": 52
+          },
+          {
+            "label": "cached workspace 2, cycle 2",
+            "durationMs": 66
+          },
+          {
+            "label": "cached workspace 3, cycle 2",
+            "durationMs": 58
+          },
+          {
+            "label": "cached workspace 4, cycle 2",
+            "durationMs": 66
+          },
+          {
+            "label": "cached workspace 5, cycle 2",
+            "durationMs": 63
+          }
+        ],
+        "longTasks": [
+          80,
+          169,
+          85,
+          123,
+          135,
+          155,
+          89,
+          185,
+          179,
+          137
+        ],
+        "layoutShifts": [
+          0.029133169635202332
+        ]
+      },
+      "requestCounts": {
+        "/api/v1/bootstrap": 1,
+        "/api/v1/agent-conversations": 3,
+        "/api/v1/reviews/github": 2,
+        "/api/v1/reviews/gitlab": 2,
+        "/api/v1/workspaces": 2,
+        "/api/v1/setup": 2,
+        "/api/v1/repositories": 2,
+        "/api/v1/agent-sessions": 7,
+        "/api/v1/workspaces/:id/verification/summary": 5,
+        "/api/v1/workspaces/:id/merge-requests/gitlab": 5,
+        "/api/v1/workspaces/:id/work-items": 30,
+        "/api/v1/workspaces/:id/materialization": 15
+      },
+      "maxActiveRequests": 10,
+      "unexpected": [],
+      "errors": []
+    },
+    {
+      "phase": "final_complete_refresh",
+      "artifact": "/tmp/wts-workspace-performance-final-refresh/workspace-performance-100--c4b1a-local-and-report-board-cost-chromium/workspace-performance.json",
+      "machine": {
+        "platform": "darwin",
+        "release": "24.6.0",
+        "cpu": "Apple M1 Pro",
+        "logicalCpus": 10,
+        "memoryBytes": 17179869184,
+        "node": "v22.13.1",
+        "browser": "149.0.7827.55"
+      },
+      "conditions": "One Chromium worker. Full App with Vite development modules. All API reads use seeded fixtures with 80 ms delay. Writes fail. Timings include browser automation observation and two animation frames. These are local upper-bound observations, not native paint or backend measurements.",
+      "workspaceCount": 100,
+      "measurements": {
+        "boardReadyMs": 1488,
+        "attentionReadyMs": 5918,
+        "startupRequests": {
+          "/api/v1/bootstrap": 1,
+          "/api/v1/agent-conversations": 3,
+          "/api/v1/reviews/github": 2,
+          "/api/v1/reviews/gitlab": 2,
+          "/api/v1/workspaces": 2,
+          "/api/v1/setup": 2,
+          "/api/v1/repositories": 2,
+          "/api/v1/agent-sessions": 1,
+          "/api/v1/workspaces/:id/verification/summary": 96,
+          "/api/v1/workspaces/:id/merge-requests/gitlab": 96
+        },
+        "startupMaxActiveRequests": 10,
+        "searchMs": 126,
+        "minuteRefreshRequests": {
+          "/api/v1/agent-conversations": 2,
+          "/api/v1/reviews/github": 1,
+          "/api/v1/reviews/gitlab": 1,
+          "/api/v1/workspaces/:id/verification/summary": 96,
+          "/api/v1/workspaces/:id/merge-requests/gitlab": 96
+        }
+      },
+      "browser": {
+        "interactions": [],
+        "longTasks": [
+          339,
+          199,
+          67,
+          228,
+          278,
+          87,
+          157
+        ],
+        "layoutShifts": [
+          0.029133169635202332,
+          0.01098567869084362,
+          3.094216177983539e-05
+        ]
+      },
+      "requestCounts": {
+        "/api/v1/bootstrap": 1,
+        "/api/v1/agent-conversations": 5,
+        "/api/v1/reviews/github": 3,
+        "/api/v1/reviews/gitlab": 3,
+        "/api/v1/workspaces": 2,
+        "/api/v1/setup": 2,
+        "/api/v1/repositories": 2,
+        "/api/v1/agent-sessions": 1,
+        "/api/v1/workspaces/:id/verification/summary": 192,
+        "/api/v1/workspaces/:id/merge-requests/gitlab": 192
+      },
+      "maxActiveRequests": 10,
+      "unexpected": [],
+      "errors": []
+    },
+    {
+      "phase": "final_complete_refresh",
+      "artifact": "/tmp/wts-workspace-performance-final-refresh/workspace-performance-30-m-d7ff4-local-and-report-board-cost-chromium/workspace-performance.json",
+      "machine": {
+        "platform": "darwin",
+        "release": "24.6.0",
+        "cpu": "Apple M1 Pro",
+        "logicalCpus": 10,
+        "memoryBytes": 17179869184,
+        "node": "v22.13.1",
+        "browser": "149.0.7827.55"
+      },
+      "conditions": "One Chromium worker. Full App with Vite development modules. All API reads use seeded fixtures with 80 ms delay. Writes fail. Timings include browser automation observation and two animation frames. These are local upper-bound observations, not native paint or backend measurements.",
+      "workspaceCount": 30,
+      "measurements": {
+        "boardReadyMs": 1199,
+        "attentionReadyMs": 2551,
+        "startupRequests": {
+          "/api/v1/bootstrap": 1,
+          "/api/v1/agent-conversations": 3,
+          "/api/v1/reviews/github": 2,
+          "/api/v1/reviews/gitlab": 2,
+          "/api/v1/workspaces": 2,
+          "/api/v1/setup": 2,
+          "/api/v1/repositories": 2,
+          "/api/v1/agent-sessions": 1,
+          "/api/v1/workspaces/:id/verification/summary": 30,
+          "/api/v1/workspaces/:id/merge-requests/gitlab": 30
+        },
+        "startupMaxActiveRequests": 10,
+        "searchMs": 72,
+        "minuteRefreshRequests": {
+          "/api/v1/agent-conversations": 2,
+          "/api/v1/reviews/github": 1,
+          "/api/v1/reviews/gitlab": 1,
+          "/api/v1/workspaces/:id/verification/summary": 30,
+          "/api/v1/workspaces/:id/merge-requests/gitlab": 30
+        }
+      },
+      "browser": {
+        "interactions": [],
+        "longTasks": [
+          152,
+          126,
+          90,
+          125
+        ],
+        "layoutShifts": [
+          0.029133169635202332
+        ]
+      },
+      "requestCounts": {
+        "/api/v1/bootstrap": 1,
+        "/api/v1/agent-conversations": 5,
+        "/api/v1/reviews/github": 3,
+        "/api/v1/reviews/gitlab": 3,
+        "/api/v1/workspaces": 2,
+        "/api/v1/setup": 2,
+        "/api/v1/repositories": 2,
+        "/api/v1/agent-sessions": 1,
+        "/api/v1/workspaces/:id/verification/summary": 60,
+        "/api/v1/workspaces/:id/merge-requests/gitlab": 60
+      },
+      "maxActiveRequests": 10,
+      "unexpected": [],
+      "errors": []
+    },
+    {
+      "phase": "final_complete_refresh",
+      "artifact": "/tmp/wts-workspace-performance-final-refresh/workspace-performance-5-ma-96115-local-and-report-board-cost-chromium/workspace-performance.json",
+      "machine": {
+        "platform": "darwin",
+        "release": "24.6.0",
+        "cpu": "Apple M1 Pro",
+        "logicalCpus": 10,
+        "memoryBytes": 17179869184,
+        "node": "v22.13.1",
+        "browser": "149.0.7827.55"
+      },
+      "conditions": "One Chromium worker. Full App with Vite development modules. All API reads use seeded fixtures with 80 ms delay. Writes fail. Timings include browser automation observation and two animation frames. These are local upper-bound observations, not native paint or backend measurements.",
+      "workspaceCount": 5,
+      "measurements": {
+        "boardReadyMs": 3881,
+        "attentionReadyMs": 3941,
+        "startupRequests": {
+          "/api/v1/bootstrap": 1,
+          "/api/v1/agent-conversations": 3,
+          "/api/v1/reviews/github": 2,
+          "/api/v1/reviews/gitlab": 2,
+          "/api/v1/workspaces": 2,
+          "/api/v1/setup": 2,
+          "/api/v1/repositories": 2,
+          "/api/v1/agent-sessions": 1,
+          "/api/v1/workspaces/:id/verification/summary": 5,
+          "/api/v1/workspaces/:id/merge-requests/gitlab": 5
+        },
+        "startupMaxActiveRequests": 10,
+        "searchMs": 27,
+        "minuteRefreshRequests": {
+          "/api/v1/agent-conversations": 2,
+          "/api/v1/reviews/github": 1,
+          "/api/v1/reviews/gitlab": 1,
+          "/api/v1/workspaces/:id/verification/summary": 5,
+          "/api/v1/workspaces/:id/merge-requests/gitlab": 5
+        }
+      },
+      "browser": {
+        "interactions": [],
+        "longTasks": [
+          101,
+          52
+        ],
+        "layoutShifts": [
+          0.029133169635202332
+        ]
+      },
+      "requestCounts": {
+        "/api/v1/bootstrap": 1,
+        "/api/v1/agent-conversations": 5,
+        "/api/v1/reviews/github": 3,
+        "/api/v1/reviews/gitlab": 3,
+        "/api/v1/workspaces": 2,
+        "/api/v1/setup": 2,
+        "/api/v1/repositories": 2,
+        "/api/v1/agent-sessions": 1,
+        "/api/v1/workspaces/:id/verification/summary": 10,
+        "/api/v1/workspaces/:id/merge-requests/gitlab": 10
+      },
+      "maxActiveRequests": 10,
+      "unexpected": [],
+      "errors": []
+    }
+  ],
+  "cadenceValidation": {
+    "pollIntervalMs": 60000,
+    "freshCacheMs": 30000,
+    "noRefreshAtElapsedMs": 31000,
+    "completeRefreshAtElapsedMs": 61000,
+    "precedingSourceRejected": true,
+    "finalSourcePassed": true,
+    "timingsExcluded": true,
+    "redLog": "/tmp/wts-workspace-performance-cadence-red.log",
+    "greenLog": "/tmp/wts-workspace-performance-cadence-green.log"
+  }
+}

@@ -1,0 +1,46 @@
+{
+  "schemaVersion": 1,
+  "id": "api-worker",
+  "description": "An HTTP jobs API with an isolated filesystem-backed worker.",
+  "ports": [
+    {
+      "id": "api",
+      "environment": "JOBS_API_PORT",
+      "offset": 0
+    },
+    {
+      "id": "worker",
+      "environment": "JOBS_WORKER_PORT",
+      "offset": 1
+    }
+  ],
+  "processes": [
+    {
+      "id": "jobs-api",
+      "workingDirectory": "api",
+      "executable": "node",
+      "arguments": ["src/server.mjs"],
+      "dependencies": [],
+      "health": {
+        "port": "api",
+        "path": "/health"
+      }
+    },
+    {
+      "id": "jobs-worker",
+      "workingDirectory": "worker",
+      "executable": "node",
+      "arguments": ["src/worker.mjs"],
+      "dependencies": [],
+      "health": {
+        "port": "worker",
+        "path": "/health"
+      }
+    }
+  ],
+  "smoke": {
+    "workingDirectory": ".",
+    "executable": "node",
+    "arguments": ["smoke.mjs"]
+  }
+}

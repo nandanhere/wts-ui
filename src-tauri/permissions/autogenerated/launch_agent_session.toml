@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-launch-agent-session"
+description = "Enables the launch_agent_session command without any pre-configured scope."
+commands.allow = ["launch_agent_session"]
+
+[[permission]]
+identifier = "deny-launch-agent-session"
+description = "Denies the launch_agent_session command without any pre-configured scope."
+commands.deny = ["launch_agent_session"]

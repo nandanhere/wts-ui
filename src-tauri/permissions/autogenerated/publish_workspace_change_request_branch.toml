@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-publish-workspace-change-request-branch"
+description = "Enables the publish_workspace_change_request_branch command without any pre-configured scope."
+commands.allow = ["publish_workspace_change_request_branch"]
+
+[[permission]]
+identifier = "deny-publish-workspace-change-request-branch"
+description = "Denies the publish_workspace_change_request_branch command without any pre-configured scope."
+commands.deny = ["publish_workspace_change_request_branch"]

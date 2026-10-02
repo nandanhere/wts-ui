@@ -1,0 +1,17 @@
+#!/bin/sh
+# A fake Codex CLI for browser tests. It does not use the network.
+# It records its arguments, then prints one Raptik review as a Codex JSON event stream.
+record_dir="${WTS_E2E_AGENT_RECORD_DIR:-${TMPDIR:-/tmp}}"
+printf '%s\n' "$@" > "$record_dir/codex-review-args.txt"
+printf '%s\n' '{"type":"thread.started","thread_id":"e2e"}'
+printf '%s\n' '{"type":"turn.started"}'
+printf '%s\n' '{"type":"item.completed","item":{"id":"r1","type":"reasoning","text":"**Read the checkout diff first**"}}'
+printf '%s\n' '{"type":"item.started","item":{"id":"c1","type":"command_execution","command":"/bin/bash -lc '"'"'rg -n total src/checkout.js'"'"'","aggregated_output":"","exit_code":null,"status":"in_progress"}}'
+sleep "${WTS_E2E_REVIEW_STEP_DELAY:-2}"
+printf '%s\n' '{"type":"item.completed","item":{"id":"c1","type":"command_execution","command":"/bin/bash -lc '"'"'rg -n total src/checkout.js'"'"'","aggregated_output":"6:  return total\n","exit_code":0}}'
+printf '%s\n' '{"type":"item.completed","item":{"id":"m1","type":"agent_message","text":"The total format can fail for a missing order."}}'
+sleep "${WTS_E2E_REVIEW_STEP_DELAY:-2}"
+cat <<'JSON'
+{"type":"item.completed","item":{"type":"agent_message","text":"{\"intent\":\"Change the checkout button label and the total format.\",\"summary\":\"One Blocking item and one Nit. The total can show NaN for a missing order.\",\"findings\":[{\"label\":\"blocking\",\"repository\":\"storefront-ui\",\"filePath\":\"src/checkout.js\",\"line\":6,\"side\":\"additions\",\"title\":\"A missing total shows NaN\",\"why\":\"order.total undefined -> Number(undefined) -> NaN in the checkout total\",\"code\":\"Number(order.total).toFixed(2)\",\"suggestedComment\":\"Blocking: check that order.total is a number before you format it. A missing total shows NaN.\"},{\"label\":\"nit\",\"repository\":\"storefront-ui\",\"filePath\":\"src/checkout.js\",\"line\":2,\"side\":\"additions\",\"title\":\"Move the label to a constant\",\"why\":\"magic string in the button label\",\"suggestedComment\":\"Nit: move this magic value to a constant.\"}],\"suggestedTests\":[\"Format an order that has no total.\"],\"notChecked\":[\"Jira ticket\"]}"}}
+JSON
+printf '%s\n' '{"type":"turn.completed"}'

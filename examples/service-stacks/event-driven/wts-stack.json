@@ -1,0 +1,62 @@
+{
+  "schemaVersion": 1,
+  "id": "event-driven",
+  "description": "A command API, asynchronous event projector, and read API.",
+  "ports": [
+    {
+      "id": "command",
+      "environment": "COMMAND_API_PORT",
+      "offset": 0
+    },
+    {
+      "id": "projector",
+      "environment": "PROJECTOR_PORT",
+      "offset": 1
+    },
+    {
+      "id": "read",
+      "environment": "READ_API_PORT",
+      "offset": 2
+    }
+  ],
+  "processes": [
+    {
+      "id": "command-api",
+      "workingDirectory": "command-api",
+      "executable": "node",
+      "arguments": ["src/server.mjs"],
+      "dependencies": [],
+      "health": {
+        "port": "command",
+        "path": "/health"
+      }
+    },
+    {
+      "id": "projector",
+      "workingDirectory": "projector",
+      "executable": "node",
+      "arguments": ["src/projector.mjs"],
+      "dependencies": ["command-api"],
+      "health": {
+        "port": "projector",
+        "path": "/health"
+      }
+    },
+    {
+      "id": "read-api",
+      "workingDirectory": "read-api",
+      "executable": "node",
+      "arguments": ["src/server.mjs"],
+      "dependencies": ["projector"],
+      "health": {
+        "port": "read",
+        "path": "/health"
+      }
+    }
+  ],
+  "smoke": {
+    "workingDirectory": ".",
+    "executable": "node",
+    "arguments": ["smoke.mjs"]
+  }
+}
