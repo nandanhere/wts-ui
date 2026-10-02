@@ -1583,7 +1583,7 @@ export function normalizeWorkspaceCodeReviewResult(
   workspaceId: string,
 ): WorkspaceCodeReviewResult {
   if (!payload || typeof payload !== "object") {
-    throw new Error("WTS returned a code review that it cannot read.");
+    throw new Error("Received a code review that it cannot read.");
   }
   const raw = payload as Record<string, unknown>;
   const provider = CODE_REVIEW_PROVIDERS.includes(raw.provider as AgentProvider)
@@ -2313,6 +2313,14 @@ export interface ObservedAgentSession {
   mrLinkProposals?: AgentMrLinkProposal[];
   startedAtUnixMs: number;
   lastEventAtUnixMs: number;
+  /** Periods in which the agent worked on a turn. Waiting time is not included. */
+  workPeriods?: AgentWorkPeriod[];
+}
+
+export interface AgentWorkPeriod {
+  startedAtUnixMs: number;
+  endedAtUnixMs: number;
+  ongoing?: boolean;
 }
 
 export interface LaunchAgentSessionRequest {
@@ -2856,7 +2864,7 @@ const integrationIds: readonly IntegrationId[] = [
 
 function invalidPayload(path: string): never {
   throw new WorkspaceClientError(
-    `WTS returned an invalid workspace payload at ${path}`,
+    `Received an invalid workspace payload at ${path}`,
     { code: "invalid_response" },
   );
 }
@@ -5003,6 +5011,7 @@ function normalizeObservedAgentSession(
     "mrLinkProposals",
     "startedAtUnixMs",
     "lastEventAtUnixMs",
+    "workPeriods",
   ]);
   if (integerField(raw.schemaVersion, `${path}.schemaVersion`) !== 1) {
     return invalidPayload(`${path}.schemaVersion`);
@@ -5096,6 +5105,22 @@ function normalizeObservedAgentSession(
       raw.lastEventAtUnixMs,
       `${path}.lastEventAtUnixMs`,
     ),
+    ...(raw.workPeriods === undefined
+      ? {}
+      : {
+          workPeriods: arrayField(raw.workPeriods, `${path}.workPeriods`).map((item, index) => {
+            const periodPath = `${path}.workPeriods[${index}]`;
+            const period = exactRecord(item, periodPath, ["startedAtUnixMs", "endedAtUnixMs", "ongoing"]);
+            const startedAtUnixMs = integerField(period.startedAtUnixMs, `${periodPath}.startedAtUnixMs`);
+            const endedAtUnixMs = integerField(period.endedAtUnixMs, `${periodPath}.endedAtUnixMs`);
+            if (endedAtUnixMs < startedAtUnixMs) return invalidPayload(`${periodPath}.endedAtUnixMs`);
+            return {
+              startedAtUnixMs,
+              endedAtUnixMs,
+              ...(period.ongoing === true ? { ongoing: true } : {}),
+            };
+          }),
+        }),
   };
 }
 
@@ -8951,7 +8976,7 @@ function validateCreateRequest(
     ) {
       throw new WorkspaceClientError(
         error.message.replace(
-          "WTS returned an invalid workspace payload",
+          "Received an invalid workspace payload",
           "Invalid workspace creation request",
         ),
         { code: "invalid_request", cause: error },
@@ -9195,7 +9220,7 @@ function validateRuntimeAnalysisRequest(
     ) {
       throw new WorkspaceClientError(
         error.message.replace(
-          "WTS returned an invalid workspace payload",
+          "Received an invalid workspace payload",
           "Invalid runtime analysis request",
         ),
         { code: "invalid_request", cause: error },
@@ -11142,7 +11167,7 @@ class HttpWorkspaceClient implements WorkspaceClient {
     } catch (error) {
       throw new WorkspaceClientError(
         response.ok
-          ? "WTS returned malformed JSON"
+          ? "Received malformed JSON"
           : `WTS request failed with HTTP ${response.status}`,
         {
           code: response.ok ? "invalid_response" : "http_error",

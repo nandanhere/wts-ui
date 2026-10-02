@@ -181,13 +181,13 @@ pub enum GitError {
         truncated: bool,
     },
 
-    #[error("{operation} returned more output than WTS accepts")]
+    #[error("{operation} returned more output than the allowed limit")]
     OutputTooLarge { operation: GitOperation },
 
     #[error("Git exceeded the local execution deadline")]
     CommandTimedOut,
 
-    #[error("WTS could not save setup progress. Check the data folder and try again.")]
+    #[error("Could not save setup progress. Check the data folder and try again.")]
     MaterializationObserverFailed,
 
     #[error("local filesystem operation failed")]

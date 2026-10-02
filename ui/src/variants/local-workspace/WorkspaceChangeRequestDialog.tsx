@@ -133,7 +133,7 @@ export function WorkspaceChangeRequestDialog({
           ) : null}
 
           <footer className={styles.footer}>
-            <Dialog.Description>WTS opens the form. {forgeName} creates the {requestName}.</Dialog.Description>
+            <Dialog.Description>Opens the form. {forgeName} creates the {requestName}.</Dialog.Description>
             <span>
               <Dialog.Close className={styles.secondaryButton}>Cancel</Dialog.Close>
               <button

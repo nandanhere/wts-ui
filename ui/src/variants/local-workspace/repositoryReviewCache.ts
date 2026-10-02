@@ -43,7 +43,7 @@ export function loadRepositoryReview(
   return cacheFor(client).load(keyFor(workspaceId, worktree), async () => {
     const result = await client.getWorkspaceRepositoryDiff(workspaceId, worktree.repositoryId);
     if (result.workspaceId !== workspaceId || result.repositoryId !== worktree.repositoryId) {
-      throw new WorkspaceClientError("WTS returned changes for a different repository.", { code: "invalid_response" });
+      throw new WorkspaceClientError("Received changes for a different repository.", { code: "invalid_response" });
     }
     if (result.baseCommitOid !== worktree.baseCommitOid) {
       throw new WorkspaceClientError("The workspace base changed. Refresh workspace status before you open Changes.", { code: "workspace_git_state_changed" });

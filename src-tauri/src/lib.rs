@@ -101,7 +101,7 @@ where
         .await
         .map_err(|_| WorkspaceCommandError {
             code: "operation_interrupted",
-            message: "The background operation ended before WTS received its result.".to_owned(),
+            message: "The background operation ended before its result arrived.".to_owned(),
             retryable: true,
         })?
 }
@@ -274,7 +274,7 @@ async fn send_desktop_notification(
                 .status()
                 .map_err(|_| WorkspaceCommandError {
                     code: "notification_failed",
-                    message: "WTS could not send the desktop notification.".to_owned(),
+                    message: "Could not send the desktop notification.".to_owned(),
                     retryable: true,
                 })?;
             if status.success() {
@@ -282,7 +282,7 @@ async fn send_desktop_notification(
             } else {
                 Err(WorkspaceCommandError {
                     code: "notification_failed",
-                    message: "WTS could not send the desktop notification.".to_owned(),
+                    message: "Could not send the desktop notification.".to_owned(),
                     retryable: true,
                 })
             }
@@ -2611,7 +2611,7 @@ fn local_wts_command_error(error: LocalWtsError) -> WorkspaceCommandError {
         LocalWtsError::AgentConversationPlatformUnavailable => WorkspaceCommandError { code: "agent_conversation_platform_unavailable", message: "Agent chat execution needs macOS or Linux. Saved chats remain available.".to_owned(), retryable: false },
         LocalWtsError::AgentConversationStorageFull => WorkspaceCommandError { code: "agent_conversation_storage_full", message: "Conversation storage is full. Open an existing conversation to continue.".to_owned(), retryable: false },
         LocalWtsError::AgentConversationLimit => WorkspaceCommandError { code: "agent_conversation_limit", message: "This conversation reached its limit. Start a new conversation to continue.".to_owned(), retryable: false },
-        LocalWtsError::AgentConversationSourceUnavailable => WorkspaceCommandError { code: "agent_conversation_source_unavailable", message: "WTS needs its source repository. Start WTS with WTS_UI_REPOSITORY_ROOT set to the source checkout.".to_owned(), retryable: true },
+        LocalWtsError::AgentConversationSourceUnavailable => WorkspaceCommandError { code: "agent_conversation_source_unavailable", message: "The source repository is missing. Start WTS with WTS_UI_REPOSITORY_ROOT set to the source checkout.".to_owned(), retryable: true },
         LocalWtsError::AgentConversationUnavailable => WorkspaceCommandError { code: "agent_conversation_unavailable", message: "The conversation or its workspace is unavailable. Check the workspace and try again.".to_owned(), retryable: true },
         LocalWtsError::InvalidRepositoryRoot => WorkspaceCommandError {
             code: "invalid_local_configuration",
@@ -2641,7 +2641,7 @@ fn local_wts_command_error(error: LocalWtsError) -> WorkspaceCommandError {
         },
         LocalWtsError::RepositoryFileNotText => WorkspaceCommandError {
             code: "repository_file_not_text",
-            message: "WTS can show the complete file only when it contains UTF-8 text."
+            message: "The complete file shows only when it contains UTF-8 text."
                 .to_owned(),
             retryable: false,
         },
@@ -2652,10 +2652,10 @@ fn local_wts_command_error(error: LocalWtsError) -> WorkspaceCommandError {
         },
         LocalWtsError::RepositoryFileConflict => WorkspaceCommandError {code:"repository_file_conflict",message:"The source file changed. Reload the file before you save.".to_owned(),retryable:false},
         LocalWtsError::InvalidRepositoryFileRevision => WorkspaceCommandError {code:"invalid_repository_file_revision",message:"The source file revision is invalid.".to_owned(),retryable:false},
-        LocalWtsError::GitlabComparisonUnavailable => WorkspaceCommandError {code:"gitlab_comparison_unavailable",message:"WTS could not load the merge request comparison. Refresh the merge request and check the local branch.".to_owned(),retryable:true},
+        LocalWtsError::GitlabComparisonUnavailable => WorkspaceCommandError {code:"gitlab_comparison_unavailable",message:"Could not load the merge request comparison. Refresh the merge request and check the local branch.".to_owned(),retryable:true},
         LocalWtsError::GitlabMergeRequestLinkUnavailable => WorkspaceCommandError {
             code: "gitlab_merge_request_link_unavailable",
-            message: "WTS could not link the merge request. Check the GitLab connection and merge request, then retry.".to_owned(),
+            message: "Could not link the merge request. Check the GitLab connection and merge request, then retry.".to_owned(),
             retryable: true,
         },
         LocalWtsError::InvalidRepositoryRemote => WorkspaceCommandError {
@@ -2718,12 +2718,12 @@ fn local_wts_command_error(error: LocalWtsError) -> WorkspaceCommandError {
         },
         LocalWtsError::GitlabDiscussionsUnavailable => WorkspaceCommandError {
             code: "gitlab_discussions_unavailable",
-            message: "WTS could not load the GitLab discussions. Check the connection and GitLab account.".to_owned(),
+            message: "Could not load the GitLab discussions. Check the connection and GitLab account.".to_owned(),
             retryable: true,
         },
         LocalWtsError::GitlabDiscussionReplyFailed => WorkspaceCommandError {
             code: "gitlab_discussion_reply_failed",
-            message: "WTS could not confirm the reply. Refresh the discussion before you try again.".to_owned(),
+            message: "Could not confirm the reply. Refresh the discussion before you try again.".to_owned(),
             retryable: false,
         },
         LocalWtsError::BrowserUnavailable => WorkspaceCommandError {
@@ -2785,7 +2785,7 @@ fn local_wts_command_error(error: LocalWtsError) -> WorkspaceCommandError {
         },
         LocalWtsError::ChangeRequestForkUnsupported => WorkspaceCommandError {
             code: "change_request_fork_unsupported",
-            message: "WTS cannot prepare a fork change request until the provider project is verified."
+            message: "Cannot prepare a fork change request until the provider project is verified."
                 .to_owned(),
             retryable: false,
         },
@@ -2836,7 +2836,7 @@ fn local_wts_command_error(error: LocalWtsError) -> WorkspaceCommandError {
         },
         LocalWtsError::RuntimeAnalysisUnavailable => WorkspaceCommandError {
             code: "runtime_analysis_unavailable",
-            message: "WTS could not inspect the selected repository commits.".to_owned(),
+            message: "Could not inspect the selected repository commits.".to_owned(),
             retryable: true,
         },
         LocalWtsError::StaleRuntimeAnalysis => WorkspaceCommandError {
@@ -2919,10 +2919,10 @@ fn local_wts_command_error(error: LocalWtsError) -> WorkspaceCommandError {
                 "workspace_rename_cleanup_incomplete"
             },
             message: if cleanup_complete {
-                "WTS could not rename the workspace folder. The original workspace is unchanged."
+                "Could not rename the workspace folder. The original workspace is unchanged."
                     .to_owned()
             } else {
-                "WTS could not rename the workspace folder. Inspect the managed workspace before you retry."
+                "Could not rename the workspace folder. Inspect the managed workspace before you retry."
                     .to_owned()
             },
             retryable: cleanup_complete,
@@ -2958,10 +2958,10 @@ fn local_wts_command_error(error: LocalWtsError) -> WorkspaceCommandError {
                 "generated_workspace_cleanup_incomplete"
             },
             message: if cleanup_complete {
-                "WTS could not write the generated workspace files; worktrees were rolled back."
+                "Could not write the generated workspace files; worktrees were rolled back."
                     .to_owned()
             } else {
-                "WTS could not write the generated workspace files and cleanup needs inspection."
+                "Could not write the generated workspace files and cleanup needs inspection."
                     .to_owned()
             },
             retryable: cleanup_complete,
@@ -3002,23 +3002,23 @@ fn local_wts_command_error(error: LocalWtsError) -> WorkspaceCommandError {
                 "repository_addition_cleanup_failed"
             },
             message: if cleanup_complete {
-                "WTS could not add the repository. The current workspace is unchanged."
+                "Could not add the repository. The current workspace is unchanged."
                     .to_owned()
             } else {
-                "WTS could not add the repository or complete cleanup. Review the workspace before you retry."
+                "Could not add the repository or complete cleanup. Review the workspace before you retry."
                     .to_owned()
             },
             retryable: cleanup_complete,
         },
         LocalWtsError::RepositoryRemovalBlocked => WorkspaceCommandError {
             code: "repository_removal_blocked",
-            message: "WTS cannot remove the only repository or a repository that has local files. Save or discard its local files first."
+            message: "Cannot remove the only repository or a repository that has local files. Save or discard its local files first."
                 .to_owned(),
             retryable: false,
         },
         LocalWtsError::RepositoryRemovalFailed => WorkspaceCommandError {
             code: "repository_removal_failed",
-            message: "WTS could not remove the repository. Refresh the workspace before you retry."
+            message: "Could not remove the repository. Refresh the workspace before you retry."
                 .to_owned(),
             retryable: true,
         },
@@ -3036,7 +3036,7 @@ fn local_wts_command_error(error: LocalWtsError) -> WorkspaceCommandError {
         },
         LocalWtsError::RepositorySyncFailed => WorkspaceCommandError {
             code: "repository_sync_failed",
-            message: "WTS could not fetch the saved tracking branch. Check the remote access and retry."
+            message: "Could not fetch the saved tracking branch. Check the remote access and retry."
                 .to_owned(),
             retryable: true,
         },
@@ -3054,7 +3054,7 @@ fn local_wts_command_error(error: LocalWtsError) -> WorkspaceCommandError {
         },
         LocalWtsError::RepositoryAlignmentFailed => WorkspaceCommandError {
             code: "repository_alignment_failed",
-            message: "WTS could not preserve and align the repository. Review its Git state before retrying."
+            message: "Could not preserve and align the repository. Review its Git state before retrying."
                 .to_owned(),
             retryable: false,
         },
@@ -3085,7 +3085,7 @@ fn local_wts_command_error(error: LocalWtsError) -> WorkspaceCommandError {
         },
         LocalWtsError::AdapterOutputTooLarge => WorkspaceCommandError {
             code: "adapter_output_too_large",
-            message: "The adapter produced more output than WTS can display safely.".to_owned(),
+            message: "The adapter produced too much output to display.".to_owned(),
             retryable: false,
         },
         LocalWtsError::GraphIndexFailed => WorkspaceCommandError {
@@ -3105,7 +3105,7 @@ fn local_wts_command_error(error: LocalWtsError) -> WorkspaceCommandError {
         },
         LocalWtsError::RemovalFailed => WorkspaceCommandError {
             code: "workspace_removal_failed",
-            message: "WTS could not safely finish removing the workspace.".to_owned(),
+            message: "Could not safely finish removing the workspace.".to_owned(),
             retryable: true,
         },
         LocalWtsError::InvalidAgentPrompt => WorkspaceCommandError {
@@ -3844,7 +3844,7 @@ mod tests {
         assert_eq!(error["retryable"], false);
         assert_eq!(
             error["message"],
-            "WTS could not confirm the reply. Refresh the discussion before you try again."
+            "Could not confirm the reply. Refresh the discussion before you try again."
         );
         assert_eq!(
             local_wts_command_error(LocalWtsError::GitlabDiscussionsUnavailable).code,

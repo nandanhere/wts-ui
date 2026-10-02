@@ -1,10 +1,11 @@
+import { addAgentLesson } from "../lib/agentLessons";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WorkspaceClientError, type WorkspaceClient } from "../lib/wtsClient";
 import type { AgentConversation, CreateAgentConversationRequest } from "../lib/agentConversations";
 import { AgentFeedbackBubble } from "./AgentFeedbackBubble";
 import { UI_REGION_SELECTED_EVENT, type UiRegionSelection } from "./uiRegionSelection";
-import { openAgentFeedback, requestAgentTask } from "../lib/agentFeedbackEvents";
+import { openAgentFeedbackDrawer, openAgentFeedback, requestAgentTask } from "../lib/agentFeedbackEvents";
 import { readFeedbackDraft } from "../lib/agentFeedbackDraft";
 
 const region: UiRegionSelection = { schemaVersion: 1, id: "plan.description", label: "Plan description", route: "/sessions/project", capturedAtUnixMs: 1, rect: { x: 10, y: 40, width: 200, height: 100 }, viewport: { width: 1200, height: 800, devicePixelRatio: 2 }, visibleText: "Imported description", controls: [], ancestors: [] };
@@ -39,8 +40,18 @@ const capture = { mimeType: "image/png" as const, dataUrl: "data:image/png;base6
 beforeEach(() => localStorage.clear());
 afterEach(() => vi.restoreAllMocks());
 describe("contextual agent chat", () => {
+  it("opens feedback from the shell without a floating launcher", async () => {
+    render(<AgentFeedbackBubble client={setup().client} showLauncher={false} />);
+    expect(screen.queryByRole("button", { name: "Open agent feedback" })).toBeNull();
+    act(() => openAgentFeedbackDrawer());
+    expect(await screen.findByRole("dialog", { name: "Agent feedback" })).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Close agent feedback" }));
+    expect(screen.queryByRole("dialog", { name: "Agent feedback" })).toBeNull();
+  });
+
   it("opens a prepared WTS task as a draft and sends it only on request", async () => {
     const { client, create, send } = setup();
+    addAgentLesson("Use existing helpers", "Earlier review");
     render(<AgentFeedbackBubble client={client} />);
     act(() => requestAgentTask({ calloutId: "planning.plan-starter", label: "Plan · Review summit !41", body: "Write a review plan in PLAN.md." }));
     expect(await screen.findByRole("dialog", { name: "Agent feedback" })).toHaveTextContent("Plan · Review summit !41");
@@ -48,6 +59,7 @@ describe("contextual agent chat", () => {
     expect(create).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "Send to agent" }));
     await waitFor(() => expect(send).toHaveBeenCalledOnce());
+    expect(send.mock.calls[0]![1].body).toContain("Use existing helpers");
     expect(create.mock.calls[0]![0].source).toMatchObject({ kind: "ui", calloutId: "planning.plan-starter", label: "Plan · Review summit !41" });
   });
 
@@ -154,7 +166,7 @@ describe("contextual agent chat", () => {
   });
 
   it("explains missing source configuration and retries the same create request", async () => {
-    const { client, create } = setup(); create.mockRejectedValueOnce(new WorkspaceClientError("WTS needs its source repository. Start WTS with WTS_UI_REPOSITORY_ROOT set to the source checkout.", { code: "agent_conversation_source_unavailable", retryable: true }));
+    const { client, create } = setup(); create.mockRejectedValueOnce(new WorkspaceClientError("The source repository is missing. Start WTS with WTS_UI_REPOSITORY_ROOT set to the source checkout.", { code: "agent_conversation_source_unavailable", retryable: true }));
     render(<AgentFeedbackBubble client={client} />); selectRegion();
     fireEvent.change(screen.getByRole("textbox", { name: "Message to agent" }), { target: { value: "Fix this." } });
     fireEvent.click(screen.getByRole("button", { name: "Send to agent" }));
@@ -167,11 +179,11 @@ describe("contextual agent chat", () => {
 
   it("lets a user discard a source rejection and select another region", async () => {
     const { client, create, send } = setup();
-    create.mockRejectedValueOnce(new WorkspaceClientError("WTS needs its source repository.", { code: "agent_conversation_source_unavailable" }));
+    create.mockRejectedValueOnce(new WorkspaceClientError("The source repository is missing.", { code: "agent_conversation_source_unavailable" }));
     render(<AgentFeedbackBubble client={client} />); selectRegion();
     fireEvent.change(screen.getByRole("textbox", { name: "Message to agent" }), { target: { value: "Fix this." } });
     fireEvent.click(screen.getByRole("button", { name: "Send to agent" }));
-    await screen.findByText("WTS needs its source repository.");
+    await screen.findByText("The source repository is missing.");
     const request = readFeedbackDraft()?.request;
     selectRegion({ ...region, id: "workspace.title", label: "Workspace title" });
     fireEvent.click(taskButton("Plan description"));
@@ -215,11 +227,11 @@ describe("contextual agent chat", () => {
   });
 
   it.each(["agent_conversation_unavailable", "invalid_response", "transport_error"])("retains the uncertain send after %s and still exposes retry after a region switch", async (code) => {
-    const { client, send } = setup(); send.mockRejectedValueOnce(new WorkspaceClientError("WTS could not confirm the request.", { code }));
+    const { client, send } = setup(); send.mockRejectedValueOnce(new WorkspaceClientError("Could not confirm the request.", { code }));
     render(<AgentFeedbackBubble client={client} />); selectRegion();
     fireEvent.change(screen.getByRole("textbox", { name: "Message to agent" }), { target: { value: "Keep this request." } });
     fireEvent.click(screen.getByRole("button", { name: "Send to agent" }));
-    await screen.findByText("WTS could not confirm the request.");
+    await screen.findByText("Could not confirm the request.");
     selectRegion({ ...region, id: "workspace.title", label: "Workspace title" });
     fireEvent.click(taskButton("Plan description"));
     expect(screen.queryByRole("button", { name: "Discard draft" })).not.toBeInTheDocument();
@@ -236,7 +248,7 @@ describe("contextual agent chat", () => {
     fireEvent.click(screen.getByRole("button", { name: "Send to agent" }));
     expect(await screen.findByRole("button", { name: "Discard draft" })).toBeEnabled();
     fireEvent.click(screen.getByRole("button", { name: "Retry send" }));
-    await screen.findByText(/WTS could not confirm this send/);
+    await screen.findByText(/Could not confirm this send/);
     expect(screen.queryByRole("button", { name: "Discard draft" })).not.toBeInTheDocument();
     expect(readFeedbackDraft()?.attempt?.body).toBe("Keep this request.");
   });

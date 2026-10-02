@@ -87,12 +87,12 @@ fn regular_bytes(path: &Path, limit: u64) -> Result<Vec<u8>, String> {
         options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
     }
     let file = options.open(path).map_err(|_| {
-        "WTS could not read the UI dependency files. Open this task workspace to inspect them."
+        "Could not read the UI dependency files. Open this task workspace to inspect them."
             .to_owned()
     })?;
     let metadata = file
         .metadata()
-        .map_err(|_| "WTS could not read the UI dependency files.".to_owned())?;
+        .map_err(|_| "Could not read the UI dependency files.".to_owned())?;
     if !metadata.is_file() || metadata.len() > limit {
         return Err(
             "The UI dependency file is not supported. Open this task workspace to inspect it."
@@ -102,7 +102,7 @@ fn regular_bytes(path: &Path, limit: u64) -> Result<Vec<u8>, String> {
     let mut bytes = vec![];
     file.take(limit + 1)
         .read_to_end(&mut bytes)
-        .map_err(|_| "WTS could not read the UI dependency files.".to_owned())?;
+        .map_err(|_| "Could not read the UI dependency files.".to_owned())?;
     if bytes.len() > limit as usize {
         return Err("The UI dependency file exceeds the preview limit.".to_owned());
     }
@@ -148,7 +148,7 @@ fn prepare_preview_ui(source: &Path, candidate: &Path) -> Result<(PathBuf, PathB
     }
     if !modules
         .try_exists()
-        .map_err(|_| "WTS could not inspect the UI dependencies.".to_owned())?
+        .map_err(|_| "Could not inspect the UI dependencies.".to_owned())?
     {
         // Attaching a dependency cache must not add a captured source path.
         let ignored = std::process::Command::new("git")
@@ -183,7 +183,7 @@ fn prepare_preview_ui(source: &Path, candidate: &Path) -> Result<(PathBuf, PathB
         if !installed.is_dir() {
             return Err("UI dependencies are not installed. Run npm ci in this task's ui directory, then retry.".to_owned());
         }
-        #[cfg(unix)] std::os::unix::fs::symlink(&installed, &modules).map_err(|_| "WTS could not attach the matching UI dependency cache. Run npm ci in this task's ui directory, then retry.".to_owned())?;
+        #[cfg(unix)] std::os::unix::fs::symlink(&installed, &modules).map_err(|_| "Could not attach the matching UI dependency cache. Run npm ci in this task's ui directory, then retry.".to_owned())?;
         #[cfg(not(unix))]
         return Err("Install UI dependencies in this task workspace, then retry.".to_owned());
     }
@@ -266,7 +266,7 @@ fn start_preview_process(
         .ok_or_else(|| "The UI preview did not return an address. Retry the preview.".to_owned())?;
     if !preview_identity_matches(service.endpoint.port, &probe_id, &probe_secret) {
         let _ = supervisor.stop_stack(&key);
-        return Err("WTS could not verify the preview process. Retry the preview.".to_owned());
+        return Err("Could not verify the preview process. Retry the preview.".to_owned());
     }
     proofs.insert(key, (probe_id, probe_secret, claim_id));
     Ok(format!("http://127.0.0.1:{}/", service.endpoint.port))

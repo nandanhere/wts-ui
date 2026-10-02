@@ -102,7 +102,7 @@ impl AppUpdateState {
                 status(
                     AppUpdateStatusState::UpToDate,
                     current_version,
-                    "WTS has not checked for a local update.",
+                    "No update check yet.",
                     None,
                 )
             } else {
@@ -152,7 +152,7 @@ pub(crate) fn get_status(app: &AppHandle) -> AppUpdateStatus {
             status(
                 AppUpdateStatusState::Error,
                 app.package_info().version.to_string(),
-                "WTS could not read the update state.",
+                "Could not read the update state.",
                 Some(AppUpdateDiagnosticCode::ManifestInvalid),
             )
         })
@@ -193,7 +193,7 @@ pub(crate) async fn check(app: AppHandle) -> AppUpdateStatus {
                 error_status(
                     current_version,
                     AppUpdateDiagnosticCode::ManifestInvalid,
-                    "WTS could not resolve the local update directory.",
+                    "Could not resolve the local update directory.",
                 ),
             );
         }
@@ -233,7 +233,7 @@ pub(crate) async fn check(app: AppHandle) -> AppUpdateStatus {
                 error_status(
                     current_version,
                     AppUpdateDiagnosticCode::NetworkUnavailable,
-                    "WTS could not start the local update check.",
+                    "Could not start the local update check.",
                 ),
             );
         }
@@ -252,7 +252,7 @@ pub(crate) async fn check(app: AppHandle) -> AppUpdateStatus {
                 error_status(
                     current_version,
                     AppUpdateDiagnosticCode::NetworkUnavailable,
-                    "WTS could not configure the local update check.",
+                    "Could not configure the local update check.",
                 ),
             );
         }
@@ -269,7 +269,7 @@ pub(crate) async fn check(app: AppHandle) -> AppUpdateStatus {
                     error_status(
                         current_version,
                         AppUpdateDiagnosticCode::ManifestInvalid,
-                        "WTS could not save the pending update.",
+                        "Could not save the pending update.",
                     ),
                 );
             }
@@ -282,7 +282,7 @@ pub(crate) async fn check(app: AppHandle) -> AppUpdateStatus {
                 status(
                     AppUpdateStatusState::UpToDate,
                     current_version,
-                    "WTS is up to date.",
+                    "Up to date.",
                     None,
                 ),
             )
@@ -294,7 +294,7 @@ pub(crate) async fn check(app: AppHandle) -> AppUpdateStatus {
                 error_status(
                     current_version,
                     AppUpdateDiagnosticCode::NetworkUnavailable,
-                    "WTS could not check the signed local update.",
+                    "Could not check the signed local update.",
                 ),
             )
         }
@@ -327,7 +327,7 @@ pub(crate) async fn download_and_install(app: AppHandle) -> AppUpdateStatus {
     let downloading = AppUpdateStatus {
         state: AppUpdateStatusState::Downloading,
         downloaded_bytes: Some(0),
-        detail: "WTS downloads and verifies the signed update.".to_owned(),
+        detail: "Downloading and verifying the signed update…".to_owned(),
         ..available
     };
     replace_status(&app, downloading);
@@ -359,7 +359,7 @@ pub(crate) async fn download_and_install(app: AppHandle) -> AppUpdateStatus {
             let mut ready = get_status(&app);
             ready.state = AppUpdateStatusState::Ready;
             ready.downloaded_bytes = Some(downloaded.load(Ordering::Relaxed));
-            ready.detail = "WTS installed the verified update. Relaunch WTS to use it.".to_owned();
+            ready.detail = "Installed the verified update. Relaunch WTS to use it.".to_owned();
             replace_status(&app, ready)
         }
         Err(error) => {
@@ -378,7 +378,7 @@ pub(crate) async fn download_and_install(app: AppHandle) -> AppUpdateStatus {
                 error_status(
                     current_version,
                     code,
-                    "WTS could not verify and install the update.",
+                    "Could not verify and install the update.",
                 ),
             )
         }

@@ -60,7 +60,7 @@ export const GuideDialog = memo(function GuideDialog({
                 <span>01–04</span>
                 <div>
                   <h3 id="guide-path-title">The working loop</h3>
-                  <p>Each effect is reviewed before WTS applies it.</p>
+                  <p>You review each effect before it is applied.</p>
                 </div>
               </div>
               <ol>
@@ -127,7 +127,7 @@ export const GuideDialog = memo(function GuideDialog({
                   <h3>Retries are safe</h3>
                   <p>
                     Saving or creating again reuses the existing verified
-                    result. After a restart, WTS reloads the manifest instead of
+                    result. After a restart, the manifest reloads instead of
                     creating duplicate worktrees.
                   </p>
                 </div>
@@ -135,7 +135,7 @@ export const GuideDialog = memo(function GuideDialog({
               <section>
                 <h3>If something changed outside WTS</h3>
                 <p>
-                  WTS stops when a branch, worktree, or generated file no longer
+                  Setup stops when a branch, worktree, or generated file no longer
                   matches its record. Resolve the drift before trying again; it
                   will not overwrite the unknown state.
                 </p>

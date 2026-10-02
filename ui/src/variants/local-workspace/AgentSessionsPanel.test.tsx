@@ -76,7 +76,7 @@ describe("AgentSessionsPanel", () => {
     vi.stubGlobal("Notification", { permission: "denied", requestPermission });
     try {
       render(<AgentSessionsPanel client={fakeWorkspaceClient().client} workspaceLabels={{}} />);
-      expect(screen.getByText("Allow notifications in your browser or system settings, then select Check notification permission.")).toBeVisible();
+      expect(screen.getByText(/Notifications are blocked. Allow notifications in your browser or system settings, then select Check notification permission./)).toBeVisible();
       await user.click(screen.getByRole("button", { name: "Check notification permission" }));
       expect(requestPermission).toHaveBeenCalledOnce();
       expect(screen.getByRole("button", { name: "Notifications on" })).toBeVisible();
@@ -102,9 +102,28 @@ describe("AgentSessionsPanel", () => {
     expect(onOpenIntegrations).toHaveBeenCalledOnce();
   });
 
+  it("selects Today after time refresh succeeds even if Jira fails", async () => {
+    const user = userEvent.setup();
+    const end = Date.now();
+    const saved = savedInterval(end - 120_000, end - 60_000, "Earlier summary");
+    saveActivityWatchReviewHistorySnapshot(saved);
+    const daily = { ...saved.review, startedAtUnixMs: new Date().setHours(0, 0, 0, 0), endedAtUnixMs: end };
+    const fake = fakeWorkspaceClient({ activityWatchDailyReview: daily, activityWatchStatus: { state: "running", installation: "detected", endpoint: "http://127.0.0.1:5600", capabilities: ["dailyReview"], detail: "Ready" } });
+    fake.listActiveJiraIssues.mockRejectedValue(new Error("Jira connection failed."));
+    render(<AgentSessionsPanel client={fake.client} workspaceLabels={{}} />);
+    await screen.findByText("ActivityWatch · Connected");
+    const summaries = screen.getByRole("listbox", { name: "Recent automatic summaries" });
+    await user.click(within(summaries).getAllByRole("option")[1]!);
+    expect(within(summaries).getAllByRole("option")[1]).toHaveAttribute("aria-selected", "true");
+    await user.click(screen.getByRole("button", { name: "Refresh" }));
+    await screen.findByText("Jira connection failed.");
+    expect(within(summaries).getAllByRole("option")[0]).toHaveAttribute("aria-selected", "true");
+  });
+
   it("retries only Jira after a failed refresh and retains reviewed assignments", async () => {
     const user = userEvent.setup();
     const cached = savedInterval(Date.now() - 60_000, Date.now(), "Review work");
+    cached.review.startedAtUnixMs = new Date().setHours(0, 0, 0, 0);
     cached.jiraIssues.issues = [{ issueKey: "WTS-42", summary: "Retain assignments", status: "In Progress" }];
     const sessionId = cached.review.sessions[0]!.id;
     saveActivityWatchReviewSnapshot({ schemaVersion: 1, dateKey: new Date().toLocaleDateString("en-CA"), builtAtUnixMs: Date.now(), review: cached.review, jiraIssues: cached.jiraIssues, assignments: { [sessionId]: "WTS-42" } });
@@ -143,7 +162,6 @@ describe("AgentSessionsPanel", () => {
         .mockImplementationOnce(() => new Promise((resolve) => { resolvePoll = resolve; }));
       render(<AgentSessionsPanel client={fake.client} workspaceLabels={{}} />);
       await act(async () => { await Promise.resolve(); });
-      fireEvent.mouseDown(screen.getByRole("tab", { name: "Agent activity" }), { button: 0, ctrlKey: false });
       await act(async () => { vi.advanceTimersByTime(5_000); });
       expect(fake.listAgentSessions).toHaveBeenCalledTimes(2);
       fireEvent.click(screen.getByRole("button", { name: "Refresh sessions" }));
@@ -162,7 +180,6 @@ describe("AgentSessionsPanel", () => {
     const user = userEvent.setup();
     const fake = fakeWorkspaceClient();
     render(<AgentSessionsPanel client={fake.client} workspaceLabels={{}} />);
-    await user.click(screen.getByRole("tab", { name: "Agent activity" }));
     await user.click(await screen.findByRole("button", { name: "Refresh sessions" }));
     expect(fake.listAgentSessions).toHaveBeenCalledTimes(2);
   });
@@ -241,22 +258,11 @@ describe("AgentSessionsPanel", () => {
       />,
     );
 
-    const activityTab = screen.getByRole("tab", { name: "Activity review" });
-    const agentTab = screen.getByRole("tab", { name: /Agent activity/ });
-    expect(activityTab).toHaveAttribute("aria-selected", "true");
+    expect(screen.queryByRole("tab")).not.toBeInTheDocument();
     expect(
       await screen.findByText("ActivityWatch · Connected · 0.13.2"),
     ).toBeVisible();
-    expect(
-      screen.queryByRole("list", {
-        name: "Current and recent agent sessions",
-      }),
-    ).not.toBeInTheDocument();
-
-    activityTab.focus();
-    await user.keyboard("{ArrowRight}");
-    expect(agentTab).toHaveFocus();
-    expect(agentTab).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByText("Agents · 1 working")).toBeVisible();
 
     const list = await screen.findByRole("list", {
       name: "Current and recent agent sessions",
@@ -280,17 +286,14 @@ describe("AgentSessionsPanel", () => {
     expect(within(list).getAllByText("Not observed")).toHaveLength(2);
     expect(screen.getByText("1 open · refreshes every 5 seconds")).toBeVisible();
 
-    await user.keyboard("{ArrowLeft}");
-    expect(activityTab).toHaveFocus();
-    expect(activityTab).toHaveAttribute("aria-selected", "true");
-    expect(screen.getByText("No activity yet.")).toBeVisible();
+    await screen.findByRole("button", { name: "Refresh" });
     expect(fake.listAgentSessions).toHaveBeenCalledWith();
     expect(fake.getActivityWatchStatus).toHaveBeenCalledWith();
-    expect(fake.getActivityWatchDailyReview).not.toHaveBeenCalled();
-    expect(fake.listActiveJiraIssues).not.toHaveBeenCalled();
+    expect(fake.getActivityWatchDailyReview).toHaveBeenCalledOnce();
+    expect(fake.listActiveJiraIssues).toHaveBeenCalledOnce();
   });
 
-  it("builds an explicit privacy-safe daily review and matches detected Jira keys", async () => {
+  it("loads a local daily review and matches detected Jira keys", async () => {
     const user = userEvent.setup();
     const fake = fakeWorkspaceClient({
       activityWatchStatus: {
@@ -370,10 +373,8 @@ describe("AgentSessionsPanel", () => {
     );
 
     await screen.findByText("ActivityWatch · Connected · 0.13.2");
-    expect(fake.getActivityWatchDailyReview).not.toHaveBeenCalled();
-    await user.click(
-      screen.getByRole("button", { name: "Build today’s review" }),
-    );
+    expect(fake.getActivityWatchDailyReview).toHaveBeenCalledOnce();
+    await screen.findByRole("button", { name: "Refresh" });
 
     const review = await screen.findByRole("list", {
       name: "Today’s ActivityWatch review",
@@ -381,20 +382,20 @@ describe("AgentSessionsPanel", () => {
     expect(
       within(review).getByText("Orders retries in the billing workspace"),
     ).toBeVisible();
-    expect(within(review).getByText("coding")).toBeVisible();
+    expect(within(review).getByText("#coding")).toBeVisible();
+    expect(within(review).getByText("#task-42")).toBeVisible();
     expect(
       within(review).getAllByText("TASK-42 · Retry duplicate captures"),
     ).toHaveLength(3);
-    expect(screen.getAllByText("1h 10m")).toHaveLength(3);
-    expect(screen.getByText("2 blocks")).toBeVisible();
+    expect(screen.getAllByText("1h 10m").length).toBeGreaterThanOrEqual(3);
+    expect(screen.getByText("2 blocks from ActivityWatch")).toBeVisible();
     const activityOverview = screen.getByRole("region", {
       name: "Activity overview",
     });
-    expect(
-      within(activityOverview).getByRole("list", {
-        name: "Application activity totals",
-      }),
-    ).toBeVisible();
+    const applicationTotals = screen.getByRole("list", {
+      name: "Application activity totals",
+    });
+    expect(applicationTotals).toBeVisible();
     expect(
       within(activityOverview).getByRole("list", {
         name: "Daily activity timeline",
@@ -402,10 +403,10 @@ describe("AgentSessionsPanel", () => {
     ).toBeVisible();
     expect(
       within(activityOverview).getByRole("img", {
-        name: "Visual Studio Code, 1h 10m",
+        name: "2 blocks, 1h 12m",
       }),
     ).toBeVisible();
-    expect(within(activityOverview).getByText("Terminal")).toBeVisible();
+    expect(within(applicationTotals).getByText("Terminal")).toBeVisible();
     expect(screen.queryByText("ACTIVITYWATCH REVIEW")).not.toBeInTheDocument();
     expect(screen.queryByText(/matched to WTS workspaces/)).not.toBeInTheDocument();
     expect(screen.queryByText(/assigned active Jira tickets/)).not.toBeInTheDocument();
@@ -415,6 +416,9 @@ describe("AgentSessionsPanel", () => {
       name: "Jira ticket for Orders retries in the billing workspace",
     });
     expect(assignment).toHaveValue("TASK-42");
+    await user.click(screen.getByRole("button", {
+      name: "Show details for Orders retries in the billing workspace",
+    }));
     expect(screen.getByText("Jira key detected in local activity")).toBeVisible();
     expect(screen.getByText(/Jira · 100% match/)).toBeVisible();
     const semanticAssignment = screen.getByRole("combobox", {
@@ -500,9 +504,7 @@ describe("AgentSessionsPanel", () => {
 
     render(<AgentSessionsPanel client={fake.client} workspaceLabels={{}} />);
     await screen.findByText("ActivityWatch · Connected · 0.13.2");
-    await user.click(
-      screen.getByRole("button", { name: "Build today’s review" }),
-    );
+    await screen.findByRole("button", { name: "Refresh" });
 
     const assignment = await screen.findByRole("combobox", {
       name: "Jira ticket for Other active work",
@@ -569,9 +571,7 @@ describe("AgentSessionsPanel", () => {
 
     render(<AgentSessionsPanel client={fake.client} workspaceLabels={{}} />);
     await screen.findByText(/Connected/);
-    await user.click(
-      screen.getByRole("button", { name: "Build today’s review" }),
-    );
+    await screen.findByRole("button", { name: "Refresh" });
 
     expect(screen.queryByText("Login")).not.toBeInTheDocument();
     expect(screen.getByText("WTS daily review")).toBeVisible();
@@ -631,9 +631,7 @@ describe("AgentSessionsPanel", () => {
       <AgentSessionsPanel client={fake.client} workspaceLabels={{}} />,
     );
     await screen.findByText(/Connected/);
-    await user.click(
-      screen.getByRole("button", { name: "Build today’s review" }),
-    );
+    await screen.findByRole("button", { name: "Refresh" });
     expect(await screen.findByText("Transient dialog activity")).toBeVisible();
 
     await user.click(
@@ -671,7 +669,7 @@ describe("AgentSessionsPanel", () => {
       },
       activityWatchDailyReview: {
         schemaVersion: 1,
-        startedAtUnixMs: Date.now() - 60_000,
+        startedAtUnixMs: new Date().setHours(0, 0, 0, 0),
         endedAtUnixMs: Date.now(),
         totalActiveSeconds: 60,
         sessions: [
@@ -705,9 +703,7 @@ describe("AgentSessionsPanel", () => {
       <AgentSessionsPanel client={fake.client} workspaceLabels={{}} />,
     );
     await screen.findByText("ActivityWatch · Connected · 0.13.2");
-    await user.click(
-      screen.getByRole("button", { name: "Build today’s review" }),
-    );
+    await screen.findByRole("button", { name: "Refresh" });
     const assignment = await screen.findByRole("combobox", {
       name: "Jira ticket for Coding work",
     });
@@ -750,7 +746,6 @@ describe("AgentSessionsPanel", () => {
       />,
     );
 
-    await user.click(screen.getByRole("tab", { name: "Agent activity" }));
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent("Session ledger is locked");
     await user.click(within(alert).getByRole("button", { name: "Try again" }));
@@ -809,9 +804,9 @@ describe("AgentSessionsPanel", () => {
       within(status).getByRole("button", { name: "Check connection" }),
     );
     expect(status).toHaveAttribute("aria-busy", "true");
-    expect(status).toHaveTextContent("WTS checks the connection…");
+    expect(status).toHaveTextContent("Checking the connection…");
     expect(
-      within(status).getByRole("button", { name: "WTS checks…" }),
+      within(status).getByRole("button", { name: "Checking…" }),
     ).toBeDisabled();
 
     await act(async () => {
@@ -877,7 +872,7 @@ describe("AgentSessionsPanel", () => {
     ).toMatchObject({ enabled: true, intervalHours: 6 });
   });
 
-  it("does not start a second automatic scheduler inside My time", async () => {
+  it("loads today on the first visit when ActivityWatch is connected", async () => {
     const now = Date.now();
     localStorage.setItem(
       "wts.time-review-schedule.v1",
@@ -907,7 +902,8 @@ describe("AgentSessionsPanel", () => {
     expect(
       await screen.findByText("ActivityWatch · Connected · 0.13.2"),
     ).toBeVisible();
-    expect(fake.getActivityWatchDailyReview).not.toHaveBeenCalled();
+    await waitFor(() => expect(fake.getActivityWatchDailyReview).toHaveBeenCalledOnce());
+    expect(fake.getActivityWatchDailyReview.mock.calls[0]?.[0]).toBe(new Date().setHours(0, 0, 0, 0));
   });
 
   it("restores same-day summaries and selects them with arrow keys", async () => {
@@ -959,5 +955,73 @@ describe("AgentSessionsPanel", () => {
     });
     expect(restoredSummaries).toBeVisible();
     expect(within(restoredSummaries).getAllByRole("option")).toHaveLength(3);
+  });
+
+  it("shows agent work beside user time and states the multiplier", async () => {
+    const user = userEvent.setup();
+    const now = Date.now();
+    const hour = 60 * 60 * 1_000;
+    const start = Math.max(new Date(now).setHours(0, 0, 0, 0), now - 3 * hour);
+    const fake = fakeWorkspaceClient({
+      agentSessions: {
+        schemaVersion: 1,
+        sessions: [],
+        observedSessions: [
+          {
+            schemaVersion: 1,
+            sessionId: "codex-turns",
+            workspaceId: "ws_1",
+            provider: "codex",
+            source: "codexVscodeRollout",
+            status: "idle",
+            activity: null,
+            startedAtUnixMs: start,
+            lastEventAtUnixMs: start + 60 * 60_000,
+            workPeriods: [
+              { startedAtUnixMs: start, endedAtUnixMs: start + 30 * 60_000 },
+              { startedAtUnixMs: start + 40 * 60_000, endedAtUnixMs: start + 60 * 60_000 },
+            ],
+          },
+        ],
+      },
+      activityWatchStatus: {
+        state: "running",
+        installation: "detected",
+        endpoint: "http://127.0.0.1:5600",
+        capabilities: ["status", "dailyReview"],
+        detail: "Ready",
+      },
+      activityWatchDailyReview: {
+        schemaVersion: 1,
+        startedAtUnixMs: start,
+        endedAtUnixMs: start + 25 * 60_000,
+        totalActiveSeconds: 25 * 60,
+        sessions: [{
+          id: "code",
+          kind: "coding",
+          startedAtUnixMs: start,
+          endedAtUnixMs: start + 25 * 60_000,
+          durationSeconds: 25 * 60,
+          description: "Coding work",
+          application: "Visual Studio Code",
+          sourceEventCount: 2,
+        }],
+        detail: "Sanitized local activity.",
+      },
+      activeJiraIssues: { schemaVersion: 1, issues: [], detail: "None" },
+    });
+    render(<AgentSessionsPanel client={fake.client} workspaceLabels={{ ws_1: { key: "WTS-7", title: "My time" } }} />);
+    await screen.findByText("ActivityWatch · Connected");
+    const agentTrack = await screen.findByRole("list", { name: "Agent work timeline" });
+    expect(within(agentTrack).getAllByRole("img", { name: /Codex agent/ })).toHaveLength(2);
+    await screen.findByRole("button", { name: "Refresh" });
+    expect(await screen.findByText("2.0×")).toBeVisible();
+    expect(screen.getByText(/Agents worked 50m for each 25m of your time./)).toBeVisible();
+    expect(screen.getByText("1h 15m")).toBeVisible();
+    expect(screen.getByText("Overlapping activity windows can include short idle gaps.")).toBeVisible();
+    const exported = screen.getByRole("link", { name: "Export summary" });
+    expect(decodeURIComponent(exported.getAttribute("href")!)).toContain("Combined time: 1h 15m");
+    expect(exported).toHaveAttribute("download");
+    expect(screen.getByText("50m ÷ 25m = 2.0×")).toBeVisible();
   });
 });

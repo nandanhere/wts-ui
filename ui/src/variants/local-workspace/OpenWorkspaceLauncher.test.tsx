@@ -176,7 +176,7 @@ describe("OpenWorkspaceLauncher", () => {
     );
 
     expect(await within(dialog).findByRole("alert")).toHaveTextContent(
-      "WTS returned a mismatched CLI launch handoff.",
+      "Received a mismatched CLI launch handoff.",
     );
   });
 

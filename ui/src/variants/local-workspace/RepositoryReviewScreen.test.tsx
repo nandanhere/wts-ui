@@ -513,7 +513,7 @@ describe("RepositoryReviewScreen repository selection", () => {
     expect(screen.getByText("devtools/baseboard-api changes")).toBeVisible();
     expect(screen.getByTestId("patch-review-scroll")).toBeVisible();
     expect(
-      screen.getByRole("button", { name: "Checking GitLab" }),
+      screen.getByRole("button", { name: "Checking GitLab…" }),
     ).toBeDisabled();
 
     refresh.resolve(firstPatch);
@@ -851,7 +851,7 @@ describe("RepositoryReviewScreen repository selection", () => {
 
     expect(await screen.findByText("repo_changed changes")).toBeVisible();
     expect(screen.getByTestId("repository-review-toolbar")).toBeVisible();
-    expect(await screen.findByText("WTS checks review context")).toBeVisible();
+    expect(await screen.findByText("Checking review context…")).toBeVisible();
     expect(screen.queryByLabelText("Agent review brief")).not.toBeInTheDocument();
 
     await act(async () => {

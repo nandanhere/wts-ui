@@ -1596,7 +1596,7 @@ impl LocalWtsService {
                     &session,
                     None,
                     Some(if capture_failed {
-                        "WTS could not save the task's before state. Check free disk space and app storage permissions, then retry. The agent did not start.".to_owned()
+                        "Could not save the task's before state. Check free disk space and app storage permissions, then retry. The agent did not start.".to_owned()
                     } else { format!("The queued request could not start: {error}") }),
                     false,
                     Some(adapter),

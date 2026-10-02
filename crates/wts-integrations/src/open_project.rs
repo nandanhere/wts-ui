@@ -81,9 +81,9 @@ impl OpenProjectError {
             }
             Self::InvalidToken => "The configured OpenProject token is invalid.",
             Self::InvalidReference => "Enter a numeric work package ID or display ID.",
-            Self::ClientInitializationFailed => "WTS could not initialize its OpenProject client.",
+            Self::ClientInitializationFailed => "Could not initialize the OpenProject client.",
             Self::RequestTimedOut => "OpenProject did not answer before the timeout.",
-            Self::RequestFailed => "WTS could not reach OpenProject.",
+            Self::RequestFailed => "Could not reach OpenProject.",
             Self::ResponseTooLarge => "The OpenProject response exceeded WTS's local safety limit.",
             Self::ResponseInvalid => "OpenProject returned an invalid API v3 response.",
             Self::AuthenticationFailed => "OpenProject rejected the configured token.",

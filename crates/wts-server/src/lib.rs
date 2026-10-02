@@ -5252,22 +5252,22 @@ impl ApiError {
             OperationClass::Read => Self::new(
                 StatusCode::TOO_MANY_REQUESTS,
                 "read_capacity_exhausted",
-                "WTS is already serving the maximum number of local read operations. Retry shortly.",
+                "Too many local read operations are running. Retry shortly.",
             ),
             OperationClass::Scan => Self::new(
                 StatusCode::TOO_MANY_REQUESTS,
                 "scan_capacity_exhausted",
-                "WTS is already inspecting the maximum number of local workspaces. Retry shortly.",
+                "Too many local workspaces are being inspected. Retry shortly.",
             ),
             OperationClass::Heavy => Self::new(
                 StatusCode::TOO_MANY_REQUESTS,
                 "operation_capacity_exhausted",
-                "WTS is already running the maximum number of local operations. Retry shortly.",
+                "Too many local operations are running. Retry shortly.",
             ),
             OperationClass::RemoteRead => Self::new(
                 StatusCode::TOO_MANY_REQUESTS,
                 "remote_read_capacity_exhausted",
-                "WTS is already waiting on the maximum number of GitLab or GitHub reads. Retry shortly.",
+                "Too many GitLab or GitHub reads are waiting. Retry shortly.",
             ),
         }
     }
@@ -5317,7 +5317,7 @@ impl ApiError {
             RegistryFailure::RuntimeAnalysisUnavailable => Self::new(
                 StatusCode::SERVICE_UNAVAILABLE,
                 "runtime_analysis_unavailable",
-                "WTS could not revalidate the selected repository commits.",
+                "Could not revalidate the selected repository commits.",
             ),
             RegistryFailure::StaleRuntimeAnalysis => Self::new(
                 StatusCode::CONFLICT,
@@ -5393,7 +5393,7 @@ impl ApiError {
             MvpFailure::RepositoryFileNotText => Self::new(
                 StatusCode::UNPROCESSABLE_ENTITY,
                 "repository_file_not_text",
-                "WTS can show the complete file only when it contains UTF-8 text.",
+                "The complete file shows only when it contains UTF-8 text.",
             ),
             MvpFailure::RepositoryFileTooLarge => Self::new(
                 StatusCode::PAYLOAD_TOO_LARGE,
@@ -5413,12 +5413,12 @@ impl ApiError {
             MvpFailure::GitlabComparisonUnavailable => Self::new(
                 StatusCode::BAD_GATEWAY,
                 "gitlab_comparison_unavailable",
-                "WTS could not load the merge request comparison. Refresh the merge request and check the local branch.",
+                "Could not load the merge request comparison. Refresh the merge request and check the local branch.",
             ),
             MvpFailure::GitlabMergeRequestLinkUnavailable => Self::new(
                 StatusCode::BAD_GATEWAY,
                 "gitlab_merge_request_link_unavailable",
-                "WTS could not link the merge request. Check the GitLab connection and merge request, then retry.",
+                "Could not link the merge request. Check the GitLab connection and merge request, then retry.",
             ),
             MvpFailure::RepositoryChanged => Self::new(
                 StatusCode::CONFLICT,
@@ -5438,7 +5438,7 @@ impl ApiError {
             MvpFailure::RepositorySyncFailed => Self::new(
                 StatusCode::BAD_GATEWAY,
                 "repository_sync_failed",
-                "WTS could not fetch the saved tracking branch. Check the remote access and retry.",
+                "Could not fetch the saved tracking branch. Check the remote access and retry.",
             ),
             MvpFailure::RepositorySyncBusy => Self::new(
                 StatusCode::CONFLICT,
@@ -5458,22 +5458,22 @@ impl ApiError {
             MvpFailure::RepositoryAdditionFailed => Self::new(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "repository_addition_failed",
-                "WTS could not add the repository. The existing workspace was not changed.",
+                "Could not add the repository. The existing workspace was not changed.",
             ),
             MvpFailure::RepositoryAdditionCleanupIncomplete => Self::new(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "repository_addition_cleanup_failed",
-                "WTS could not add the repository or complete cleanup. Check the workspace before you retry.",
+                "Could not add the repository or complete cleanup. Check the workspace before you retry.",
             ),
             MvpFailure::RepositoryRemovalBlocked => Self::new(
                 StatusCode::CONFLICT,
                 "repository_removal_blocked",
-                "WTS cannot remove the only repository or a repository that has local files.",
+                "Cannot remove the only repository or a repository that has local files.",
             ),
             MvpFailure::RepositoryRemovalFailed => Self::new(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "repository_removal_failed",
-                "WTS could not remove the repository. Refresh the workspace before you retry.",
+                "Could not remove the repository. Refresh the workspace before you retry.",
             ),
             MvpFailure::RepositoryAlignmentStale => Self::new(
                 StatusCode::CONFLICT,
@@ -5483,7 +5483,7 @@ impl ApiError {
             MvpFailure::RepositoryAlignmentFailed => Self::new(
                 StatusCode::CONFLICT,
                 "repository_alignment_failed",
-                "WTS could not preserve and align the repository. Review its Git state before retrying.",
+                "Could not preserve and align the repository. Review its Git state before retrying.",
             ),
             MvpFailure::InvalidRepositoryBase => Self::new(
                 StatusCode::UNPROCESSABLE_ENTITY,
@@ -5508,12 +5508,12 @@ impl ApiError {
             MvpFailure::GitlabDiscussionsUnavailable => Self::new(
                 StatusCode::BAD_GATEWAY,
                 "gitlab_discussions_unavailable",
-                "WTS could not load the GitLab discussions. Check the connection and GitLab account.",
+                "Could not load the GitLab discussions. Check the connection and GitLab account.",
             ),
             MvpFailure::GitlabDiscussionReplyFailed => Self::new(
                 StatusCode::BAD_GATEWAY,
                 "gitlab_discussion_reply_failed",
-                "WTS could not confirm the reply. Refresh the discussion before you try again.",
+                "Could not confirm the reply. Refresh the discussion before you try again.",
             ),
             MvpFailure::ChangeRequestBranchNotPublished => Self::new(
                 StatusCode::CONFLICT,
@@ -5558,7 +5558,7 @@ impl ApiError {
             MvpFailure::ChangeRequestForkUnsupported => Self::new(
                 StatusCode::UNPROCESSABLE_ENTITY,
                 "change_request_fork_unsupported",
-                "WTS cannot prepare a fork change request until the provider project is verified.",
+                "Cannot prepare a fork change request until the provider project is verified.",
             ),
             MvpFailure::ChangeRequestAgentProposalUnavailable => Self::new(
                 StatusCode::CONFLICT,
@@ -5613,7 +5613,7 @@ impl ApiError {
             MvpFailure::RuntimeAnalysisUnavailable => Self::new(
                 StatusCode::SERVICE_UNAVAILABLE,
                 "runtime_analysis_unavailable",
-                "WTS could not inspect the selected repository commits.",
+                "Could not inspect the selected repository commits.",
             ),
             MvpFailure::StaleRuntimeAnalysis => Self::new(
                 StatusCode::CONFLICT,
@@ -5834,7 +5834,7 @@ impl ApiError {
             MvpFailure::AdapterOutputTooLarge => Self::new(
                 StatusCode::UNPROCESSABLE_ENTITY,
                 "adapter_output_too_large",
-                "The adapter produced more output than WTS can display safely.",
+                "The adapter produced too much output to display.",
             ),
             MvpFailure::GraphIndexFailed => Self::new(
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -5904,7 +5904,7 @@ impl ApiError {
             MvpFailure::AgentConversationSourceUnavailable => Self::new(
                 StatusCode::SERVICE_UNAVAILABLE,
                 "agent_conversation_source_unavailable",
-                "WTS needs its source repository. Start WTS with WTS_UI_REPOSITORY_ROOT set to the source checkout.",
+                "The source repository is missing. Start WTS with WTS_UI_REPOSITORY_ROOT set to the source checkout.",
             ),
             MvpFailure::AgentConversationUnavailable => Self::new(
                 StatusCode::SERVICE_UNAVAILABLE,
@@ -5970,12 +5970,12 @@ impl ApiError {
             MvpFailure::JiraMcpConfiguration => Self::new(
                 StatusCode::UNPROCESSABLE_ENTITY,
                 "jira_mcp_configuration_invalid",
-                "The Jira MCP registration uses a command or substitution WTS does not allow.",
+                "The Jira MCP registration uses a command or substitution that is not allowed.",
             ),
             MvpFailure::JiraMcpSpawnFailed => Self::new(
                 StatusCode::SERVICE_UNAVAILABLE,
                 "jira_mcp_spawn_failed",
-                "WTS could not start Jira. Start Podman, then try again.",
+                "Could not start Jira. Start Podman, then try again.",
             ),
             MvpFailure::JiraMcpTimedOut => Self::new(
                 StatusCode::GATEWAY_TIMEOUT,
@@ -10068,7 +10068,7 @@ mod tests {
         assert_eq!(body["error"]["code"], "gitlab_discussion_reply_failed");
         assert_eq!(
             body["error"]["message"],
-            "WTS could not confirm the reply. Refresh the discussion before you try again."
+            "Could not confirm the reply. Refresh the discussion before you try again."
         );
     }
 

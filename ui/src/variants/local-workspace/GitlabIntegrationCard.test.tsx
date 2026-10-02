@@ -57,7 +57,7 @@ describe("GitlabIntegrationCard", () => {
       await screen.findByText("No GitLab host in this workspace"),
     ).toBeVisible();
     expect(
-      screen.getByText(/checks hosts from trusted workspace repositories/),
+      screen.getByText(/Checks hosts from trusted workspace repositories/),
     ).toBeVisible();
   });
 

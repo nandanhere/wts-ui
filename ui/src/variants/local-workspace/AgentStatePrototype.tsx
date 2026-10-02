@@ -36,10 +36,10 @@ function sessionStatusLabel(session: AgentSession) {
     return `${provider} needs access`;
   }
   const labels: Record<AgentSession["status"], string> = {
-    launching: `WTS starts ${provider} in the background`,
+    launching: `Starting ${provider} in the background…`,
     handoffAccepted: `${provider} opened in Terminal`,
     running: `${provider} is working in the background`,
-    stopping: `WTS stops the background ${provider} task`,
+    stopping: `Stopping the background ${provider} task…`,
     completed: `${provider} completed the background task`,
     failed: `${provider} failed the background task`,
     interrupted: `${provider} stopped the background task`,
@@ -50,13 +50,13 @@ function sessionStatusLabel(session: AgentSession) {
 function sessionDetail(session: AgentSession) {
   if (session.needsInput) return session.needsInput.detail;
   if (session.failure === "userStopped") return "Stopped by you";
-  if (session.failure === "processExited") return "Connection lost after WTS restarted";
+  if (session.failure === "processExited") return "Connection lost after a restart";
   if (session.failure === "staleHeartbeat") return "Process stopped reporting state";
   if (session.failure === "providerFailed") return "Provider exited with an error";
   if (session.failure === "launchRejected") return "Provider could not be started";
   if (session.failure === "launchOutcomeUnknown") return "Launch outcome could not be observed";
   if (session.status === "handoffAccepted") {
-    return "External Terminal accepted the handoff. WTS cannot observe that process.";
+    return "External Terminal accepted the handoff. Cannot observe that process.";
   }
   return `Updated ${heartbeatLabel(session.lastHeartbeatAtUnixMs)}`;
 }
@@ -152,7 +152,7 @@ export function AgentStatePrototype({
       setError(
         cause instanceof Error
           ? cause.message
-          : "WTS could not read the agent connection.",
+          : "Could not read the agent connection.",
       );
     } finally {
       if (generation === generationRef.current) setBusy("idle");
@@ -210,7 +210,7 @@ export function AgentStatePrototype({
     } catch (cause) {
       if (generation !== generationRef.current) return;
       setError(
-        cause instanceof Error ? cause.message : "WTS could not start the agent.",
+        cause instanceof Error ? cause.message : "Could not start the agent.",
       );
     } finally {
       if (generation === generationRef.current) setBusy("idle");
@@ -233,7 +233,7 @@ export function AgentStatePrototype({
     } catch (cause) {
       if (generation !== generationRef.current) return;
       setError(
-        cause instanceof Error ? cause.message : "WTS could not stop the agent.",
+        cause instanceof Error ? cause.message : "Could not stop the agent.",
       );
     } finally {
       if (generation === generationRef.current) setBusy("idle");
@@ -278,7 +278,7 @@ export function AgentStatePrototype({
         data-ui-label="Live agent sessions"
       >
         {busy === "loading" && sessions.length === 0 && observedSessions.length === 0 ? (
-          <p className={styles.empty}>WTS checks for agent sessions…</p>
+          <p className={styles.empty}>Checking for agent sessions…</p>
         ) : sessions.length === 0 && observedSessions.length === 0 ? (
           <p className={styles.empty}>No agent session is visible in this workspace.</p>
         ) : (
@@ -366,7 +366,7 @@ export function AgentStatePrototype({
       </div>
 
       <p className={styles.visibilityNote}>
-        WTS shows agent updates and activity summaries. It does not show hidden reasoning or raw tool arguments.
+        Shows agent updates and activity summaries. Hidden reasoning and raw tool arguments stay hidden.
       </p>
 
       {!active && (

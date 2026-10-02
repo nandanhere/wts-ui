@@ -155,7 +155,7 @@ export const WorkspaceRemovalDialog = memo(function WorkspaceRemovalDialog({
                   : `Remove the ${workspace.key} plan?`}
               </Dialog.Title>
               <Dialog.Description id="workspace-removal-description">
-                WTS checks the current local state again before removing
+                The current local state is checked again before removing
                 anything. Repository branches are retained.
               </Dialog.Description>
             </div>
@@ -169,7 +169,7 @@ export const WorkspaceRemovalDialog = memo(function WorkspaceRemovalDialog({
           </header>
 
           <div className={styles.removalBody}>
-            {state === "repairing" && <p role="status">WTS checks the workspace records.</p>}
+            {state === "repairing" && <p role="status">Checking the workspace records…</p>}
             {state === "removing" && (
               <div
                 className={styles.removalProgress}
@@ -374,7 +374,7 @@ export const WorkspaceRemovalDialog = memo(function WorkspaceRemovalDialog({
                         <Glyph name="folder" size={15} />
                         <b>Protected planning files</b>
                       </span>
-                      <small>WTS did not create or own these files.</small>
+                      <small>These files are not created or owned by WTS.</small>
                     </header>
                     {protectedPaths.map((protectedPath) => {
                       const path = splitDisplayPath(

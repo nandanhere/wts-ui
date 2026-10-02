@@ -55,7 +55,7 @@ Do not use phrases such as `in order to`, `a variety of`, or `it is important to
 
 Do not use a phrasal verb when a direct verb works. Use `start` instead of `spin up`.
 
-Avoid status fragments that end in `-ing`. Use `Runs a command` instead of `Running a command`.
+Write progress text in the `-ing` form and end it with an ellipsis. Use `Checking GitLab…` instead of `WTS checks GitLab`.
 
 Use American spelling.
 
@@ -63,15 +63,17 @@ Use American spelling.
 
 Use active voice when the actor is known. Name the actor before the action.
 
+Do not make WTS the subject of interface text. The user is in WTS, so write about the result or the next action. Use `Could not read the file` instead of `WTS could not read the file`. Use `Your drafts are kept` instead of `WTS kept your drafts`.
+
 Use a verb for an action. Write "analyze the log," not "perform an analysis."
 
-Do not use a noun to hide an action. Write "WTS verifies the plan," not "WTS performs verification of the plan."
+Do not use a noun to hide an action. Write "verify the plan," not "perform verification of the plan."
 
 Do not stack auxiliary verbs. Remove phrases such as `it is important to note`.
 
 Do not use modal hedges. Remove phrases such as `it should be noted` and `as noted above`.
 
-Use a simple verb instead of an `-ing` main verb when possible.
+Use a simple verb instead of an `-ing` main verb when possible. Progress text is the exception.
 
 Write one instruction in each sentence. Keep an instruction at 20 words or fewer.
 
@@ -93,9 +95,9 @@ Preserve exact code, commands, identifiers, API fields, and interface labels. Do
 
 ## Write interface status text
 
-Name the actor when space permits. Use `Codex is active` instead of `Working`.
+Name an agent when space permits. Use `Codex is active` instead of `Working`. Do not name WTS as the actor.
 
-Use the simple present tense for an activity. Use `Runs tests` instead of `Running tests`.
+Use the `-ing` form with an ellipsis for work in progress. Use `Running tests…` instead of `Runs tests`. Use the past tense for a finished action, such as `Tests passed`.
 
 State the result before the source or implementation detail. Use `Codex finished` before `Observed locally`.
 
@@ -113,9 +115,10 @@ Before you finish, check the prose with this list:
 2. Replace each semicolon with a period.
 3. Expand each contraction.
 4. Change passive voice when the actor is known.
-5. Replace nominalizations and unnecessary `-ing` verbs.
-6. Replace phrasal verbs and modal hedges.
-7. Use one name for each item.
-8. Remove claims that do not provide technical information.
+5. Replace nominalizations and unnecessary `-ing` verbs. Keep the `-ing` form for progress text.
+6. Remove WTS as the subject of interface text.
+7. Replace phrasal verbs and modal hedges.
+8. Use one name for each item.
+9. Remove claims that do not provide technical information.
 
 A mechanical check can find only some errors. A writer must still check meaning, accuracy, and useful technical detail.

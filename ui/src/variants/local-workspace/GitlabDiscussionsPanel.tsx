@@ -134,7 +134,7 @@ export function GitlabDiscussionsPanel({
   const refreshing = entry?.state === "loading" || controller.loading;
   const freshness = snapshot?.fromCache
     ? refreshing ? "Saved comments · Check in progress" : "Saved comments · Refresh before reply"
-    : refreshing ? "WTS checks GitLab for new replies." : snapshot ? `Checked ${new Date(snapshot.fetchedAtUnixMs).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}` : "";
+    : refreshing ? "Checking GitLab for new replies…" : snapshot ? `Checked ${new Date(snapshot.fetchedAtUnixMs).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}` : "";
   const error = entry?.error || controller.error;
   const agentWorkspaceId = entry?.target.workspaceId ?? workspaceId;
   const agentContextAvailable = Boolean(agentWorkspaceId?.trim() && entry && snapshot &&
@@ -164,9 +164,9 @@ export function GitlabDiscussionsPanel({
     setOpenErrors((current) => ({ ...current, [key]: "" }));
     try {
       const result = await client.openGitlabMergeRequest(entry.target.repositoryId, entry.target.iid);
-      if (!result.accepted || result.repositoryId !== entry.target.repositoryId || result.iid !== entry.target.iid) throw new Error("WTS could not open this merge request.");
+      if (!result.accepted || result.repositoryId !== entry.target.repositoryId || result.iid !== entry.target.iid) throw new Error("Could not open this merge request.");
     } catch (cause) {
-      if (mountedRef.current) setOpenErrors((current) => ({ ...current, [key]: `${cause instanceof Error ? cause.message : "WTS could not open GitLab."} Open GitLab in your browser and check this merge request.` }));
+      if (mountedRef.current) setOpenErrors((current) => ({ ...current, [key]: `${cause instanceof Error ? cause.message : "Could not open GitLab."} Open GitLab in your browser and check this merge request.` }));
     }
   };
 
@@ -248,7 +248,7 @@ export function GitlabDiscussionsPanel({
         ...(target.workspaceId ? { workspaceId: target.workspaceId } : {}),
       });
       if (result.repositoryId !== target.repositoryId || result.iid !== target.iid || result.discussionId !== discussionId) {
-        throw new Error("WTS received a reply for a different conversation.");
+        throw new Error("Received a reply for a different conversation.");
       }
       published = true;
       const currentEntry = controllerRef.current.entries.find((candidate) => candidate.target.key === target.key);
@@ -265,7 +265,7 @@ export function GitlabDiscussionsPanel({
       });
       setReplies((current) => ({ ...current, [key]: { pending: false, error: "", published: true } }));
     } catch (cause) {
-      const message = cause instanceof Error ? cause.message : "WTS could not publish this reply. Your draft is saved here.";
+      const message = cause instanceof Error ? cause.message : "Could not publish this reply. Your draft is saved here.";
       gitlabDiscussionDrafts.failReply(key, message);
       if (!mountedRef.current) return;
       setReplies((current) => ({
@@ -312,13 +312,13 @@ export function GitlabDiscussionsPanel({
         <button className={styles.refresh} aria-label="Refresh conversations" disabled={entry?.state === "loading" || controller.loading} onClick={() => controller.refresh(entry?.target.key)} type="button"><span aria-hidden="true" data-pending={entry?.state === "loading" || controller.loading || undefined}><Glyph name="refresh" size={14} /></span>Refresh</button>
         {compact && onClose && <button aria-label="Close file conversations" onClick={onClose} type="button">Close</button>}
       </header>
-      {error && <div className={styles.error} role="alert" data-ui="gitlab-conversations.error" data-ui-label="Conversations error"><span>{error}</span><button disabled={entry?.state === "loading" || controller.loading} onClick={() => controller.refresh(entry?.target.key)} type="button">Retry conversations</button>{onOpenIntegrations && !error.startsWith("WTS is already") && <button onClick={onOpenIntegrations} type="button">Check GitLab connection</button>}</div>}
+      {error && <div className={styles.error} role="alert" data-ui="gitlab-conversations.error" data-ui-label="Conversations error"><span>{error}</span><button disabled={entry?.state === "loading" || controller.loading} onClick={() => controller.refresh(entry?.target.key)} type="button">Retry conversations</button>{onOpenIntegrations && !error.startsWith("Too many") && <button onClick={onOpenIntegrations} type="button">Check GitLab connection</button>}</div>}
       {openErrors[selectionKey] && <p className={styles.error} role="alert">{openErrors[selectionKey]}</p>}
       {snapshot?.truncated && <p className={styles.notice}>GitLab returned part of this conversation history.</p>}
       {!entry ? (
-        !error && <p className={styles.empty} role="status">{controller.loading ? "WTS checks GitLab for merge requests." : "No GitLab merge request matches this repository."}</p>
+        !error && <p className={styles.empty} role="status">{controller.loading ? "Checking GitLab for merge requests…" : "No GitLab merge request matches this repository."}</p>
       ) : !snapshot ? (
-        !error && <p className={styles.empty} role="status">{entry.state === "loading" ? "WTS loads GitLab conversations." : "Conversations are unavailable. Select Refresh to retry."}</p>
+        !error && <p className={styles.empty} role="status">{entry.state === "loading" ? "Loading GitLab conversations…" : "Conversations are unavailable. Select Refresh to retry."}</p>
       ) : (
         <div className={styles.feed} data-ui={compact ? "gitlab-file-conversations.list" : "gitlab-conversations.list"} data-ui-label={compact ? "File conversation list" : "Conversation list"}>
           {visibleDiscussions.length === 0 ? <p className={styles.empty}>No conversations match this view.</p> : (
@@ -373,14 +373,14 @@ export function GitlabDiscussionsPanel({
                         <form className={styles.composer} data-ui={compact ? "gitlab-file-conversations.composer" : "gitlab-conversations.composer"} data-ui-label={compact ? "File conversation reply" : "Conversation reply"} onSubmit={(event) => { event.preventDefault(); void reply(); }}>
                           <label><span className={styles.srOnly}>Reply</span><textarea ref={replyInputRef} aria-label="Reply" placeholder="Write a reply…" disabled={replyPending} maxLength={16_384} rows={3} value={body} onChange={(event) => {
                             if (!gitlabDiscussionDrafts.write(draftKey, event.target.value)) {
-                              setReplies((current) => ({ ...current, [draftKey]: { pending: false, error: "Clear a reply draft to start another. WTS retained your drafts.", published: false } }));
+                              setReplies((current) => ({ ...current, [draftKey]: { pending: false, error: "Clear a reply draft to start another. Your drafts are kept.", published: false } }));
                             }
                           }} /></label>
                           {replyError && <div className={styles.error} role="alert"><p>{replyError}</p><p>Check GitLab before you send this reply again. Your draft is saved here.</p><button onClick={() => void openMergeRequest()} type="button">Open MR in GitLab</button>{onOpenIntegrations && <button onClick={onOpenIntegrations} type="button">Check GitLab connection</button>}</div>}
                           {replyState?.published && <p className={styles.success} role="status">Reply published to GitLab.</p>}
                           <div className={styles.composerActions}>
                             <p>This reply goes to GitLab MR !{entry.target.iid}.</p>
-                            <button disabled={!fresh || !body.trim() || replyPending} type="submit">{replyPending ? "WTS publishes reply" : "Reply to GitLab"}</button>
+                            <button disabled={!fresh || !body.trim() || replyPending} type="submit">{replyPending ? "Publishing reply…" : "Reply to GitLab"}</button>
                             {onAskAgentToFix && agentContextAvailable && <button disabled={!active} onClick={askAgentToFix} type="button">Ask agent to fix</button>}
                           </div>
                           {onAskAgentToFix && !agentContextAvailable && <p>{agentWorkspaceId?.trim() ? "Refresh conversations before you ask an agent to fix this thread." : "Open an existing project workspace to ask an agent to fix this conversation."}</p>}

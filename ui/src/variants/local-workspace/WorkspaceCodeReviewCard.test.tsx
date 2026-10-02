@@ -147,7 +147,7 @@ describe("WorkspaceCodeReviewCard", () => {
     fake.runWorkspaceCodeReview.mockResolvedValue({ ...raptikReview, outcome: "unstructured", findings: [], summary: "The agent answered in free text.", rawOutput: "Looks fine to me." });
     render(<WorkspaceCodeReviewCard client={fake.client} workspaceId="ws_test" workspaceKey="TEST-1" />);
     await user.click(await screen.findByRole("button", { name: "Review code" }));
-    await user.click(await screen.findByText("WTS could not read findings from the agent. Show the agent output."));
+    await user.click(await screen.findByText("Could not read findings from the agent. Show the agent output."));
     expect(screen.getByText("Looks fine to me.")).toBeVisible();
   });
 
@@ -155,7 +155,7 @@ describe("WorkspaceCodeReviewCard", () => {
     const fake = fakeWorkspaceClient({});
     fake.listAgentModels.mockResolvedValue({ raptikSkillLoaded: false, providers: [{ provider: "codex", installed: false, models: [], modelSelectable: true }] });
     render(<WorkspaceCodeReviewCard client={fake.client} workspaceId="ws_test" workspaceKey="TEST-1" />);
-    expect(await screen.findByText(/WTS did not find Codex, Copilot, OpenCode, or Hermes/)).toBeInTheDocument();
+    expect(await screen.findByText(/No agent found. Codex, Copilot, OpenCode, and Hermes are missing/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Review code" })).toBeDisabled();
     expect(screen.getByText("General rules")).toBeInTheDocument();
   });

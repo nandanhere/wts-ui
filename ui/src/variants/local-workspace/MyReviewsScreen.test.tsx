@@ -140,7 +140,7 @@ describe("My reviews", () => {
     await user.click(screen.getByRole("button", { name: "My reviews" }));
     expect(await screen.findByRole(
       "heading",
-      { name: "WTS loads your reviews" },
+      { name: "Loading your reviews…" },
       { timeout: 5_000 },
     )).toBeVisible();
     resolveInbox(reviewInbox);
@@ -267,14 +267,14 @@ describe("My reviews", () => {
       githubReviewInbox: {
         ...reviewInbox,
         state: "stale",
-        detail: "GitHub is unavailable. WTS shows the last successful review list.",
+        detail: "GitHub is unavailable. Showing the last successful review list.",
         diagnosticCode: "providerTimedOut",
       },
     });
 
     render(<App initialPath="/reviews" workspaceClient={fake.client} />);
 
-    expect(await screen.findByText("WTS shows saved review data.")).toBeVisible();
+    expect(await screen.findByText("Showing saved review data.")).toBeVisible();
     expect(screen.getByRole("heading", { name: "Keep retry keys stable" })).toBeVisible();
     expect(screen.getByText("Saved")).toBeVisible();
   });

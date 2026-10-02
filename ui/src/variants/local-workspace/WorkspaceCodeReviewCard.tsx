@@ -102,7 +102,7 @@ function PostFindingButton({ finding }: { finding: CodeReviewFinding }) {
       setState("posted");
     } catch (cause) {
       setState("idle");
-      setError(cause instanceof Error ? cause.message : "WTS could not post this comment.");
+      setError(cause instanceof Error ? cause.message : "Could not post this comment.");
     }
   };
   return (
@@ -116,7 +116,7 @@ function PostFindingButton({ finding }: { finding: CodeReviewFinding }) {
         disabled={state !== "idle" || !target.canPost}
         onClick={() => void post()}
         title={!target.canPost
-          ? "WTS must check this MR with GitLab first. Refresh the conversations."
+          ? "Check this MR with GitLab first. Refresh the conversations."
           : inline ? "Post this comment on the changed line in the MR." : "Post this comment on the MR. The finding is not on a changed line of the published MR."}
         type="button"
       >
@@ -284,11 +284,11 @@ const TRACE_POLL_MS = 900;
 
 function traceKindLabel(kind: CodeReviewTraceStep["kind"]): string {
   switch (kind) {
-    case "thinking": return "Thinks";
-    case "message": return "Says";
-    case "command": return "Runs";
-    case "tool": return "Uses tool";
-    case "search": return "Searches";
+    case "thinking": return "Thinking";
+    case "message": return "Message";
+    case "command": return "Command";
+    case "tool": return "Tool";
+    case "search": return "Search";
     case "error": return "Error";
     case "status": return "Status";
   }
@@ -425,7 +425,7 @@ export function CodeReviewTraceView({
         </ol>
       ) : (
         <p className={styles.traceEmpty}>
-          {running ? "WTS starts the agent. The steps show here when the agent reports them." : "The agent reported no steps."}
+          {running ? "Starting the agent. The steps show here when the agent reports them." : "The agent reported no steps."}
         </p>
       )}
     </div>
@@ -537,9 +537,9 @@ export function WorkspaceCodeReviewCard({
     setError(null);
     try {
       const result = await client.openWorkspaceInVscode(workspaceId);
-      if (!result.accepted || result.workspaceId !== workspaceId) throw new Error("WTS could not open this workspace.");
+      if (!result.accepted || result.workspaceId !== workspaceId) throw new Error("Could not open this workspace.");
     } catch (cause) {
-      setError(`${cause instanceof Error ? cause.message : "WTS could not open VS Code."} Open VS Code, then open the saved workspace file.`);
+      setError(`${cause instanceof Error ? cause.message : "Could not open VS Code."} Open VS Code, then open the saved workspace file.`);
     } finally { setOpening(false); }
   };
 
@@ -733,9 +733,9 @@ export function WorkspaceCodeReviewCard({
         </label>
         <span className={styles.modelSource} data-ui="verification.code-review-model-source" data-ui-label="Model source">
           {catalogState === "loading"
-            ? "WTS reads the agent settings."
+            ? "Reading the agent settings…"
             : catalogState === "error"
-              ? "WTS could not read the agent settings. The agent uses its default model."
+              ? "Could not read the agent settings. The agent uses its default model."
               : providerEntry?.defaultSource
                 ? `From ${providerEntry.defaultSource}`
                 : "The agent uses its default model."}
@@ -756,7 +756,7 @@ export function WorkspaceCodeReviewCard({
 
       {noProvider && (
         <div className={styles.notice} role="status">
-          WTS did not find Codex, Copilot, OpenCode, or Hermes. Install one agent CLI, then read the agent models again.
+          No agent found. Codex, Copilot, OpenCode, and Hermes are missing. Install one agent CLI, then read the agent models again.
         </div>
       )}
       {!client.runWorkspaceCodeReview && (
@@ -837,7 +837,7 @@ export function WorkspaceCodeReviewCard({
               <p className={styles.summary}>{review.summary}</p>
               {review.outcome === "unstructured" && (
                 <details className={styles.rawOutput}>
-                  <summary>WTS could not read findings from the agent. Show the agent output.</summary>
+                  <summary>Could not read findings from the agent. Show the agent output.</summary>
                   <pre>{review.rawOutput || "The agent gave no output."}</pre>
                 </details>
               )}

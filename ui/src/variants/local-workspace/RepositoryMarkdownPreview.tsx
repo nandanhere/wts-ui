@@ -29,11 +29,11 @@ export function RepositoryMarkdownPreview({ file, feedback }: {
         }
         const complete = parsePatchFiles(response.fullPatch).flatMap((patch) => patch.files)
           .find((entry) => entry.name === file.name);
-        if (!complete) throw new Error("WTS could not display the complete file.");
+        if (!complete) throw new Error("Could not display the complete file.");
         setResult({ content: (deleted ? complete.deletionLines : complete.additionLines).join("") });
       })
       .catch((error: unknown) => {
-        if (active) setResult({ error: error instanceof Error ? error.message : "WTS could not read the complete file." });
+        if (active) setResult({ error: error instanceof Error ? error.message : "Could not read the complete file." });
       });
     return () => { active = false; };
   }, [client, workspaceId, repositoryId, baseCommitOid, headCommitOid, patchSha256, file.name, deleted]);
@@ -46,7 +46,7 @@ export function RepositoryMarkdownPreview({ file, feedback }: {
   });
   return (
     <section aria-label={`Markdown preview for ${file.name}`} className={styles.markdownPreview}>
-      {feedback && result.content === undefined && !result.error ? <p role="status">WTS reads the complete file…</p> : <>
+      {feedback && result.content === undefined && !result.error ? <p role="status">Reading the complete file…</p> : <>
         {result.error && <p role="alert">{result.error}</p>}
         <p className={styles.previewNotice}>
           {deleted ? "Deleted file" : "Changed version"} · {result.content !== undefined ? "Complete file" : "Patch excerpts only. Unchanged sections can be absent."}

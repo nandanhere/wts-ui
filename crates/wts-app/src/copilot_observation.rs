@@ -298,6 +298,7 @@ fn observe_snapshot(
         needs_input: None,
         change_request_proposals: Vec::new(),
         mr_link_proposals: Vec::new(),
+        work_periods: Vec::new(),
         started_at_unix_ms: snapshot.creation_date,
         last_event_at_unix_ms: snapshot.last_message_date,
     })

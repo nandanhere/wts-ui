@@ -13,7 +13,7 @@ const choices: { value: AgentTurnDecisionKind; label: string; status: string }[]
 ];
 const checkStates = { ready: "Recorded checks", stale: "Files changed", unavailable: "Checks unavailable", noChecks: "No checks configured" };
 const runStates = { running: "Active", passed: "Passed", failed: "Failed", timedOut: "Time limit reached", cancelled: "Cancelled", interrupted: "Interrupted", stale: "Files changed", blocked: "Blocked" };
-function errorText(cause: unknown) { return cause instanceof Error ? cause.message : "WTS could not save this decision. Refresh decisions before you retry."; }
+function errorText(cause: unknown) { return cause instanceof Error ? cause.message : "Could not save this decision. Refresh decisions before you retry."; }
 function initialDraft(key: string) { try { return { draft: readAgentTurnDecisionDraft(key), error: "" }; } catch (cause) { return { draft: { key, reason: "" }, error: errorText(cause) }; } }
 function matchingDecision(ledger: AgentTurnDecisions, draft: AgentTurnDecisionDraft) {
   const request = draft.pending;
@@ -69,7 +69,7 @@ function DecisionForm({ client, receipt, scopeKey, calloutScope }: { client: Wor
     try {
       const result = await client.recordAgentTurnDecision(receipt.conversationId, receipt.requestId, request);
       if (token !== generation.current) return;
-      if (!matchingDecision(result, { ...current, pending: request })) throw new Error("WTS did not confirm this decision. Refresh decisions before you retry.");
+      if (!matchingDecision(result, { ...current, pending: request })) throw new Error("This decision is not confirmed. Refresh decisions before you retry.");
       install(result, false);
     } catch (cause) {
       if (token !== generation.current) return;
@@ -88,10 +88,10 @@ function DecisionForm({ client, receipt, scopeKey, calloutScope }: { client: Wor
     <section role="region" aria-label="Task review decision">
       <p>Record your review choice for this saved result. A choice does not change the recorded check results.</p>
       {client.getAgentTurnDecisions ? <button type="button" disabled={busy} onClick={() => void load()}>Refresh decisions</button> : <p>This WTS host cannot read decision history. Update WTS to use this control.</p>}
-      {busy && <p role="status">WTS reads or saves the decision.</p>}
+      {busy && <p role="status">Reading or saving the decision…</p>}
       {error && <p role="alert">{error}</p>}
       {draft.needsRefresh && <p>Refresh decisions to review the latest history. Then save your choice again.</p>}
-      {draft.pending && <p>WTS kept this request for an exact retry. Refresh decisions to check its status. <button type="button" disabled={busy || !client.recordAgentTurnDecision} onClick={() => void save()}>Retry decision request</button></p>}
+      {draft.pending && <p>This request is kept for an exact retry. Refresh decisions to check its status. <button type="button" disabled={busy || !client.recordAgentTurnDecision} onClick={() => void save()}>Retry decision request</button></p>}
       {ledger && <p>{ledger.detail}</p>}
       {latest && <DecisionEntry decision={latest} />}
       {ledger && ledger.decisions.length > 1 && <details className={styles.decisionHistory}><summary>Decision history ({ledger.decisions.length - 1} earlier)</summary><ol>{ledger.decisions.slice(0, -1).reverse().map(decision => <li key={decision.decisionId}><DecisionEntry decision={decision} /></li>)}</ol></details>}

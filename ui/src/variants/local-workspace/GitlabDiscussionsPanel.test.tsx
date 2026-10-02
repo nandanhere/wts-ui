@@ -252,7 +252,7 @@ describe("GitLab conversations", () => {
 
   it("retries a busy conversation read in place without GitLab settings", () => {
     const fake = fakeWorkspaceClient();
-    const failed = { ...entry(), snapshot: undefined, state: "error" as const, error: "WTS is already running the maximum number of local operations. Retry shortly." };
+    const failed = { ...entry(), snapshot: undefined, state: "error" as const, error: "Too many local operations are running. Retry shortly." };
     const state = controller([failed]);
     render(<GitlabDiscussionsPanel active client={fake.client} controller={state} repositoryId="repo_orders" onOpenIntegrations={vi.fn()} />);
     expect(screen.queryByRole("button", { name: "Check GitLab connection" })).not.toBeInTheDocument();
@@ -389,7 +389,7 @@ describe("GitLab conversations", () => {
     const fake = fakeWorkspaceClient();
     render(<GitlabDiscussionsPanel active client={fake.client} controller={controller()} repositoryId="repo_orders" />);
     openGeneral(); draft("A new draft");
-    expect(screen.getByRole("alert")).toHaveTextContent("WTS retained your drafts");
+    expect(screen.getByRole("alert")).toHaveTextContent("Your drafts are kept");
     expect(gitlabDiscussionDrafts.read("saved-0")).toBe("Reply draft 0");
     gitlabDiscussionDrafts.write("saved-0", "");
     draft("A new draft");
@@ -433,7 +433,7 @@ describe("GitLab conversations", () => {
     first.unmount();
     render(<GitlabDiscussionsPanel active client={fake.client} controller={state} repositoryId="repo_orders" />);
     openGeneral();
-    expect(screen.getByRole("button", { name: "WTS publishes reply" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Publishing reply…" })).toBeDisabled();
     await act(async () => { pending.resolve(replyResult()); await pending.promise; });
     expect(fake.replyGitlabDiscussion).toHaveBeenCalledTimes(1);
     expect(screen.getByRole("textbox", { name: "Reply" })).toHaveValue("");

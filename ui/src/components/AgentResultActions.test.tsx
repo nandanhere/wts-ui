@@ -66,7 +66,7 @@ describe("task action recovery", () => {
     const state = setup(); render(<AgentResultActions {...state.props} />); fireEvent.click(screen.getByText("Host checks"));
     const button = await screen.findByRole("button", { name: "Run Unit tests" });
     const write = vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => { throw new Error("Full"); });
-    try { fireEvent.click(button); await screen.findByText(/could not save the request for a safe retry/); expect(state.run).not.toHaveBeenCalled(); }
+    try { fireEvent.click(button); await screen.findByText(/Could not save the request for a safe retry/); expect(state.run).not.toHaveBeenCalled(); }
     finally { write.mockRestore(); }
   });
   it("rejects another task's checks and ignores the previous client's late read", async () => {
@@ -118,7 +118,7 @@ describe("task action recovery", () => {
     const state = setup(); const run: AgentTurnCheckRun = { runId: "99999999-9999-4999-8999-999999999999", checkId: "unit", status: "timedOut", startedAtUnixMs: 1, durationMs: 300000, exitCode: 124, output: "Agent said passed.\nActual timeout.", outputTruncated: true, detail: "The command reached its time limit." };
     state.get.mockResolvedValue(agentTurnChecksFixture({ runs: [run] })); render(<AgentResultActions {...state.props} />); fireEvent.click(screen.getByText("Host checks"));
     fireEvent.click(await screen.findByText("Unit tests · Time limit reached"));
-    expect(screen.getByText("Agent said passed. Actual timeout.")).toBeVisible(); expect(screen.getByText("WTS omitted part of the command output.")).toBeVisible();
+    expect(screen.getByText("Agent said passed. Actual timeout.")).toBeVisible(); expect(screen.getByText("Part of the command output is omitted.")).toBeVisible();
     expect(screen.queryByText("Unit tests · Passed")).not.toBeInTheDocument();
   });
 });

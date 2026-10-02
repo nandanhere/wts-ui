@@ -41,14 +41,14 @@ export function useGithubReviewInbox(client: WorkspaceClient) {
       else setInbox((previous) => ({
         schemaVersion: 1, reviews: previous?.reviews ?? [], fetchedAtUnixMs: previous?.fetchedAtUnixMs ?? null,
         state: previous?.reviews.length ? "stale" : "error",
-        detail: github.reason instanceof Error ? github.reason.message : "WTS could not load GitHub reviews.",
+        detail: github.reason instanceof Error ? github.reason.message : "Could not load GitHub reviews.",
       }));
       if (gitlab.status === "fulfilled") {
         setGitlabInbox(reconcileGitlabReviewContinuity(gitlab.value));
       } else setGitlabInbox((previous) => ({
         schemaVersion: 1, reviews: previous?.reviews ?? [], fetchedAtUnixMs: previous?.fetchedAtUnixMs ?? null,
         state: previous?.reviews.length ? "stale" : "error",
-        detail: gitlab.reason instanceof Error ? gitlab.reason.message : "WTS could not load GitLab reviews.",
+        detail: gitlab.reason instanceof Error ? gitlab.reason.message : "Could not load GitLab reviews.",
       }));
       setError("");
       setState("ready");
@@ -139,7 +139,7 @@ export function MyReviewsScreen({
           result.number !== review.number ||
           !result.accepted
         ) {
-          throw new Error("WTS did not accept this review action.");
+          throw new Error("This review action was not accepted.");
         }
       } else {
         const result = await client.openGitlabMergeRequest(
@@ -151,14 +151,14 @@ export function MyReviewsScreen({
           result.iid !== review.number ||
           !result.accepted
         ) {
-          throw new Error("WTS did not accept this review action.");
+          throw new Error("This review action was not accepted.");
         }
       }
     } catch (cause) {
       setOpenError(
         cause instanceof Error && cause.message.trim()
           ? cause.message
-          : "WTS could not open this review.",
+          : "Could not open this review.",
       );
     } finally {
       setOpening(null);
@@ -195,13 +195,13 @@ export function MyReviewsScreen({
       {state === "loading" ? (
         <section className={styles.state} role="status">
           <span className={styles.spinner}><Glyph name="refresh" size={18} /></span>
-          <h2>WTS loads your reviews</h2>
-          <p>WTS checks GitHub and GitLab for direct review requests.</p>
+          <h2>Loading your reviews…</h2>
+          <p>Checking GitHub and GitLab for direct review requests…</p>
         </section>
       ) : state === "error" ? (
         <section className={styles.state} role="alert">
           <Glyph name="warning" size={22} />
-          <h2>WTS could not load your reviews</h2>
+          <h2>Could not load your reviews</h2>
           <p>{error}</p>
           <button onClick={onRefresh} type="button">Try again</button>
         </section>
@@ -228,7 +228,7 @@ export function MyReviewsScreen({
             <aside className={styles.notice} data-tone="warning" role="status">
               <Glyph name="warning" size={16} />
               <span>
-                <b>WTS shows saved review data.</b>
+                <b>Showing saved review data.</b>
                 {inbox.detail}
               </span>
             </aside>
@@ -237,7 +237,7 @@ export function MyReviewsScreen({
             <aside className={styles.notice} data-tone="warning" role="status">
               <Glyph name="warning" size={16} />
               <span>
-                <b>WTS shows saved GitLab review data.</b>
+                <b>Showing saved GitLab review data.</b>
                 {gitlabInbox.detail}
               </span>
             </aside>
@@ -256,7 +256,7 @@ export function MyReviewsScreen({
           {openError && (
             <aside className={styles.notice} data-tone="error" role="alert">
               <Glyph name="warning" size={16} />
-              <span><b>WTS could not open the review.</b>{openError}</span>
+              <span><b>Could not open the review.</b>{openError}</span>
             </aside>
           )}
           {!assignedReviews.length ? (
@@ -327,7 +327,7 @@ export function MyReviewsScreen({
                     type="button"
                   >
                     {opening === review.id
-                      ? "WTS opens…"
+                      ? "Opening…"
                       : provider === "gitlab" && review.reviewState === "approved"
                         ? "Open MR"
                         : "Review"}

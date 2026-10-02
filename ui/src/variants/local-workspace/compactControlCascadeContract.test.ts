@@ -24,7 +24,7 @@ describe("compact secondary-panel control cascade", () => {
 
   it("retains the deliberate compact sizing for each panel's controls", () => {
     expect(agentSessionsCss).toMatch(
-      /\.tab\s*\{[^}]*min-height:\s*36px/,
+      /\.expandButton\s*\{[^}]*height:\s*28px/,
     );
     expect(agentSessionsCss).toMatch(
       /\.assignment \[data-select-trigger\]\s*\{[^}]*height:\s*36px/,
@@ -44,10 +44,11 @@ describe("compact secondary-panel control cascade", () => {
   });
 
   it("keeps pressed and disabled feedback on actionable controls", () => {
-    expect(agentSessionsCss).toMatch(/\.tab:active\s*\{/);
+    expect(agentSessionsCss).toMatch(/\.expandButton:active:not\(:disabled\)\s*\{/);
     expect(agentSessionsCss).toMatch(
-      /\.ignoredToggle:active:not\(:disabled\),[\s\S]*?\.activitySource button:active:not\(:disabled\)\s*\{/,
+      /\.buttonPrimary:active:not\(:disabled\),[\s\S]*?\.buttonGhost:active:not\(:disabled\)/,
     );
+    expect(agentSessionsCss).toMatch(/\.linkButton:active:not\(:disabled\)\s*\{/);
     expect(agentSessionsCss).toMatch(
       /\.assignment \[data-select-trigger\]\[data-disabled\]\s*\{/,
     );

@@ -30,16 +30,16 @@ describe("theme contract", () => {
 
     expect(root).toHaveAttribute("data-theme", "dark");
     expect(root.style.colorScheme).toBe("dark");
-    expect(meta).toHaveAttribute("content", "#0f141c");
+    expect(meta).toHaveAttribute("content", "#090d16");
     expect(
       getComputedStyle(root).getPropertyValue("--wts-canvas").trim(),
-    ).toBe("#0f141c");
+    ).toBe("#090d16");
     expect(
       getComputedStyle(root).getPropertyValue("--wts-surface").trim(),
-    ).toBe("#151b24");
+    ).toBe("#111827");
     expect(
       getComputedStyle(root).getPropertyValue("--wts-shadow-md").trim(),
-    ).toContain("rgba(255, 255, 255");
+    ).toContain("rgba(0, 0, 0");
     expect(
       getComputedStyle(root).getPropertyValue("--wts-control-height").trim(),
     ).toBe("44px");

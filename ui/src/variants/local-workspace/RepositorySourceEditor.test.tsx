@@ -163,7 +163,7 @@ describe("local source editor", () => {
     }
     render(<RepositorySourceEditor {...f.props} filePath="src/overflow.ts" />);
     expect(f.getWorkspaceRepositorySource).toHaveBeenCalledTimes(64);
-    expect(screen.getByRole("alert")).toHaveTextContent("WTS retained your drafts");
+    expect(screen.getByRole("alert")).toHaveTextContent("Your drafts are kept");
   });
 
   it("saves the local file with its captured revision and does not publish it", async () => {

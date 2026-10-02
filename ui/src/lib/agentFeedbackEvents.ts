@@ -1,3 +1,5 @@
+export const AGENT_FEEDBACK_OPEN_EVENT = "wts:agent-feedback-open";
+export function openAgentFeedbackDrawer() { window.dispatchEvent(new Event(AGENT_FEEDBACK_OPEN_EVENT)); }
 import type { GitlabDiscussionFixContext } from "../variants/local-workspace/gitlabDiscussionFixContext";
 
 export const AGENT_FEEDBACK_REQUESTED_EVENT = "wts:agent-feedback-requested";

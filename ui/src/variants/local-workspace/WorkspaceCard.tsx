@@ -1,6 +1,6 @@
 import { memo, type ReactNode } from "react";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
-import { Button, type ButtonProps } from "react-aria-components";
+import { Button, ToggleButton, type ButtonProps } from "react-aria-components";
 import { Glyph } from "./Glyph";
 import type { GitlabMergeRequest, GitlabReview } from "../../lib/wtsClient";
 import {
@@ -14,9 +14,13 @@ import styles from "./LocalWorkspace.module.css";
 
 export interface WorkspaceCardProps {
   workspace: Workspace;
+  /** Compact aggregate badges, such as failed checks or unread comments. */
   attention?: ReactNode;
   agent?: WorkspaceAgentSnapshot;
+  /** The primary action. It opens the workspace or its configured tool. */
   onOpen: (modified: boolean) => void;
+  /** A click on the card surface opens the inspector. Without it, the surface uses onOpen. */
+  onPreview?: () => void;
   onOpenWorkspace?: () => void;
   primaryActionLabel?: string;
   issueAction?: {
@@ -32,6 +36,12 @@ export interface WorkspaceCardProps {
   }>;
   buttonRef?: (element: HTMLButtonElement | null) => void;
   dragProps?: Omit<ButtonProps, "children" | "className" | "onPress">;
+  /** Pinned cards keep their lane and position. Agent and GitLab activity do not move them. */
+  pin?: {
+    pinned: boolean;
+    disabled?: boolean;
+    onToggle: () => void;
+  };
 }
 
 export interface WorkspaceNextStep {
@@ -51,11 +61,41 @@ export function workspaceNextStep(
   if (agent?.state === "attention") return { label: "Review the agent session", tone: "action" };
   if (gitlabReview?.status === "open" && gitlabReview.reviewState === "changesAfterApproval") return { label: "Review the new changes", tone: "action" };
   if (gitlabReview?.status === "open" && gitlabReview.reviewState !== "approved") return { label: "Review the MR", tone: "action" };
-  if (agent?.state === "working") return { label: "Agent works", tone: "wait" };
+  if (agent?.state === "working") return { label: "View progress", tone: "wait" };
   if (agent?.updateKind === "completion" && !agent.observedLocally) return { label: "Check the agent result", tone: "action" };
-  if (mergeRequest?.status === "merged" || gitlabReview?.status === "merged") return { label: "Merged. Park or remove", tone: "done" };
+  if (mergeRequest?.status === "merged" || gitlabReview?.status === "merged") return { label: "Park or remove", tone: "done" };
   if (workspace.lane === "planned") return { label: "Start the work", tone: "action" };
   return undefined;
+}
+
+export type AgentStatusTone = "working" | "attention" | "done" | "idle";
+
+/** A short agent status for the card pill: provider and state. */
+export function agentStatus(agent: WorkspaceAgentSnapshot): { label: string; tone: AgentStatusTone } {
+  const provider = agentProviderLabels[agent.provider];
+  if (agent.needsInput === "question") return { label: provider + ": Needs your answer", tone: "attention" };
+  if (agent.needsInput === "access") return { label: provider + ": Needs access", tone: "attention" };
+  if (agent.state === "attention") return { label: provider + ": Needs attention", tone: "attention" };
+  if (agent.state === "working") return { label: provider + ": Working", tone: "working" };
+  if (agent.updateKind === "completion" && !agent.observedLocally) return { label: provider + ": Finished", tone: "done" };
+  if (agent.observedLocally) return { label: provider + ": Open in VS Code", tone: "idle" };
+  return { label: provider + ": Idle", tone: "idle" };
+}
+
+/** Sorts open merge requests first, then by the latest update. */
+export function orderedMergeRequests(mergeRequests: readonly GitlabMergeRequest[]) {
+  const statusPriority = { open: 0, merged: 1, closed: 2 } as const;
+  return [...mergeRequests].sort((left, right) =>
+    statusPriority[left.status] - statusPriority[right.status] ||
+    right.updatedAt.localeCompare(left.updatedAt));
+}
+
+export function mergeRequestStatusLabel(mergeRequest: GitlabMergeRequest, gitlabReview?: GitlabReview) {
+  if (mergeRequest.status === "merged") return "Merged";
+  if (mergeRequest.status === "closed") return "Closed";
+  if (gitlabReview?.reviewState === "changesAfterApproval") return "New changes";
+  if (gitlabReview?.reviewState === "approved") return "Approved";
+  return mergeRequest.draft ? "Draft" : "Open";
 }
 
 export const WorkspaceCard = memo(function WorkspaceCard({
@@ -63,6 +103,7 @@ export const WorkspaceCard = memo(function WorkspaceCard({
   attention,
   agent,
   onOpen,
+  onPreview,
   onOpenWorkspace,
   primaryActionLabel,
   issueAction,
@@ -72,235 +113,169 @@ export const WorkspaceCard = memo(function WorkspaceCard({
   moveActions = [],
   buttonRef,
   dragProps,
+  pin,
 }: WorkspaceCardProps) {
-  const observedIssueItems = workspace.observedWorkItems.filter(
-    (item) => item.issueKey !== workspace.key,
-  );
-  const showsIdentity =
-    workspace.kind !== "Repositories" || observedIssueItems.length > 0;
-  const sourceLabel = agent?.observedLocally
-    ? "VS Code session"
-    : workspace.provider;
-  const hasActions = moveActions.length > 0;
-  const orderedMergeRequests = [...mergeRequests].sort((left, right) => {
-    const statusPriority = { open: 0, merged: 1, closed: 2 } as const;
-    return (
-      statusPriority[left.status] - statusPriority[right.status] ||
-      right.updatedAt.localeCompare(left.updatedAt)
-    );
-  });
-  const primaryMergeRequest = orderedMergeRequests[0];
-  const mergeRequestStatus = primaryMergeRequest
-    ? primaryMergeRequest.status === "merged"
-      ? "Merged"
-      : primaryMergeRequest.status === "closed"
-        ? "Closed"
-        : gitlabReview?.reviewState === "changesAfterApproval"
-          ? "New changes after approval"
-          : gitlabReview?.reviewState === "approved"
-            ? "Approved"
-            : primaryMergeRequest.draft
-              ? "Draft"
-              : "Open"
-    : "";
-  const hasInlineAction = Boolean(
-    issueAction || (primaryMergeRequest && onOpenMergeRequest),
-  );
+  const ordered = orderedMergeRequests(mergeRequests);
+  const primaryMergeRequest = ordered[0];
   const nextStep = workspaceNextStep(workspace, agent, gitlabReview, primaryMergeRequest);
-  const cardContents = (
-    <>
-      <span className={styles.cardHeader}>
-        <strong className={styles.issueTitle}>{workspace.title}</strong>
-        <span className={styles.cardTime}>{workspace.updated}</span>
-      </span>
-      {showsIdentity && (
-        <span className={styles.cardIdentity}>
-          {workspace.kind !== "Repositories" &&
-            (issueAction ? (
-              <Button
-                aria-label={issueAction.label}
-                className={styles.cardIssueLink}
-                onPress={issueAction.onPress}
-              >
-                <span>{workspace.key}</span>
-                <Glyph name="external" size={12} />
-              </Button>
-            ) : (
-              <span className={styles.issueKey}>{workspace.key}</span>
-            ))}
-          {observedIssueItems.map((item) => (
-            <InfoTooltip
-              key={item.issueKey}
-              content={`Observed in ${item.sourceFiles.join(", ")}`}
-            >
-              <span className={styles.issueKey} tabIndex={0} role="note">
-                {item.issueKey}
-              </span>
-            </InfoTooltip>
-          ))}
-        </span>
-      )}
-      {primaryMergeRequest && (
-        <span
-          className={styles.cardDelivery}
-          data-status={primaryMergeRequest.status}
-        >
-          <Glyph name="branch" size={13} />
-          {onOpenMergeRequest ? (
-            <a
-              aria-label={`Open merge request !${primaryMergeRequest.iid} in GitLab`}
-              className={styles.cardMergeRequestLink}
-              href={primaryMergeRequest.webUrl}
-              onClick={(event) => {
-                event.preventDefault();
-                onOpenMergeRequest(primaryMergeRequest);
-              }}
-              rel="noreferrer"
-              target="_blank"
-            >
-              MR !{primaryMergeRequest.iid}
-              <Glyph name="external" size={11} />
-            </a>
-          ) : (
-            <b>MR !{primaryMergeRequest.iid}</b>
-          )}
-          <b className={styles.cardMergeRequestStatus}>{mergeRequestStatus}</b>
-          {orderedMergeRequests.length > 1 && (
-            <span>+{orderedMergeRequests.length - 1} more</span>
-          )}
-        </span>
-      )}
-      {agent && (
-        <span className={styles.cardAgent} data-state={agent.state}>
-          <span className={styles.cardAgentMain}>
-            <span className={styles.cardAgentStatus}>
-              <i aria-hidden="true" />
-              <b>
-                {agent.updateKind === "completion" && !agent.observedLocally
-                  ? `${agentProviderLabels[agent.provider]} finished`
-                  : agent.headline}
-              </b>
-            </span>
-          </span>
-          {agent.latestUpdate && (
-            <span className={styles.cardAgentUpdate}>
-              <span>{agent.latestUpdate}</span>
-            </span>
-          )}
-          <span className={styles.cardAgentDetail}>
-            {(agent.updateKind !== "completion" || agent.observedLocally) && (
-              <span>{agent.activity}</span>
-            )}
-          </span>
-        </span>
-      )}
-      {!agent && (
-        <span className={styles.cardSummary}>
-          <StateDot state={workspace.lane} />
-          {workspace.summary}
-        </span>
-      )}
-      <span className={styles.cardFooter}>
-        {nextStep ? (
-          <span className={styles.cardNextStep} data-tone={nextStep.tone}>
-            <b>{nextStep.label}</b>
-            <span className={styles.providerMeta}>{sourceLabel}</span>
-          </span>
-        ) : (
-          <span className={styles.providerMeta}>{sourceLabel}</span>
-        )}
-        <span className={styles.cardArrow} aria-hidden="true">
-          <Glyph name="arrow" size={15} />
-        </span>
-      </span>
-    </>
-  );
+  const status = agent ? agentStatus(agent) : undefined;
+  const openLabel = primaryActionLabel ?? "Open " + workspace.key + ": " + workspace.title;
+  const ctaText = nextStep && nextStep.tone !== "done" ? nextStep.label : "Open workspace";
+  const repository = workspace.repositoryPlans[0];
+  const hasMenu = Boolean(onOpenWorkspace || issueAction || moveActions.length);
 
   return (
     <article
       className={styles.workspaceCardShell}
-      data-has-actions={hasActions || undefined}
+      data-has-actions="true"
+      data-pinnable={pin ? true : undefined}
+      data-pinned={pin?.pinned || undefined}
       data-lane={workspace.lane}
       data-delivery-status={primaryMergeRequest?.status}
     >
-      {hasInlineAction ? (
-        <div className={styles.workspaceCard}>
-          <Button
-            {...dragProps}
-            aria-label={
-              primaryActionLabel ?? `Open ${workspace.key}: ${workspace.title}`
-            }
-            className={styles.workspaceCardHitArea}
-            onPress={(event) => onOpen(event.metaKey || event.ctrlKey)}
-            ref={buttonRef}
-          />
-          {cardContents}
-        </div>
-      ) : (
-        <Button
-          {...dragProps}
-          aria-label={
-            primaryActionLabel ?? `Open ${workspace.key}: ${workspace.title}`
-          }
-          className={styles.workspaceCard}
-          onPress={(event) => onOpen(event.metaKey || event.ctrlKey)}
-          ref={buttonRef}
-        >
-          {cardContents}
-        </Button>
-      )}
-      {attention}
-      {hasActions && (
-        <div
-          aria-label={`${workspace.key} actions`}
-          className={styles.cardActions}
-          role="group"
-        >
-          {onOpenWorkspace && (
-            <Button
-              aria-label={`Open ${workspace.key} in VS Code`}
-              className={`${styles.cardActionButton} ${styles.cardOpenButton}`}
-              onPress={onOpenWorkspace}
+      <Button
+        {...dragProps}
+        aria-label={onPreview ? "Preview " + workspace.key + ": " + workspace.title : openLabel}
+        className={styles.workspaceCardHitArea}
+        onPress={(event) => (onPreview ? onPreview() : onOpen(event.metaKey || event.ctrlKey))}
+        ref={onPreview ? undefined : buttonRef}
+      />
+      <div className={styles.workspaceCard}>
+        <header className={styles.cardHeader}>
+          <strong className={styles.issueTitle}>{workspace.title}</strong>
+          <span className={styles.cardTime}>{workspace.updated}</span>
+          {pin && (
+            <InfoTooltip
+              align="end"
+              content={pin.pinned
+                ? "Pinned. The card stays in this position. Click to unpin."
+                : "Pin the card to keep it in this position."}
             >
-              Open workspace
-              <Glyph name="external" size={11} />
-            </Button>
+              <ToggleButton
+                aria-label={"Pin " + workspace.key}
+                className={styles.cardPinToggle}
+                data-ui={"spaces.pin." + workspace.id}
+                data-ui-label={workspace.key + " pin"}
+                isDisabled={pin.disabled}
+                isSelected={pin.pinned}
+                onChange={pin.onToggle}
+              >
+                <Glyph name="pin" size={14} />
+              </ToggleButton>
+            </InfoTooltip>
           )}
-          {moveActions.length > 0 && (
-            <DropdownMenu.Root>
-              <DropdownMenu.Trigger asChild>
-                <Button
-                  aria-label={`Move ${workspace.key}`}
-                  className={`${styles.cardActionButton} ${styles.cardMoveButton}`}
+        </header>
+
+        <div className={styles.cardContext}>
+          {primaryMergeRequest ? (
+            <span className={styles.cardDelivery} data-status={primaryMergeRequest.status}>
+              <Glyph name="branch" size={13} />
+              {onOpenMergeRequest ? (
+                <a
+                  aria-label={"Open merge request !" + primaryMergeRequest.iid + " in GitLab"}
+                  className={styles.cardMergeRequestLink}
+                  href={primaryMergeRequest.webUrl}
+                  onClick={(event) => {
+                    event.preventDefault();
+                    onOpenMergeRequest(primaryMergeRequest);
+                  }}
+                  rel="noreferrer"
+                  target="_blank"
                 >
-                  Move
-                  <Glyph name="chevron" size={12} />
-                </Button>
-              </DropdownMenu.Trigger>
-              <DropdownMenu.Portal>
-                <DropdownMenu.Content
-                  align="start"
-                  className={`${styles.portalSurface} ${styles.menuContent}`}
-                  sideOffset={5}
-                >
-                  <DropdownMenu.Label className={styles.menuLabel}>
-                    Move workspace
-                  </DropdownMenu.Label>
-                  {moveActions.map((action) => (
-                    <DropdownMenu.Item
-                      className={styles.menuItem}
-                      key={action.label}
-                      onSelect={action.onPress}
-                    >
-                      {action.label}
-                    </DropdownMenu.Item>
-                  ))}
-                </DropdownMenu.Content>
-              </DropdownMenu.Portal>
-            </DropdownMenu.Root>
-          )}
+                  MR !{primaryMergeRequest.iid}
+                </a>
+              ) : (
+                <b>MR !{primaryMergeRequest.iid}</b>
+              )}
+              <b className={styles.cardMergeRequestStatus}>
+                {mergeRequestStatusLabel(primaryMergeRequest, gitlabReview)}
+              </b>
+              {ordered.length > 1 && <span>+{ordered.length - 1}</span>}
+            </span>
+          ) : workspace.kind !== "Repositories" ? (
+            issueAction ? (
+              <Button aria-label={issueAction.label} className={styles.cardIssueLink} onPress={issueAction.onPress}>
+                <span>{workspace.key}</span>
+                <Glyph name="external" size={11} />
+              </Button>
+            ) : (
+              <span className={styles.issueKey}>{workspace.key}</span>
+            )
+          ) : repository ? (
+            <span className={styles.cardBranch}>
+              <Glyph name="branch" size={13} />
+              <code>{repository.label}</code>
+              {workspace.repositoryPlans.length > 1 && <span>+{workspace.repositoryPlans.length - 1}</span>}
+            </span>
+          ) : null}
         </div>
-      )}
+
+        <div className={styles.cardSignals}>
+          {status ? (
+            <span className={styles.cardAgentPill} data-tone={status.tone}>
+              <i aria-hidden="true" />
+              {status.label}
+            </span>
+          ) : (
+            <span className={styles.cardSummary}>
+              <StateDot state={workspace.lane} />
+              {workspace.summary}
+            </span>
+          )}
+          {attention}
+        </div>
+      </div>
+
+      <footer aria-label={workspace.key + " actions"} className={styles.cardActions} role="group">
+        <Button
+          aria-label={openLabel}
+          className={styles.cardPrimaryAction}
+          data-tone={nextStep?.tone === "action" ? "action" : "quiet"}
+          onPress={(event) => onOpen(event.metaKey || event.ctrlKey)}
+          ref={onPreview ? buttonRef : undefined}
+        >
+          {ctaText}
+          <Glyph name="arrow" size={13} />
+        </Button>
+        {hasMenu && (
+          <DropdownMenu.Root>
+            <DropdownMenu.Trigger asChild>
+              <Button aria-label={"More actions for " + workspace.key} className={styles.cardMenuButton}>
+                <Glyph name="more" size={16} />
+              </Button>
+            </DropdownMenu.Trigger>
+            <DropdownMenu.Portal>
+              <DropdownMenu.Content
+                align="end"
+                className={styles.portalSurface + " " + styles.menuContent}
+                sideOffset={5}
+              >
+                {onOpenWorkspace && (
+                  <DropdownMenu.Item className={styles.menuItem} onSelect={onOpenWorkspace}>
+                    <Glyph name="code" size={14} /> Open in VS Code
+                  </DropdownMenu.Item>
+                )}
+                {issueAction && (
+                  <DropdownMenu.Item className={styles.menuItem} onSelect={issueAction.onPress}>
+                    <Glyph name="external" size={14} /> {issueAction.label}
+                  </DropdownMenu.Item>
+                )}
+                {moveActions.length > 0 && (onOpenWorkspace || issueAction) && (
+                  <DropdownMenu.Separator className={styles.menuSeparator} />
+                )}
+                {moveActions.length > 0 && (
+                  <DropdownMenu.Label className={styles.menuLabel}>Move workspace</DropdownMenu.Label>
+                )}
+                {moveActions.map((action) => (
+                  <DropdownMenu.Item className={styles.menuItem} key={action.label} onSelect={action.onPress}>
+                    {action.label}
+                  </DropdownMenu.Item>
+                ))}
+              </DropdownMenu.Content>
+            </DropdownMenu.Portal>
+          </DropdownMenu.Root>
+        )}
+      </footer>
     </article>
   );
 });

@@ -576,9 +576,9 @@ fn current_preflight(
     if result.blockers.is_empty() {
         result.state = AgentWorkItemIntegrationPreflightState::Ready;
         result.detail = if result.resume_request_id.is_some() {
-            "Continue this integration. WTS checked completed file effects and the remaining files. Keep other editors and Git tools idle until it finishes."
+            "Continue this integration. Completed file effects and the remaining files are checked. Keep other editors and Git tools idle until it finishes."
         } else {
-            "Apply this checked candidate's file changes to the original workspace. WTS preserves its existing files, Git history, and index. Keep other editors and Git tools idle until it finishes."
+            "Apply this checked candidate's file changes to the original workspace. Existing files, Git history, and the index stay unchanged. Keep other editors and Git tools idle until it finishes."
         }.to_owned();
     } else {
         result.detail = "Resolve the listed conditions before integration. The candidate and its saved changes remain available.".to_owned();
@@ -902,14 +902,14 @@ fn apply_integration(
             .is_ok_and(|current| matches_capture(&expected, &current))
             || turn_changes::target_identity(&item.source.target)? != journal.target_identity
         {
-            journal.result.blockers.push(blocker("finalStateChanged", None, "WTS could not confirm the final file state. Review the listed effects and current files, then continue this integration."));
+            journal.result.blockers.push(blocker("finalStateChanged", None, "Could not confirm the final file state. Review the listed effects and current files, then continue this integration."));
         }
     }
     journal.finished = true;
     if journal.result.blockers.is_empty() {
         journal.result.state = AgentWorkItemIntegrationResultState::Integrated;
         journal.result.integrated_at_unix_ms = Some(now_unix_ms());
-        journal.result.detail = "WTS applied the listed candidate files and checked the final state. Git history, the index, and other original files remain unchanged. Alternative candidates remain available.".to_owned();
+        journal.result.detail = "Applied the listed candidate files and checked the final state. Git history, the index, and other original files remain unchanged. Alternative candidates remain available.".to_owned();
     } else {
         journal.result.state = AgentWorkItemIntegrationResultState::Incomplete;
         journal.result.detail = "Integration stopped. Review the listed effects and conditions. Continue the same integration to apply the remaining files. Candidate snapshots remain available.".to_owned();
@@ -1009,12 +1009,12 @@ pub(super) fn recover_pending_workspace(
             }) {
                 journal.pending_file = None;
             } else {
-                journal.result.blockers.push(blocker("fileEffectUnknown", Some(file.file_path), "This file changed before WTS could confirm the pending write. Review its current contents before you continue."));
+                journal.result.blockers.push(blocker("fileEffectUnknown", Some(file.file_path), "This file changed before the pending write was confirmed. Review its current contents before you continue."));
             }
         }
         journal.finished = true;
         journal.result.state = AgentWorkItemIntegrationResultState::Incomplete;
-        journal.result.blockers.push(blocker("hostStopped", None, "The host stopped before integration finished. WTS saved the confirmed file effects. Review them, then continue the same integration if its expected files still match."));
+        journal.result.blockers.push(blocker("hostStopped", None, "The host stopped before integration finished. The confirmed file effects are saved. Review them, then continue the same integration if its expected files still match."));
         journal.result.detail = "Integration stopped before its final result was saved. The workspace is available. Saved file effects remain attached to this integration.".to_owned();
         save_journal(store, &journal)?;
     }

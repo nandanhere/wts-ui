@@ -43,7 +43,7 @@ describe("personal local workspace registry", () => {
     await user.click(within(dialog).getByRole("button", { name: "Import" }));
 
     expect(await within(dialog).findByRole("alert")).toHaveTextContent(
-      "Jira returned WRONG-9 while WTS was importing RIGHT-8",
+      "Jira returned WRONG-9 during the import of RIGHT-8",
     );
     expect(
       within(dialog).getByRole("textbox", {

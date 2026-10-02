@@ -922,7 +922,7 @@ export function RepositoryPatchViewer({
           (file) => file.fileDiff.name === filePath,
         );
         if (!completeFile) {
-          throw new Error("WTS could not display the complete file.");
+          throw new Error("Could not display the complete file.");
         }
         setFullFiles((files) => ({
           ...files,
@@ -942,7 +942,7 @@ export function RepositoryPatchViewer({
             error:
               cause instanceof Error
                 ? cause.message
-                : "WTS could not read the complete file.",
+                : "Could not read the complete file.",
             status: "error",
           },
         }));
@@ -1159,7 +1159,7 @@ export function RepositoryPatchViewer({
   if (summary.files.length === 0) {
     return (
       <div className={styles.parseError} role="alert">
-        <b>WTS could not display this patch</b>
+        <b>Could not display this patch</b>
         <p>The repository returned a patch with no readable file changes.</p>
       </div>
     );

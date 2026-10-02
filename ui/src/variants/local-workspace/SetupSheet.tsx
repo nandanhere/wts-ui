@@ -411,7 +411,7 @@ function nextAction(
   }
   if (integration.wtsSupport === "detectionOnly") {
     return definition.id === "jiraMcp"
-      ? "WTS found an HTTP configuration signal, but this adapter requires a supported stdio registration."
+      ? "Found an HTTP configuration signal, but this adapter requires a supported stdio registration."
       : `${definition.label} is detected but has no runnable local action.`;
   }
   if (
@@ -420,7 +420,7 @@ function nextAction(
     (integration.setup === "needsAuth" || integration.setup === "unverified")
   ) {
     if (definition.id === "jiraMcp") {
-      return "Select Connect Jira. If Podman is unavailable, WTS can use uv to download the Jira adapter.";
+      return "Select Connect Jira. If Podman is unavailable, uv can download the Jira adapter.";
     }
     if (definition.id === "openProject") {
       return "Verify the configured OpenProject API before importing a work package.";
@@ -864,7 +864,7 @@ function IntegrationsPanel({
           <span className={styles.eyebrow}>LOCAL CAPABILITIES</span>
           <h3 id="preferences-integrations-title">Integrations</h3>
           <p>
-            Verify the tools WTS can safely use. Checks are read-only and do
+            Verify the tools that are safe to use. Checks are read-only and do
             not launch a provider.
           </p>
         </div>
@@ -962,7 +962,7 @@ function RepositoriesPanel({
           <span className={styles.eyebrow}>LOCAL CATALOG</span>
           <h3 id="preferences-repositories-title">Repositories</h3>
           <p>
-            WTS runs a bounded nested scan across configured trusted local
+            Runs a bounded nested scan across configured trusted local
             roots.
           </p>
         </div>
@@ -992,7 +992,7 @@ function RepositoriesPanel({
             <Icon name="warning" size={14} />
             {repositories.skippedEntries}{" "}
             {repositories.skippedEntries === 1 ? "entry was" : "entries were"}{" "}
-            skipped because WTS could not safely inspect them.
+            skipped because they could not be inspected safely.
           </div>
         )}
 
@@ -1183,7 +1183,7 @@ function GeneralPanel({
               ? `Git is ready, and ${repositoryCount} local ${
                   repositoryCount === 1 ? "repository is" : "repositories are"
                 } available.`
-              : "WTS needs Git and at least one discovered repository before it can materialize a workspace."}
+              : "Git and at least one discovered repository are required to create a workspace."}
           </p>
         </div>
       </div>
@@ -1191,7 +1191,7 @@ function GeneralPanel({
       <section className={styles.settingsBlock}>
         <header>
           <h4>Appearance</h4>
-          <p>Choose how WTS looks on this computer.</p>
+          <p>Choose the look of WTS on this computer.</p>
         </header>
         <fieldset
           aria-label="Color theme"
@@ -1321,7 +1321,7 @@ function GeneralPanel({
           ))}
         </dl>
         <p className={styles.runnerBoundary}>
-          WTS resolves local files and asks Playwright for Chromium’s executable
+          Resolves local files and asks Playwright for Chromium’s executable
           path. This check does not open a browser or contact the network.
         </p>
       </section>
@@ -1329,7 +1329,7 @@ function GeneralPanel({
       <section className={styles.settingsBlock}>
         <header>
           <h4>Verification behavior</h4>
-          <p>How this version of WTS checks your environment.</p>
+          <p>How environment checks work in this version.</p>
         </header>
         <dl className={styles.settingsList}>
           <div>

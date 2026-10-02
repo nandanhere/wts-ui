@@ -289,7 +289,7 @@ describe("personal local workspace registry", () => {
         {
           code: "branchConflict",
           message:
-            "The workspace branch already exists locally. WTS will not overwrite or delete it; create a revised plan to use a new branch.",
+            "The workspace branch already exists locally. It will not be overwritten or deleted. create a revised plan to use a new branch.",
         },
       ],
       warnings: [],
@@ -312,7 +312,7 @@ describe("personal local workspace registry", () => {
 
     expect(
       await screen.findByText(
-        "The workspace branch already exists locally. WTS will not overwrite or delete it; create a revised plan to use a new branch.",
+        "The workspace branch already exists locally. It will not be overwritten or deleted. create a revised plan to use a new branch.",
       ),
     ).toBeVisible();
     expect(screen.getByText("wts/task-42-7fd1cafe")).toBeVisible();
@@ -1410,7 +1410,7 @@ describe("personal local workspace registry", () => {
     expect(fake.getGitlabMergeRequests).toHaveBeenCalledTimes(requestsBeforeFocus + 1);
     expect(screen.getByRole("status", {
       name: "orders-api merge request status",
-    })).toHaveTextContent("WTS checks GitLab for the MR");
+    })).toHaveTextContent("Checking GitLab for the MR…");
     expect(screen.queryByRole("button", { name: "Prepare MR" })).not.toBeInTheDocument();
 
     await act(async () => {
@@ -1652,7 +1652,7 @@ describe("personal local workspace registry", () => {
 
     expect(await screen.findByRole("status", {
       name: "beacon merge request status",
-    })).toHaveTextContent("WTS checks GitLab");
+    })).toHaveTextContent("Checking GitLab…");
     expect(screen.queryByRole("button", { name: "Prepare MR" })).not.toBeInTheDocument();
 
     await act(async () => {
@@ -2257,7 +2257,7 @@ describe("personal local workspace registry", () => {
     expect(align).toBeDisabled();
     await user.click(
       within(dialog).getByRole("checkbox", {
-        name: /I understand that WTS will change the worktree commit/i,
+        name: /I understand that the worktree commit will change/i,
       }),
     );
     await user.click(align);

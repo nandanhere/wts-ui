@@ -178,7 +178,7 @@ describe("WTS app updates", () => {
         availableVersion: "0.2.0",
         downloadedBytes: 524_288,
         totalBytes: 1_048_576,
-        detail: "WTS downloads and verifies the update.",
+        detail: "Downloading and verifying the update…",
       },
     });
 
@@ -241,14 +241,14 @@ describe("WTS app updates", () => {
         schemaVersion: 1,
         state: "error",
         currentVersion: "0.1.0",
-        detail: "WTS could not reach the configured update channel.",
+        detail: "Could not reach the configured update channel.",
         diagnosticCode: "networkUnavailable",
       },
     });
 
     render(<App initialPath="/updates" workspaceClient={fake.client} />);
 
-    expect(await screen.findByRole("heading", { name: "WTS is offline" })).toBeVisible();
+    expect(await screen.findByRole("heading", { name: "Offline" })).toBeVisible();
     fake.checkForUpdate.mockResolvedValueOnce({
       schemaVersion: 1,
       state: "upToDate",
@@ -258,7 +258,7 @@ describe("WTS app updates", () => {
     await user.click(
       screen.getByRole("button", { name: "Check for updates" }),
     );
-    expect(await screen.findByText("WTS is up to date")).toBeVisible();
+    expect(await screen.findByText("Up to date")).toBeVisible();
     expect(fake.checkForUpdate).toHaveBeenCalledTimes(2);
   });
 });

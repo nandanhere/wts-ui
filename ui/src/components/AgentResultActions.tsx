@@ -7,7 +7,7 @@ import { AgentResultWorkSets } from "./AgentResultWorkSets";
 import { AgentResultDecision } from "./AgentResultDecision";
 import styles from "./AgentResultReview.module.css";
 
-function errorText(cause: unknown) { return cause instanceof Error ? cause.message : "WTS could not complete this request. Refresh its status before you retry."; }
+function errorText(cause: unknown) { return cause instanceof Error ? cause.message : "Could not complete this request. Refresh its status before you retry."; }
 function matches(value: { conversationId: string; requestId: string; workspaceId: string; repositoryId: string; sessionId: string }, receipt: AgentTurnChanges) {
   return ["conversationId", "requestId", "workspaceId", "repositoryId", "sessionId"].every(key => value[key as keyof typeof value] === receipt[key as keyof AgentTurnChanges]);
 }
@@ -62,7 +62,7 @@ function HostChecks({ client, receipt, actionKey, onOpenVerification }: { client
     try { savePendingTurnAction(attempt); } catch (cause) { setError(errorText(cause)); return; }
     pendingRef.current = attempt; setPending(attempt); busyRef.current = true; setBusy(true); setError(""); const request = ++generation.current;
     try { const value = await client.runAgentTurnCheck(receipt.conversationId, receipt.requestId, attempt.request); if (request === generation.current) {
-      if (!value.runs.some(item => item.runId === attempt.request.requestId && item.checkId === attempt.request.checkId)) throw new Error("WTS did not confirm this check request. Refresh its status before you retry.");
+      if (!value.runs.some(item => item.runId === attempt.request.requestId && item.checkId === attempt.request.checkId)) throw new Error("This check request is not confirmed. Refresh its status before you retry.");
       install(value);
     } } catch (cause) { if (request === generation.current) setError(errorText(cause)); }
     finally { if (request === generation.current) { busyRef.current = false; setBusy(false); } }
@@ -75,13 +75,13 @@ function HostChecks({ client, receipt, actionKey, onOpenVerification }: { client
       <a href={`/sessions/${encodeURIComponent(receipt.workspaceId)}/verification`} onClick={event => { if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return; event.preventDefault(); onOpenVerification(); }}>Open workspace verification</a>
       {!client.getAgentTurnChecks && <p>This WTS host cannot read task checks. Update WTS to use this control.</p>}
       {client.getAgentTurnChecks && <button type="button" disabled={busy} onClick={() => void load()}>Refresh checks</button>}
-      {busy && <p role="status">WTS reads or runs the selected check.</p>}
+      {busy && <p role="status">Reading or running the selected check…</p>}
       {error && <p role="alert">{error}</p>}
-      {pending && <p>WTS kept this request for an exact retry. Refresh checks to read its status. <button type="button" disabled={busy || !client.runAgentTurnCheck} onClick={() => void run()}>Retry check request</button></p>}
+      {pending && <p>This request is kept for an exact retry. Refresh checks to read its status. <button type="button" disabled={busy || !client.runAgentTurnCheck} onClick={() => void run()}>Retry check request</button></p>}
       {checks && <><p>{checks.detail}</p>{checks.state === "ready" && checks.afterCheckpointId !== receipt.after?.checkpointId && <p>The check record uses another checkpoint. Refresh the task record before you run a check.</p>}
         <ul className={styles.checks}>{checks.checks.map(check => <li key={check.checkId}><span>{check.label}</span><button type="button" disabled={!fresh || busy || !!pending || !client.runAgentTurnCheck || checks.runs.some(run => run.status === "running")} onClick={() => void run(check)}>Run {check.label}</button></li>)}</ul>
         {!client.runAgentTurnCheck && checks.checks.length > 0 && <p>This WTS host cannot run task checks. Update WTS to use this control.</p>}
-        {checks.runs.map(run => <details key={run.runId} className={styles.run}><summary>{checks.checks.find(check => check.checkId === run.checkId)?.label ?? run.checkId} · {runLabels[run.status]}</summary><p>{run.detail}</p><p>{run.durationMs !== undefined && `${run.durationMs} ms`}{run.exitCode !== undefined && ` · Exit ${run.exitCode}`}</p>{run.output && <pre>{run.output}</pre>}{run.outputTruncated && <p>WTS omitted part of the command output.</p>}</details>)}
+        {checks.runs.map(run => <details key={run.runId} className={styles.run}><summary>{checks.checks.find(check => check.checkId === run.checkId)?.label ?? run.checkId} · {runLabels[run.status]}</summary><p>{run.detail}</p><p>{run.durationMs !== undefined && `${run.durationMs} ms`}{run.exitCode !== undefined && ` · Exit ${run.exitCode}`}</p>{run.output && <pre>{run.output}</pre>}{run.outputTruncated && <p>Part of the command output is omitted.</p>}</details>)}
       </>}
     </section>
   </details>;
@@ -120,7 +120,7 @@ function TaskRestore({ client, receipt, actionKey }: { client: WorkspaceClient; 
     try {
       const value = await client.restoreAgentTurn(receipt.conversationId, receipt.requestId, attempt.request);
       if (request !== generation.current) return;
-      if (value.conversationId !== receipt.conversationId || value.requestId !== receipt.requestId || value.restoreRequestId !== attempt.request.requestId) throw new Error("WTS did not confirm this restore request. Refresh its status before you retry.");
+      if (value.conversationId !== receipt.conversationId || value.requestId !== receipt.requestId || value.restoreRequestId !== attempt.request.requestId) throw new Error("This restore request is not confirmed. Refresh its status before you retry.");
       setResult(value); setPreflight(undefined);
       if (value.state !== "incomplete") { clearPendingTurnAction(attempt); pendingRef.current = undefined; setPending(undefined); }
     } catch (cause) { if (request === generation.current) setError(errorText(cause)); }
@@ -131,12 +131,12 @@ function TaskRestore({ client, receipt, actionKey }: { client: WorkspaceClient; 
   return <details className={styles.actionDisclosure} onToggle={event => setOpened(event.currentTarget.open)}>
     <summary>Restore task changes</summary>
     <section aria-label="Restore task changes" role="region">
-      <p>WTS can restore only the listed files to their state before this task. It checks for later edits before each restore.</p><p>Keep other editors and Git tools idle until the restore finishes.</p>
+      <p>Restores only the listed files to their state before this task. Later edits are checked before each restore.</p><p>Keep other editors and Git tools idle until the restore finishes.</p>
       {!client.preflightAgentTurnRestore && <p>This WTS host cannot inspect a restore. Update WTS to use this control.</p>}
       {client.preflightAgentTurnRestore && <button type="button" disabled={busy} onClick={() => void load()}>Refresh restore details</button>}
-      {busy && <p role="status">WTS checks or restores the listed files.</p>}
+      {busy && <p role="status">Checking or restoring the listed files…</p>}
       {error && <p role="alert">{error}</p>}
-      {pending && <p>WTS kept this request for an exact retry. Refresh restore details to read its status. A retry does not approve new file changes. <button type="button" disabled={busy || !client.restoreAgentTurn} onClick={() => void restore()}>Retry restore request</button></p>}
+      {pending && <p>This request is kept for an exact retry. Refresh restore details to read its status. A retry does not approve new file changes. <button type="button" disabled={busy || !client.restoreAgentTurn} onClick={() => void restore()}>Retry restore request</button></p>}
       {effects && <><p>{effects.detail}</p><ul className={styles.restoreFiles}>{effects.files.map(file => <li key={file.filePath}><strong>{file.action === "remove" ? "Remove" : "Restore"}</strong> <code>{file.filePath}</code></li>)}</ul>
         {effects.blockers.length > 0 && <ul>{effects.blockers.map((blocker, index) => <li key={`${blocker.code}:${blocker.filePath}:${index}`}>{blocker.filePath && <code>{blocker.filePath}: </code>}{blocker.detail}</li>)}</ul>}
         {preflight?.state === "ready" && preflight.afterCheckpointId !== receipt.after?.checkpointId && <p>The restore details use another checkpoint. Refresh the task record before you continue.</p>}

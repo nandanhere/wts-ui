@@ -48,7 +48,7 @@ export function GitlabIntegrationCard({
       setError(
         cause instanceof Error && cause.message.trim()
           ? cause.message
-          : "WTS could not check the GitLab connection.",
+          : "Could not check the GitLab connection.",
       );
     }
   }, [client, workspaceId]);
@@ -81,7 +81,7 @@ export function GitlabIntegrationCard({
   const statusLabel = !workspaceId
     ? "No workspace"
     : loadState === "loading"
-      ? "WTS checks"
+      ? "Checking…"
       : loadState === "error"
         ? "Check failed"
         : status?.cliState === "missing"
@@ -126,7 +126,7 @@ export function GitlabIntegrationCard({
         ) : status?.cliState === "missing" ? (
           <>
             <span><Glyph name="warning" size={13} />GitLab CLI is required</span>
-            <small>Install and configure <code>glab</code> in Terminal. WTS uses the existing CLI account.</small>
+            <small>Install and configure <code>glab</code> in Terminal. The existing CLI account is used.</small>
             <button className={styles.adapterVerifyButton} onClick={() => void load()} type="button">
               Check again
             </button>
@@ -134,7 +134,7 @@ export function GitlabIntegrationCard({
         ) : status && status.accounts.length === 0 ? (
           <>
             <span><Glyph name="check" size={13} />No GitLab host in this workspace</span>
-            <small>WTS checks hosts from trusted workspace repositories.</small>
+            <small>Checks hosts from trusted workspace repositories.</small>
             <button
               className={styles.adapterVerifyButton}
               disabled={loadState === "loading"}
@@ -181,7 +181,7 @@ export function GitlabIntegrationCard({
               onClick={() => void load()}
               type="button"
             >
-              {loadState === "loading" ? "WTS checks…" : "Check connection"}
+              {loadState === "loading" ? "Checking…" : "Check connection"}
             </button>
           </>
         )}

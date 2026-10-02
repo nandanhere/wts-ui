@@ -197,10 +197,10 @@ describe("existing merge request linking", () => {
       .not.toHaveTextContent("Different branches");
     const branchToggle = within(linkedMr).getByRole("button", { name: "Different branches" });
     expect(branchToggle).toHaveAttribute("aria-expanded", "false");
-    expect(screen.queryByText(/WTS does not compare or publish this MR from this worktree/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/This MR is not compared or published from this worktree/)).not.toBeInTheDocument();
     await user.click(branchToggle);
     expect(branchToggle).toHaveAttribute("aria-expanded", "true");
-    expect(screen.getByText(/WTS does not compare or publish this MR from this worktree/)).toBeVisible();
+    expect(screen.getByText(/This MR is not compared or published from this worktree/)).toBeVisible();
     expect(linkedMr).toHaveTextContent("MRreview/beacon-complete-flow");
     expect(linkedMr).toHaveTextContent("Localwts/local-repositories-seahorse-e2dfa9a6");
     expect(await screen.findByText("In Progress")).toBeVisible();
@@ -259,7 +259,7 @@ describe("existing merge request linking", () => {
     expect(screen.getByRole("group", { name: "Linked MR !43 for beacon" }))
       .toHaveTextContent("Different branches");
     rejectRefresh(new Error("GitLab unavailable"));
-    expect(await screen.findByText("beacon · MR !43 linked. WTS could not refresh other MRs.")).toBeVisible();
+    expect(await screen.findByText("beacon · MR !43 linked. Could not refresh other MRs.")).toBeVisible();
     expect(screen.getByRole("link", { name: /Open beacon merge request !43 on GitLab/ })).toBeVisible();
     expect(screen.queryByRole("dialog", { name: "Find existing MR for beacon" })).not.toBeInTheDocument();
   });

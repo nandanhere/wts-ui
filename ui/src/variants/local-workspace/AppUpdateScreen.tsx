@@ -55,7 +55,7 @@ export function useAppUpdate(client: WorkspaceClient): AppUpdateController {
       setError(
         cause instanceof Error
           ? cause.message
-          : "WTS could not check for updates.",
+          : "Could not check for updates.",
       );
     } finally {
       operationActive.current = false;
@@ -135,7 +135,7 @@ export function useAppUpdate(client: WorkspaceClient): AppUpdateController {
       setError(
         cause instanceof Error
           ? cause.message
-          : "WTS could not install the update.",
+          : "Could not install the update.",
       );
     } finally {
       operationActive.current = false;
@@ -149,14 +149,14 @@ export function useAppUpdate(client: WorkspaceClient): AppUpdateController {
     try {
       const result = await client.relaunchUpdatedApp();
       if (!result.accepted) {
-        throw new Error("WTS did not accept the relaunch request.");
+        throw new Error("The relaunch request was not accepted.");
       }
     } catch (cause) {
       if (!mounted.current) return;
       setError(
         cause instanceof Error
           ? cause.message
-          : "WTS could not relaunch the app.",
+          : "Could not relaunch the app.",
       );
       setAction("idle");
     }
@@ -203,7 +203,7 @@ export function AppUpdateScreen({
         <span>
           {!embedded && <small>WTS</small>}
           <h1>App updates</h1>
-          <p>WTS checks for and installs signed updates automatically.</p>
+          <p>Checks for and installs signed updates automatically.</p>
         </span>
         <Button
           className={styles.secondaryButton}
@@ -242,21 +242,21 @@ export function AppUpdateScreen({
           <h2>
             {effectiveError
               ? offline
-                ? "WTS is offline"
-                : "WTS could not update"
+                ? "Offline"
+                : "Could not update"
               : checking && !status
-                ? "WTS checks for updates"
+                ? "Checking for updates…"
                 : status?.state === "disabled"
                   ? "Updates are not available"
                   : status?.state === "upToDate"
-                    ? "WTS is up to date"
+                    ? "Up to date"
                     : status?.state === "available"
                       ? `WTS ${status.availableVersion} is available`
                       : status?.state === "downloading"
-                        ? `WTS downloads ${status.availableVersion}`
+                        ? `Downloading ${status.availableVersion}…`
                         : status?.state === "ready"
                           ? `WTS ${status.availableVersion} is ready`
-                          : "WTS checks for updates"}
+                          : "Checking for updates…"}
           </h2>
           <p>{effectiveError || status?.detail || "Checking the configured update channel."}</p>
           {status?.notes && status.state === "available" && (
@@ -272,7 +272,7 @@ export function AppUpdateScreen({
               <small>
                 {status?.downloadedBytes !== undefined
                   ? `${formattedBytes(status.downloadedBytes)}${status.totalBytes ? ` of ${formattedBytes(status.totalBytes)}` : " downloaded"}`
-                  : "WTS downloads and verifies the update."}
+                  : "Downloading and verifying the update…"}
               </small>
             </div>
           )}

@@ -156,7 +156,7 @@ export async function persistFeedbackCapture(draft: AgentFeedbackDraft, storage:
     pendingCaptureIds.delete(draft.id);
     if (draft.attempt) return draft;
     const { capture: _capture, ...source } = draft.request.source;
-    return { ...draft, request: { ...draft.request, source }, captureNote: "WTS could not save the image. This draft includes the selected text and controls." };
+    return { ...draft, request: { ...draft.request, source }, captureNote: "Could not save the image. This draft includes the selected text and controls." };
   }
 }
 export async function cleanupFeedbackCaptures(storage: FeedbackCaptureStorage = browserCaptures): Promise<void> {
@@ -183,5 +183,5 @@ export async function hydrateFeedbackCapture(draft: AgentFeedbackDraft, storage:
     }
   } catch { /* Keep the text if the image cannot be read. */ }
   if (draft.attempt) return draft;
-  return { ...draft, captureId: undefined, captureNote: "WTS could not read the image. This draft includes the selected text and controls." };
+  return { ...draft, captureId: undefined, captureNote: "Could not read the image. This draft includes the selected text and controls." };
 }

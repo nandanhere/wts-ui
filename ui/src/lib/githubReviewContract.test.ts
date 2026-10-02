@@ -23,7 +23,7 @@ describe("GitHub review transport contract", () => {
         draft: false,
       }],
       fetchedAtUnixMs: 1_776_153_300_000,
-      detail: "WTS shows saved review data.",
+      detail: "Showing saved review data.",
       diagnosticCode: "providerTimedOut",
     })).toMatchObject({
       state: "stale",

@@ -1213,7 +1213,7 @@ impl TestArtifactStore {
                     failed_step_id: None,
                     failed_step_kind: None,
                     name: "interrupted".to_owned(),
-                    message: "WTS restarted before this local browser journey completed."
+                    message: "The app restarted before this local browser journey completed."
                         .to_owned(),
                     console_errors: Vec::new(),
                     failed_requests: Vec::new(),

@@ -138,12 +138,12 @@ describe("LocalWorkspace Accessibility and Consistency Improvements", () => {
       expect(spacesButton).toHaveAttribute("data-rac");
       expect(spacesButton).toHaveAttribute("data-react-aria-pressable");
       expect(
-        screen.queryByRole("navigation", { name: "WTS sections" }),
-      ).not.toBeInTheDocument();
+        screen.getByRole("navigation", { name: "WTS sections" }),
+      ).toBeInTheDocument();
 
       await user.click(screen.getByRole("button", { name: "My time" }));
       expect(
-        await screen.findByRole("heading", { name: "Work activity" }),
+        await screen.findByRole("heading", { name: "My time", level: 2 }),
       ).toBeVisible();
       await user.click(spacesButton);
       expect(

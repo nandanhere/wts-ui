@@ -1,6 +1,7 @@
+import { requestAppRefresh, subscribeAppRefresh } from "../../lib/appRefresh";
 import { useWorkspaceAttention } from "./useWorkspaceAttention";
-import { openAgentFeedbackResult } from "../../lib/agentFeedbackEvents";
-import { loadAgentSessions } from "../../lib/agentSessionDiscovery";
+import { openAgentFeedbackDrawer, openAgentFeedbackResult } from "../../lib/agentFeedbackEvents";
+import { invalidateAgentSessions, loadAgentSessions } from "../../lib/agentSessionDiscovery";
 import type { AgentMrLinkProposal } from "../../lib/wtsClient";
 import { returnToFeedbackSelection } from "../../lib/agentFeedbackNavigation";
 import { getWorkspaceAttentionStore, type WorkspaceAttentionItem } from "./workspaceAttention";
@@ -97,6 +98,7 @@ import { SelectMenu } from "../../components/SelectMenu";
 import { SetupSheet } from "./SetupSheet";
 import { VerificationPanel, type VerificationAttentionSelection } from "./VerificationPanel";
 import { AgentSessionsPanel } from "./AgentSessionsPanel";
+import { AgentFleetScreen, buildFleetCards } from "./AgentFleetScreen";
 import { TimeReviewScheduler } from "./TimeReviewScheduler";
 import { AgentStatePrototype } from "./AgentStatePrototype";
 import { WorkspaceWorkItemsPanel } from "./WorkspaceWorkItemsPanel";
@@ -531,12 +533,12 @@ export const agentProviderLabels: Record<AgentProvider | "copilot", string> = {
 };
 
 const liveAgentActivityLabels = {
-  thinking: "Reviews the task",
-  usingTools: "Uses a tool",
-  editing: "Edits files",
-  runningCommand: "Runs a command",
-  searching: "Searches",
-  delegating: "Uses subagents",
+  thinking: "Reviewing the task…",
+  usingTools: "Using a tool…",
+  editing: "Editing files…",
+  runningCommand: "Running a command…",
+  searching: "Searching…",
+  delegating: "Using subagents…",
 } as const;
 
 function readableAgentUpdate(value: string) {
@@ -586,13 +588,13 @@ function buildWorkspaceAgentSnapshots(list: AgentSessionList) {
     const activity = needsInput
       ? needsInput.detail
       : session.status === "launching"
-        ? "WTS starts the agent"
+        ? "Starting the agent…"
         : session.status === "running"
           ? `${session.category === "uncategorized" ? "Agent" : session.category} session is active`
           : completed
             ? "Agent work is ready for review"
           : session.status === "stopping"
-            ? "WTS stops the agent"
+            ? "Stopping the agent…"
             : "Review the session";
     keepLatest({
       workspaceId: session.workspaceId,
@@ -877,6 +879,7 @@ type HistoryNavigationTarget =
   | { view: "board" }
   | { view: "time" }
   | { view: "reviews" }
+  | { view: "agents" }
   | { view: "workbench"; workspaceId: string; tab: WorkbenchTab };
 
 function historyNavigationTarget(
@@ -886,6 +889,7 @@ function historyNavigationTarget(
   if (path === "/" || path === "/sessions") return { view: "board" };
   if (path === "/time") return { view: "time" };
   if (path === "/reviews") return { view: "reviews" };
+  if (path === "/agents") return { view: "agents" };
 
   const match = path.match(
     /^\/sessions\/([^/]+)(?:\/(overview|planning|changes|verification|agent|cli))?$/,
@@ -1035,7 +1039,7 @@ function AddWorkspaceRepositoryDialog({
       setBaseRef(result.selectedBaseRef ?? repository.defaultBranch.name);
       setRemoteUrl("");
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "WTS could not clone this repository.");
+      setError(cause instanceof Error ? cause.message : "Could not clone this repository.");
     } finally {
       setCloning(false);
     }
@@ -1052,12 +1056,12 @@ function AddWorkspaceRepositoryDialog({
         baseRef,
       );
       if (result.workspaceId !== workspace.id || result.repositoryId !== repositoryId) {
-        throw new Error("WTS returned a repository review for another workspace.");
+        throw new Error("Received a repository review for another workspace.");
       }
       setPreflight(result);
       setState("ready");
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "WTS could not review this repository.");
+      setError(cause instanceof Error ? cause.message : "Could not review this repository.");
       setState("idle");
     }
   };
@@ -1074,12 +1078,12 @@ function AddWorkspaceRepositoryDialog({
         preflight.effectDigest,
       );
       if (result.workspaceId !== workspace.id) {
-        throw new Error("WTS added the repository to another workspace.");
+        throw new Error("The repository was added to another workspace.");
       }
       onComplete(result);
       onOpenChange(false);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "WTS could not add this repository.");
+      setError(cause instanceof Error ? cause.message : "Could not add this repository.");
       setState("ready");
     }
   };
@@ -1101,7 +1105,7 @@ function AddWorkspaceRepositoryDialog({
                 Add repository to {workspace.key}
               </Dialog.Title>
               <Dialog.Description className={styles.dialogDescription} id="add-workspace-repository-description">
-                WTS adds one managed worktree here. Existing work and local changes stay in place.
+                Adds one managed worktree here. Existing work and local changes stay in place.
               </Dialog.Description>
             </div>
             <Dialog.Close aria-label="Close add repository" className={styles.iconButton} disabled={state === "adding"}>
@@ -1376,7 +1380,7 @@ function PreparedVerificationBrief({
             ? `WTS.md is saved at ${draft.briefDisplayPath ?? "the workspace root"}. Choose an agent when you are ready to continue.`
             : draft.briefState === "error"
               ? draft.briefError
-              : "WTS is saving the workspace-owned brief before an agent can use it."}
+              : "Saving the workspace brief before an agent can use it…"}
         </p>
         <details>
           <summary>Review prepared brief</summary>
@@ -1454,7 +1458,7 @@ function RepositoryAlignmentDialog({
               </Dialog.Title>
               <Dialog.Description id="repository-alignment-description">
                 The tracking branch no longer contains the workspace commit.
-                WTS cannot use a fast-forward update.
+                Cannot use a fast-forward update.
               </Dialog.Description>
             </div>
             <Dialog.Close
@@ -1471,7 +1475,7 @@ function RepositoryAlignmentDialog({
                 <Glyph name="refresh" size={18} />
                 <span>
                   <b>Checking upstream history</b>
-                  <small>WTS fetches and compares the trusted commits…</small>
+                  <small>Fetching and comparing the trusted commits…</small>
                 </span>
               </div>
             )}
@@ -1480,7 +1484,7 @@ function RepositoryAlignmentDialog({
                 <Glyph name="refresh" size={16} />
                 <span>
                   <b>Preserving the old commit and aligning the worktree</b>
-                  <small>WTS rebuilds the graph after Git changes.</small>
+                  <small>The graph rebuilds after Git changes.</small>
                 </span>
               </div>
             )}
@@ -1511,7 +1515,7 @@ function RepositoryAlignmentDialog({
                     <Glyph name="check" size={12} />
                   </span>
                   <span>
-                    <b>I understand that WTS will change the worktree commit</b>
+                    <b>I understand that the worktree commit will change</b>
                     <small>The backup reference keeps the current commit.</small>
                   </span>
                 </Checkbox>
@@ -1525,7 +1529,7 @@ function RepositoryAlignmentDialog({
             )}
           </div>
           <footer className={styles.removalFooter}>
-            <span>WTS changes only this clean managed worktree.</span>
+            <span>Changes only this clean managed worktree.</span>
             <div>
               {state === "error" && (
                 <Button className={styles.secondaryButton} onPress={onRetry}>
@@ -1807,18 +1811,18 @@ function WorkspaceProvisionPanel({
         </h2>
         <p>
           {driftDetected
-            ? "WTS can safely re-read the managed worktrees, register their current branches, HEAD commits, origins, and upstreams, then rebuild the workspace graph."
+            ? "Re-reads the managed worktrees, registers their current branches, HEAD commits, origins, and upstreams, then rebuilds the workspace graph."
             : setupRecovery
-              ? "WTS keeps your saved plan. Review the paths below before you clean setup files."
+              ? "Your saved plan is kept. Review the paths below before you clean setup files."
               : cleanupIncomplete
-              ? "WTS could not finish cleanup. Inspect the preserved files before you review setup again."
+              ? "Could not finish cleanup. Inspect the preserved files before you review setup again."
               : state === "checking"
-                ? "WTS is resolving local repositories, base commits, branch names, and target paths."
+                ? "Resolving local repositories, base commits, branch names, and target paths."
                 : state === "materializing"
-                  ? "WTS is creating the worktrees transactionally and writing the VS Code workspace."
+                  ? "Creating the worktrees transactionally and writing the VS Code workspace."
                   : creationReady
-                    ? "Review these exact effects. WTS checks them again before creation."
-                    : "WTS will inspect only the configured local repository catalog. Preflight itself does not write to Git."}
+                    ? "Review these exact effects. They are checked again before creation."
+                    : "Inspects only the configured local repository catalog. Preflight does not write to Git."}
         </p>
         {error && (
           <div className={styles.provisionError} role="alert">
@@ -1833,13 +1837,13 @@ function WorkspaceProvisionPanel({
               <Glyph name="arrow" size={11} />
             </button>
             <RecoveryCopyButton label="Copy setup path" text={preflight?.workspaceDisplayPath ?? workspace.path} disabled={busy} />
-            <small>WTS checks the remaining paths and shows recovery steps. This check does not remove files.</small>
+            <small>Checks the remaining paths and shows recovery steps. This check does not remove files.</small>
           </div>
         )}
         {setupRecovery && (
           <section className={styles.branchRecovery} aria-label="Setup file recovery" data-ui="workspace-overview.setup-recovery" data-ui-label="Setup file recovery">
-            <p>WTS removes only unchanged files from the failed setup and its unchanged worktrees and branches.</p>
-            <p>WTS preserves changed files, ignored files, and new commits. Inspect the paths that block cleanup.</p>
+            <p>Removes only unchanged files from the failed setup and its unchanged worktrees and branches.</p>
+            <p>Changed files, ignored files, and new commits stay. Inspect the paths that block cleanup.</p>
             {setupRecovery.blockers.length > 0 && (
               <ul className={styles.blockerList} aria-label="Setup cleanup blockers">
                 {setupRecovery.blockers.map((blocker, index) => <li key={`${index}-${blocker}`}>{blocker}</li>)}
@@ -1849,7 +1853,7 @@ function WorkspaceProvisionPanel({
             <button className={styles.baseRecoveryAction} disabled={busy || !setupRecovery.ready || setupRecovery.blockers.length > 0 || recoveryReadOnly} onClick={onRecoverSetup} type="button">
               Clean setup files
             </button>
-            <small>After cleanup, WTS shows a fresh setup review. Select Create workspace only after you review it.</small>
+            <small>After cleanup, a fresh setup review opens. Select Create workspace only after you review it.</small>
             {setupRecovery.paths.length > 0 && (
               <details>
                 <summary>Review {setupRecovery.paths.length} setup path{setupRecovery.paths.length === 1 ? "" : "s"}</summary>
@@ -1870,7 +1874,7 @@ function WorkspaceProvisionPanel({
         {driftDetected && (
           <div className={styles.branchRecovery}>
             <p>
-              Repository contents are user-owned. WTS keeps the workspace root,
+              Repository contents are user-owned. The workspace root,
               generated files, and repository identities protected while
               accepting normal Git evolution.
             </p>
@@ -1930,7 +1934,7 @@ function WorkspaceProvisionPanel({
                         <Glyph name="arrow" size={11} />
                       </button>
                       <small>
-                        WTS will prefill a separate plan with the same
+                        Prefills a separate plan with the same
                         repositories and bases. Saving it allocates a new
                         workspace branch.
                       </small>
@@ -2124,7 +2128,7 @@ function DraftOverviewPanel({
       setRepositoryToRemove(null);
     } catch (cause) {
       setRepositoryNotice(
-        cause instanceof Error ? cause.message : "WTS could not remove this repository.",
+        cause instanceof Error ? cause.message : "Could not remove this repository.",
       );
       setRepositoryNoticeError(true);
     } finally {
@@ -2201,13 +2205,13 @@ function DraftOverviewPanel({
       const preflight = await client.preflightWorkspaceRepositoryAlignment(workspace.id, repositoryId);
       if (generation !== alignmentGeneration.current) return;
       if (preflight.workspaceId !== workspace.id || preflight.repositoryId !== repositoryId) {
-        throw new Error("WTS returned alignment details for another repository.");
+        throw new Error("Received alignment details for another repository.");
       }
       setAlignmentPreflight(preflight);
       setAlignmentState("ready");
     } catch (cause) {
       if (generation !== alignmentGeneration.current) return;
-      setAlignmentError(cause instanceof Error ? cause.message : "WTS could not review repository alignment.");
+      setAlignmentError(cause instanceof Error ? cause.message : "Could not review repository alignment.");
       setAlignmentState("error");
     }
   };
@@ -2257,8 +2261,8 @@ function DraftOverviewPanel({
       ? reviewInboxFresh
         ? "GitLab no longer asks you to review this MR. It can be approved, merged, or given to another reviewer. Open the MR in GitLab to see its state."
         : reviewInboxLoading
-          ? "WTS reads the MR status from GitLab. You can review the changes now."
-          : "WTS cannot read the current status of this MR from GitLab. Retry the status check or open the MR in GitLab."
+          ? "Reading the MR status from GitLab. You can review the changes now."
+          : "Cannot read the current status of this MR from GitLab. Retry the status check or open the MR in GitLab."
       : gitlabReview.status === "merged"
       ? "GitLab merged this change. No review action remains."
       : gitlabReview.status === "closed"
@@ -2350,7 +2354,7 @@ function DraftOverviewPanel({
           detail:
             cause instanceof Error
               ? cause.message
-              : "WTS could not check GitLab for merge requests.",
+              : "Could not check GitLab for merge requests.",
         });
       },
     );
@@ -2438,7 +2442,7 @@ function DraftOverviewPanel({
         result.host !== target.host ||
         !result.accepted
       ) {
-        throw new Error("WTS returned a different repository link.");
+        throw new Error("Received a different repository link.");
       }
       setRepositoryNotice(
         `${repository.label} opened on ${forgeDisplayName(target.forge)}.`,
@@ -2447,7 +2451,7 @@ function DraftOverviewPanel({
       setRepositoryNotice(
         cause instanceof Error
           ? cause.message
-          : "WTS could not open the repository.",
+          : "Could not open the repository.",
       );
     } finally {
       setOpeningRepositoryId(null);
@@ -2476,7 +2480,7 @@ function DraftOverviewPanel({
         result.repositoryId !== created.repositoryId ||
         result.iid !== mergeRequest.iid
       ) {
-        throw new Error("WTS returned a different merge request link.");
+        throw new Error("Received a different merge request link.");
       }
       setRepositoryNotice(
         `${created.label} · merge request !${mergeRequest.iid} opened.`,
@@ -2487,7 +2491,7 @@ function DraftOverviewPanel({
       setRepositoryNotice(
         cause instanceof Error
           ? cause.message
-          : "WTS could not open this merge request.",
+          : "Could not open this merge request.",
       );
     } finally {
       setOpeningGitlabMergeRequestId(null);
@@ -2505,7 +2509,7 @@ function DraftOverviewPanel({
         workspaceId, created.repositoryId, iid,
       );
       if (linked.repositoryId !== created.repositoryId || linked.iid !== iid) {
-        throw new Error("WTS returned a different merge request.");
+        throw new Error("Received a different merge request.");
       }
       if (alignmentWorkspaceId.current !== workspaceId) return;
       setGitlabInbox((current) => {
@@ -2516,7 +2520,7 @@ function DraftOverviewPanel({
               state: "stale" as const,
               mergeRequests: [],
               fetchedAtUnixMs: null,
-              detail: "WTS linked the MR. Other MR status is not current.",
+              detail: "MR linked. Other MR status is not current.",
             };
         return {
           state: "ready",
@@ -2559,12 +2563,12 @@ function DraftOverviewPanel({
         () => {
           if (alignmentWorkspaceId.current !== workspaceId) return;
           setRepositoryNotice(
-            `${created.label} · MR !${iid} linked. WTS could not refresh other MRs.`,
+            `${created.label} · MR !${iid} linked. Could not refresh other MRs.`,
           );
         },
       );
     } catch (cause) {
-      const detail = cause instanceof Error ? cause.message : "WTS could not link this merge request.";
+      const detail = cause instanceof Error ? cause.message : "Could not link this merge request.";
       if (fromDialog) setMergeRequestLinkError(detail);
       else {
         setRepositoryNotice(detail);
@@ -2609,7 +2613,7 @@ function DraftOverviewPanel({
       setRepositoryNotice(
         cause instanceof Error
           ? cause.message
-          : "WTS could not prepare this change request.",
+          : "Could not prepare this change request.",
       );
     } finally {
       setPreparingChangeRequestId(null);
@@ -2659,7 +2663,7 @@ function DraftOverviewPanel({
         `${published ? "Branch published. " : ""}${
           cause instanceof Error
             ? cause.message
-            : "WTS could not publish this branch."
+            : "Could not publish this branch."
         }`,
       );
     } finally {
@@ -2700,7 +2704,7 @@ function DraftOverviewPanel({
       setRepositoryNotice(
         cause instanceof Error
           ? cause.message
-          : "WTS could not start the change-request agent.",
+          : "Could not start the change-request agent.",
       );
     } finally {
       setRequestingChangeRequestProposalId(null);
@@ -2719,7 +2723,7 @@ function DraftOverviewPanel({
         body,
       );
       if (!result.accepted || result.sourceHeadCommitOid !== changeRequestDraft.sourceHeadCommitOid) {
-        throw new Error("WTS returned a different change-request handoff.");
+        throw new Error("Received a different change-request handoff.");
       }
       setChangeRequestDraft(null);
       const requestName = result.forge === "github" ? "pull request" : "merge request";
@@ -2738,7 +2742,7 @@ function DraftOverviewPanel({
       setChangeRequestError(
         cause instanceof Error
           ? cause.message
-          : "WTS could not open this change-request form.",
+          : "Could not open this change-request form.",
       );
     } finally {
       setOpeningChangeRequest(false);
@@ -2770,7 +2774,7 @@ function DraftOverviewPanel({
       setChangeRequestError(
         cause instanceof Error
           ? cause.message
-          : "WTS could not start change-request verification.",
+          : "Could not start change-request verification.",
       );
     } finally {
       setRequestingChangeRequestVerification(false);
@@ -2790,7 +2794,7 @@ function DraftOverviewPanel({
         result.workspaceId !== workspace.id ||
         result.repositoryId !== created.repositoryId
       ) {
-        throw new Error("WTS returned a sync result for another repository.");
+        throw new Error("Received a sync result for another repository.");
       }
       const commit = result.baseCommitOid.slice(0, 8);
       if (!result.graphRefreshed) {
@@ -2834,7 +2838,7 @@ function DraftOverviewPanel({
       setRepositoryNotice(
         cause instanceof Error
           ? cause.message
-          : "WTS could not sync this repository.",
+          : "Could not sync this repository.",
       );
     } finally {
       setSyncingRepositoryId(null);
@@ -2861,7 +2865,7 @@ function DraftOverviewPanel({
       setAlignmentError(
         cause instanceof Error
           ? cause.message
-          : "WTS could not align this repository.",
+          : "Could not align this repository.",
       );
       setAlignmentState("error");
     }
@@ -3316,7 +3320,7 @@ function DraftOverviewPanel({
                                 />
                               </span>
                               {gitlabHandoff.state === "checking"
-                                ? "WTS checks GitLab for the MR"
+                                ? "Checking GitLab for the MR…"
                                 : "MR form opened"}
                             </span>
                           ) : gitlabInbox.state === "loading" ? (
@@ -3332,7 +3336,7 @@ function DraftOverviewPanel({
                               >
                                 <Glyph name="refresh" size={9} />
                               </span>
-                              WTS checks GitLab
+                              Checking GitLab…
                             </span>
                           ) : mergeRequests.length > 0 ? (
                             <div className={styles.repoDeliveryFallback}>
@@ -3402,7 +3406,7 @@ function DraftOverviewPanel({
                                           className={styles.repoMrBranchDetails}
                                           id={`branch-note-${mergeRequest.id}`}
                                         >
-                                          <p>WTS does not compare or publish this MR from this worktree.</p>
+                                          <p>This MR is not compared or published from this worktree.</p>
                                           <dl>
                                             <dt>MR</dt>
                                             <dd><code title={mergeRequest.sourceBranch}>{mergeRequest.sourceBranch}</code></dd>
@@ -3472,7 +3476,7 @@ function DraftOverviewPanel({
             <div className={styles.repositoryRemoveConfirm} role="alertdialog" aria-label={`Remove ${repositoryToRemove.label} from this workspace`}>
               <span>
                 <strong>Remove {repositoryToRemove.label}?</strong>
-                <small>WTS removes its clean managed worktree. The source checkout and retained branch stay on disk.</small>
+                <small>Removes the clean managed worktree. The source checkout and retained branch stay on disk.</small>
               </span>
               <span>
                 <Button className={styles.secondaryButton} isDisabled={removingRepositoryId !== null} onPress={() => setRepositoryToRemove(null)}>Cancel</Button>
@@ -3619,7 +3623,7 @@ function DraftOverviewPanel({
           >
             <Dialog.Title>Find existing MR for {linkingMergeRequestWorktree?.label}</Dialog.Title>
             <Dialog.Description>
-              WTS checks this MR in GitLab. This does not change the local branch or worktree.
+              Checks this MR in GitLab. This does not change the local branch or worktree.
             </Dialog.Description>
             <form onSubmit={(event) => {
               event.preventDefault();
@@ -3960,8 +3964,8 @@ function AgentWorkspacePanel({
       setRequestState(next.succeeded ? "complete" : "error");
       setMessage(
         next.succeeded
-          ? `Current response returned after ${agentDurationLabel(elapsed)}. WTS recorded ${agentDurationLabel(next.durationMs)} for the adapter run.`
-          : `Current response returned after ${agentDurationLabel(elapsed)}. WTS reports that ${providerFromView[requestedProvider]} did not complete successfully.`,
+          ? `Current response returned after ${agentDurationLabel(elapsed)}. The adapter ran for ${agentDurationLabel(next.durationMs)}.`
+          : `Current response returned after ${agentDurationLabel(elapsed)}. ${providerFromView[requestedProvider]} did not complete successfully.`,
       );
       void refreshEvidence(false);
     } catch (error) {
@@ -3991,21 +3995,21 @@ function AgentWorkspacePanel({
   );
   const requestStatus =
     requestState === "graphRequestPending"
-      ? `Index request sent from this view · ${agentDurationLabel(requestElapsedMs)} elapsed. WTS has no persisted indexing phase, and Graphify admission or process start are not reported by this API.`
+      ? `Index request sent from this view · ${agentDurationLabel(requestElapsedMs)} elapsed. Indexing progress is not reported by this API.`
       : requestState === "agentRequestPending"
         ? `Run request sent from this view · ${agentDurationLabel(requestElapsedMs)} elapsed. Provider admission and process start are not reported by this API.`
         : message;
   const providerBoundary =
     provider === "codex"
       ? "Codex runs with WTS workspace-write sandboxing. Provider sign-in still remains Codex-owned."
-      : `${providerFromView[provider]} keeps provider-owned confinement and permission behavior; WTS sets this workspace as its working directory.`;
+      : `${providerFromView[provider]} keeps provider-owned confinement and permission behavior. This workspace is its working directory.`;
 
   if (!materialization) {
     return (
       <AdapterPlaceholder
         eyebrow="WORKSPACE ASSISTANT"
         title="Create the worktrees before delegating"
-        description="The assistant only starts an agent after WTS has a verified, materialized workspace boundary."
+        description="The assistant starts an agent only after the workspace boundary is verified."
         next="Review and create the workspace in Overview, then return to Assistant."
       />
     );
@@ -4029,7 +4033,7 @@ function AgentWorkspacePanel({
             Work with an agent inside {workspace.key}
           </h2>
           <p>
-            WTS starts the selected provider with this workspace as its working
+            Starts the selected provider with this workspace as its working
             directory only after you submit. The local index is not injected
             automatically; ask the provider to read{" "}
             <code>graphify-out/graph.json</code> when you want it used.
@@ -4475,7 +4479,7 @@ function WorkspaceCliPanel({
         result.workspaceDisplayPath !== materialization.workspaceDisplayPath ||
         !result.accepted
       ) {
-        throw new Error("WTS returned a mismatched CLI launch handoff.");
+        throw new Error("Received a mismatched CLI launch handoff.");
       }
       setState("accepted");
       setMessage(
@@ -4520,7 +4524,7 @@ function WorkspaceCliPanel({
       <AdapterPlaceholder
         eyebrow="WORKSPACE CLI"
         title="Create the worktrees before opening a CLI"
-        description="WTS launches an interactive provider only after it has validated the materialized workspace boundary."
+        description="Launches an interactive provider only after the workspace boundary is verified."
         next="Review and create the workspace in Overview, then return to CLI."
       />
     );
@@ -4729,7 +4733,7 @@ function WorkspaceCliPanel({
                 ? `The durable brief is saved outside the repository worktrees at ${draft.briefDisplayPath ?? "the workspace root"}. Agents opened here read it first.`
                 : draft.briefState === "error"
                   ? draft.briefError
-                  : "WTS is atomically updating the workspace-owned agent brief."}
+                  : "Updating the workspace agent brief…"}
             </p>
             <details className={styles.cliPreparedTaskPreview}>
               <summary>Review prepared prompt</summary>
@@ -4787,7 +4791,7 @@ function WorkspaceCliPanel({
 }
 
 export interface LocalWorkspaceProps {
-  initialView?: "board" | "workbench" | "time" | "reviews" | "updates";
+  initialView?: "board" | "workbench" | "time" | "reviews" | "updates" | "agents";
   initialWorkspaceId?: string;
   initialWorkbenchTab?: WorkbenchTab;
   initialCreateOpen?: boolean;
@@ -4812,7 +4816,7 @@ export function LocalWorkspace({
   const scrollCache = useMemo(() => scrollCacheFor(client), [client]);
   const workbenchScrollRef = useRef<HTMLDivElement>(null);
   const [view, setView] = useState<
-    "board" | "workbench" | "time" | "reviews" | "updates"
+    "board" | "workbench" | "time" | "reviews" | "updates" | "agents"
   >(initialView);
   const myReviews = useGithubReviewInbox(client);
   const assignedReviewCount =
@@ -4843,6 +4847,7 @@ export function LocalWorkspace({
   const [workspaceAgents, setWorkspaceAgents] = useState(
     () => new Map<string, WorkspaceAgentSnapshot>(),
   );
+  const [fleetSessions, setFleetSessions] = useState<AgentSessionList | null>(null);
   const attentionStore = useMemo(() => getWorkspaceAttentionStore(client), [client]);
   const attentionInboxes = useWorkspaceAttention(attentionStore,
     snapshot => Object.fromEntries(Object.entries(snapshot.inboxes).filter(([, inbox]) => inbox.mergeRequests.length > 0)),
@@ -5171,7 +5176,7 @@ export function LocalWorkspace({
   }, [client, initialWorkspaceId, reloadRevision]);
 
   useEffect(() => {
-    if (view === "time" || registryState !== "ready" || !workspaceIdsKey) {
+    if (registryState !== "ready") {
       return;
     }
 
@@ -5191,6 +5196,7 @@ export function LocalWorkspace({
         if (current) {
           const snapshots = buildWorkspaceAgentSnapshots(sessions);
           setWorkspaceAgents(snapshots);
+          setFleetSessions(sessions);
           for (const [workspaceId, snapshot] of snapshots) {
             const workspace = workspaces.find(
               (candidate) => candidate.id === workspaceId,
@@ -5364,7 +5370,9 @@ export function LocalWorkspace({
     };
 
     void refreshAgentOverview();
+    const unsubscribeRefresh = subscribeAppRefresh(client, () => void refreshAgentOverview());
     return () => {
+      unsubscribeRefresh();
       current = false;
       if (refreshTimer !== undefined) window.clearTimeout(refreshTimer);
       for (const timer of automationTimers) window.clearTimeout(timer);
@@ -5600,7 +5608,7 @@ export function LocalWorkspace({
           return;
         }
         if (workspaceView.workspaceId !== initialWorkspaceId) {
-          throw new Error("WTS returned another workspace for this link.");
+          throw new Error("Received another workspace for this link.");
         }
         const workspace = workspaceFromView(workspaceView);
         setWorkspaces((existing) => [
@@ -5720,7 +5728,7 @@ export function LocalWorkspace({
     void materializationCache.load(workspaceId, async () => {
       const result = await client.getWorkspaceMaterialization(workspaceId);
       if (result && result.workspaceId !== workspaceId) {
-        throw new Error("WTS returned status for another workspace.");
+        throw new Error("Received status for another workspace.");
       }
       return result;
     }).then((materialization) => {
@@ -6537,6 +6545,12 @@ export function LocalWorkspace({
     setView("reviews");
   };
 
+  const openAgentFleet = () => {
+    invalidateDeepLinkLookup();
+    pushNavigationPath("/agents");
+    setView("agents");
+  };
+
   const openWorkbenchTab = (tab: WorkbenchTab) => {
     if (!selectedWorkspace) return;
     invalidateDeepLinkLookup();
@@ -6631,7 +6645,7 @@ export function LocalWorkspace({
     repositoryId: string,
   ): Promise<WorkspaceRepositoryRemovalResult> => {
     if (!selectedWorkspace || workspaceCommandState !== "idle") {
-      throw new Error("WTS cannot remove a repository while another workspace command is running.");
+      throw new Error("Cannot remove a repository while another workspace command is running.");
     }
     const workspaceId = selectedWorkspace.id;
     const result = await client.removeWorkspaceRepository(workspaceId, repositoryId);
@@ -6639,7 +6653,7 @@ export function LocalWorkspace({
       result.workspaceId !== workspaceId ||
       result.repositoryId !== repositoryId
     ) {
-      throw new Error("WTS returned a repository removal for another workspace.");
+      throw new Error("Received a repository removal for another workspace.");
     }
     invalidateRepositoryReview(client, workspaceId, repositoryId);
     invalidateWorkspaceGitlabMergeRequests(client, workspaceId);
@@ -6650,7 +6664,7 @@ export function LocalWorkspace({
     try {
       const view = await client.getWorkspace(workspaceId);
       if (view.workspaceId !== workspaceId) {
-        throw new Error("WTS returned status for another workspace.");
+        throw new Error("Received status for another workspace.");
       }
       const refreshed = workspaceFromView(view);
       setWorkspaces((current) =>
@@ -6763,7 +6777,7 @@ export function LocalWorkspace({
         created.workspace.intent.label !== reviewLabel ||
         returnedRepository?.baseRef !== review.sourceBranch
       ) {
-        throw new Error("WTS saved a different review workspace.");
+        throw new Error("A different review workspace was saved.");
       }
 
       const workspace = workspaceFromView(created.workspace);
@@ -6782,12 +6796,12 @@ export function LocalWorkspace({
       setView("workbench");
       setActiveTab("overview");
       pushNavigationPath(`/sessions/${encodeURIComponent(workspace.id)}`);
-      setNotice(`${workspace.key} · WTS checks the review workspace`);
+      setNotice(`${workspace.key} · Checking the review workspace…`);
 
       setWorkspaceActionState("checking");
       const preflight = await client.preflightWorkspace(workspace.id);
       if (preflight.workspaceId !== workspace.id) {
-        throw new Error("WTS returned setup effects for another workspace.");
+        throw new Error("Received setup effects for another workspace.");
       }
       setWorkspacePreflight(preflight);
       if (!preflight.ready) {
@@ -6813,7 +6827,7 @@ export function LocalWorkspace({
         materializationKey,
       );
       if (materialized.materialization.workspaceId !== workspace.id) {
-        throw new Error("WTS returned materialization for another workspace.");
+        throw new Error("Received materialization for another workspace.");
       }
       materializationCache.set(workspace.id, materialized.materialization);
       workspaceActionGenerationRef.current += 1;
@@ -6862,7 +6876,7 @@ export function LocalWorkspace({
       const message =
         error instanceof Error
           ? error.message
-          : "WTS could not prepare this review repository.";
+          : "Could not prepare this review repository.";
       if (createdWorkspaceId) {
         setActiveTab("overview");
         setWorkspaceActionState("error");
@@ -6898,14 +6912,14 @@ export function LocalWorkspace({
         result.repositoryId !== review.repositoryId ||
         result.iid !== review.number
       ) {
-        throw new Error("WTS returned a different merge-request handoff.");
+        throw new Error("Received a different merge-request handoff.");
       }
       setNotice(`${review.repository} !${review.number} · GitLab opened`);
     } catch (error) {
       const message =
         error instanceof Error
           ? error.message
-          : "WTS could not open this merge request.";
+          : "Could not open this merge request.";
       setReviewWorkspaceErrors((current) =>
         new Map(current).set(review.id, message),
       );
@@ -6928,7 +6942,7 @@ export function LocalWorkspace({
         result.repositoryId !== mergeRequest.repositoryId ||
         result.iid !== mergeRequest.iid
       ) {
-        throw new Error("WTS returned a different merge-request handoff.");
+        throw new Error("Received a different merge-request handoff.");
       }
       setNotice(
         `${mergeRequest.projectPath} !${mergeRequest.iid} · GitLab opened`,
@@ -6937,7 +6951,7 @@ export function LocalWorkspace({
       const message =
         error instanceof Error
           ? error.message
-          : "WTS could not open this merge request.";
+          : "Could not open this merge request.";
       setNotice(
         `${mergeRequest.projectPath} !${mergeRequest.iid} · ${message}`,
         "error",
@@ -6992,7 +7006,7 @@ export function LocalWorkspace({
     try {
       const renamed = await client.renameWorkspace(selectedWorkspace.id, title);
       if (renamed.workspaceId !== selectedWorkspace.id) {
-        throw new Error("WTS returned another workspace after renaming.");
+        throw new Error("Received another workspace after renaming.");
       }
       if (workspaceRenameClientRef.current !== client) return;
       const updated = workspaceFromView(renamed);
@@ -7066,6 +7080,10 @@ export function LocalWorkspace({
         setView("reviews");
         return;
       }
+      if (target.view === "agents") {
+        setView("agents");
+        return;
+      }
 
       const workspace = workspaces.find(
         (item) => item.id === target.workspaceId,
@@ -7128,7 +7146,7 @@ export function LocalWorkspace({
         if (result.workspaceId !== detail.workspaceId) throw new Error("Unexpected workspace");
         open(workspaceFromView(result));
       }).catch(() => {
-        if (mounted && request === generation && navigationGeneration === agentNavigationGenerationRef.current) setNotice("WTS could not open the agent workspace. Select View local changes to try again.", "error");
+        if (mounted && request === generation && navigationGeneration === agentNavigationGenerationRef.current) setNotice("Could not open the agent workspace. Select View local changes to try again.", "error");
       });
     };
     const returnFeedbackSelection = (event: Event) => {
@@ -7153,7 +7171,7 @@ export function LocalWorkspace({
           returnFeedbackSelection(new CustomEvent(RETURN_FEEDBACK_SELECTION_EVENT, { detail: { ...detail, source: origin } }));
         }).catch(() => {
           if (mounted && request === generation && navigationGeneration === agentNavigationGenerationRef.current) {
-            setNotice("WTS could not read the original selection. Open the parent result in Agent feedback and retry.", "error");
+            setNotice("Could not read the original selection. Open the parent result in Agent feedback and retry.", "error");
           }
         });
         return;
@@ -7252,7 +7270,7 @@ export function LocalWorkspace({
           result.provider !== "vsCode" ||
           !result.accepted
         ) {
-          throw new Error("WTS returned a mismatched VS Code handoff.");
+          throw new Error("Received a mismatched VS Code handoff.");
         }
         setNotice("Workspace opened in VS Code");
       })
@@ -7280,7 +7298,7 @@ export function LocalWorkspace({
       )
       .then((result) => {
         if (result.workspaceId !== workspace.id || result.issueKey !== issueKey) {
-          throw new Error("WTS returned a mismatched Jira handoff.");
+          throw new Error("Received a mismatched Jira handoff.");
         }
       })
       .catch((error: unknown) => {
@@ -7349,7 +7367,7 @@ export function LocalWorkspace({
       const preflight = await client.preflightWorkspace(workspaceId);
       if (actionGeneration !== workspaceActionGenerationRef.current) return;
       if (preflight.workspaceId !== workspaceId) {
-        throw new Error("WTS returned setup effects for another workspace.");
+        throw new Error("Received setup effects for another workspace.");
       }
       setWorkspacePreflight(preflight);
       setWorkspaceActionState(preflight.ready ? "ready" : "blocked");
@@ -7383,11 +7401,11 @@ export function LocalWorkspace({
     setWorkspaceCommandState("recoveringSetup");
     setWorkspaceActionError("");
     setWorkspaceActionErrorCode("");
-    setNotice(`${workspaceKey} · WTS checks and cleans the setup files`);
+    setNotice(`${workspaceKey} · Checking and cleaning the setup files…`);
     try {
       const result = await client.recoverWorkspaceSetup(workspaceId, recovery.effectDigest);
       if (actionGeneration !== workspaceActionGenerationRef.current) return;
-      if (result.workspaceId !== workspaceId) throw new Error("WTS returned setup effects for another workspace.");
+      if (result.workspaceId !== workspaceId) throw new Error("Received setup effects for another workspace.");
       setWorkspacePreflight(result);
       setWorkspaceActionState(result.ready ? "ready" : "blocked");
       materializationKeyRef.current = null;
@@ -7397,7 +7415,7 @@ export function LocalWorkspace({
       setWorkspacePreflight(null);
       setWorkspaceActionState("error");
       setWorkspaceActionErrorCode(error instanceof WorkspaceClientError ? error.code : "");
-      setWorkspaceActionError(`${error instanceof Error ? error.message : "WTS could not confirm setup cleanup."} Review setup again before you clean files or create the workspace.`);
+      setWorkspaceActionError(`${error instanceof Error ? error.message : "Could not confirm setup cleanup."} Review setup again before you clean files or create the workspace.`);
       setNotice(`${workspaceKey} setup needs a fresh review`, "error");
     } finally {
       setupRecoveryPendingRef.current.delete(workspaceId);
@@ -7439,7 +7457,7 @@ export function LocalWorkspace({
       );
       if (actionGeneration !== workspaceActionGenerationRef.current) return;
       if (result.materialization.workspaceId !== workspaceId) {
-        throw new Error("WTS returned materialization for another workspace.");
+        throw new Error("Received materialization for another workspace.");
       }
       materializationCache.set(workspaceId, result.materialization);
       setWorkspaceMaterialization(result.materialization);
@@ -7493,7 +7511,7 @@ export function LocalWorkspace({
         result.codeWorkspaceDisplayPath !==
           workspaceMaterialization.codeWorkspaceDisplayPath
       ) {
-        throw new Error("WTS returned a mismatched VS Code handoff.");
+        throw new Error("Received a mismatched VS Code handoff.");
       }
       setWorkspaceActionState("materialized");
       setNotice(`${workspaceKey} sent to VS Code`);
@@ -7528,7 +7546,7 @@ export function LocalWorkspace({
       const view = await client.getWorkspace(workspaceId);
       if (actionGeneration !== workspaceActionGenerationRef.current) return;
       if (view.workspaceId !== workspaceId) {
-        throw new Error("WTS returned status for another workspace.");
+        throw new Error("Received status for another workspace.");
       }
       const refreshed = workspaceFromView(view);
       setWorkspaces((current) =>
@@ -7590,7 +7608,7 @@ export function LocalWorkspace({
     setNotice(`${selectedWorkspace.key} · building workspace graph…`);
     const result = await client.indexWorkspaceGraph(workspaceId);
     if (result.workspaceId !== workspaceId) {
-      throw new Error("WTS indexed another workspace.");
+      throw new Error("Another workspace was indexed.");
     }
     const materialization =
       await client.getWorkspaceMaterialization(workspaceId);
@@ -7698,7 +7716,7 @@ export function LocalWorkspace({
         result.repositoryId !== repositoryId ||
         result.materialization.workspaceId !== workspaceId
       ) {
-        throw new Error("WTS returned a sync result for another repository.");
+        throw new Error("Received a sync result for another repository.");
       }
       materializationCache.set(workspaceId, result.materialization);
       setWorkspaceMaterialization(result.materialization);
@@ -7761,7 +7779,7 @@ export function LocalWorkspace({
         result.repositoryId !== repositoryId ||
         result.materialization.workspaceId !== workspaceId
       ) {
-        throw new Error("WTS returned alignment results for another repository.");
+        throw new Error("Received alignment results for another repository.");
       }
       materializationCache.set(workspaceId, result.materialization);
       setWorkspaceMaterialization(result.materialization);
@@ -7803,7 +7821,7 @@ export function LocalWorkspace({
       const preflight = await client.preflightWorkspaceRemoval(workspaceId);
       if (generation !== removalGenerationRef.current) return;
       if (preflight.workspaceId !== workspaceId) {
-        throw new Error("WTS returned removal effects for another workspace.");
+        throw new Error("Received removal effects for another workspace.");
       }
       setRemovalPreflight(preflight);
       setRemovalState("ready");
@@ -8014,10 +8032,64 @@ export function LocalWorkspace({
       setNotice(
         error instanceof WorkspaceClientError &&
           error.code === "workspace_workflow_conflict"
-          ? `${workspace.key} changed elsewhere. WTS refreshed the board.`
+          ? `${workspace.key} changed elsewhere. Board refreshed.`
           : error instanceof Error
             ? error.message
-            : `WTS could not update ${workspace.key}.`,
+            : `Could not update ${workspace.key}.`,
+        "error",
+      );
+      setReloadRevision((current) => current + 1);
+    } finally {
+      setWorkspaceCommandState("idle");
+    }
+  };
+
+  /** Pin keeps the card in its lane and position. Unpin lets activity move it. */
+  const toggleWorkspacePin = async (
+    workspaceId: string,
+    laneItems: readonly Workspace[],
+  ) => {
+    const workspace = workspaces.find(
+      (candidate) => candidate.id === workspaceId,
+    );
+    if (!workspace?.workflowPersisted || workspaceCommandState !== "idle") {
+      return;
+    }
+    if (workspace.workflowPlacementMode === "pinned") {
+      await followWorkspaceAgentActivity(workspaceId);
+      return;
+    }
+    // Keep the card where the user sees it: anchor it to its visible neighbor.
+    const index = laneItems.findIndex((item) => item.id === workspaceId);
+    const before = index >= 0 ? laneItems[index + 1] : undefined;
+    const after = index > 0 ? laneItems[index - 1] : undefined;
+    setWorkspaceCommandState("refreshing");
+    try {
+      const workflow = await client.placeWorkspaceOnBoard(workspaceId, {
+        state: workspace.workflowState,
+        expectedRevision: workspace.workflowRevision,
+        ...(after
+          ? { afterWorkspaceId: after.id }
+          : before
+            ? { beforeWorkspaceId: before.id }
+            : {}),
+      });
+      setWorkspaces((current) =>
+        current.map((candidate) =>
+          candidate.id === workspaceId
+            ? mergeWorkflowSummary(candidate, workflow)
+            : candidate,
+        ),
+      );
+      setNotice(`${workspace.key} is pinned. It stays in place.`);
+    } catch (error) {
+      setNotice(
+        error instanceof WorkspaceClientError &&
+          error.code === "workspace_workflow_conflict"
+          ? `${workspace.key} changed elsewhere. Board refreshed.`
+          : error instanceof Error
+            ? error.message
+            : `Could not pin ${workspace.key}.`,
         "error",
       );
       setReloadRevision((current) => current + 1);
@@ -8112,10 +8184,10 @@ export function LocalWorkspace({
       setNotice(
         error instanceof WorkspaceClientError &&
           error.code === "workspace_workflow_conflict"
-          ? `${workspace.key} changed elsewhere. WTS refreshed the board.`
+          ? `${workspace.key} changed elsewhere. Board refreshed.`
           : error instanceof Error
             ? error.message
-            : `WTS could not move ${workspace.key}.`,
+            : `Could not move ${workspace.key}.`,
         "error",
       );
       setReloadRevision((current) => current + 1);
@@ -8192,7 +8264,7 @@ export function LocalWorkspace({
       );
       if (generation !== removalGenerationRef.current) return;
       if (result.workspaceId !== workspaceId) {
-        throw new Error("WTS removed another workspace.");
+        throw new Error("Another workspace was removed.");
       }
       const nextWorkspace = workspaces.find(
         (workspace) => workspace.id !== workspaceId,
@@ -8258,7 +8330,7 @@ export function LocalWorkspace({
       result.workspaceDisplayPath !==
         workspaceMaterialization.workspaceDisplayPath
     ) {
-      throw new Error("WTS returned a CLI handoff for another workspace.");
+      throw new Error("Received a CLI handoff for another workspace.");
     }
     setNotice(
       `${selectedWorkspace.key} · ${providerName} handed off to ${terminalName}`,
@@ -8320,7 +8392,7 @@ export function LocalWorkspace({
         result.workspaceId !== workspaceId ||
         !result.briefDisplayPath.endsWith("/WTS.md")
       ) {
-        throw new Error("WTS returned an agent brief for another workspace.");
+        throw new Error("Received an agent brief for another workspace.");
       }
       setCliDraft((current) =>
         current?.workspaceId === workspaceId && current.revision === revision
@@ -8473,17 +8545,11 @@ export function LocalWorkspace({
             onPress={() => {
               myReviews.refresh();
               refreshAttention(true);
-              setNotice("WTS refreshes review status");
+              setNotice("Refreshing review status…");
             }}
           >
             <Glyph name="refresh" size={13} />
             Refresh status
-          </Button>
-          <Button
-            className={styles.secondaryButton}
-            onPress={openTimeReview}
-          >
-            My time
           </Button>
           <Button
             className={styles.primaryButton}
@@ -8664,9 +8730,15 @@ export function LocalWorkspace({
                       onOpenMergeRequest={(mergeRequest) =>
                         void openWorkspaceGitlabMergeRequest(mergeRequest)
                       }
-                      placementLabel={
-                        workspace.workflowPlacementMode === "pinned"
-                          ? "Pinned"
+                      pin={
+                        workspace.workflowPersisted
+                          ? {
+                              pinned:
+                                workspace.workflowPlacementMode === "pinned",
+                              disabled: workspaceCommandState !== "idle",
+                              onToggle: () =>
+                                void toggleWorkspacePin(workspace.id, items),
+                            }
                           : undefined
                       }
                       reorderDisabled={filter !== "all" || Boolean(search)}
@@ -8704,17 +8776,6 @@ export function LocalWorkspace({
                           : undefined
                       }
                       moveActions={[
-                        ...(workspace.workflowPlacementMode === "pinned"
-                          ? [
-                              {
-                                label: "Follow agent activity",
-                                onPress: () =>
-                                  void followWorkspaceAgentActivity(
-                                    workspace.id,
-                                  ),
-                              },
-                            ]
-                          : []),
                         ...WORKSPACE_LANE_ORDER.filter(
                           (targetLane) => targetLane !== lane,
                         ).map((targetLane) => ({
@@ -9491,6 +9552,24 @@ export function LocalWorkspace({
 
   const updates = <AppUpdateScreen controller={appUpdate} />;
 
+  const agentFleet = (
+    <AgentFleetScreen
+      client={client}
+      onOpenInVscode={focusWorkspaceInVscode}
+      onOpenTime={openTimeReview}
+      onOpenWorkspace={openWorkspace}
+      workspaceLabels={Object.fromEntries(
+        workspaces.map((workspace) => [
+          workspace.id,
+          { key: workspace.key, title: workspace.title },
+        ]),
+      )}
+    />
+  );
+  const fleetCards = fleetSessions ? buildFleetCards(fleetSessions.sessions, fleetSessions.observedSessions ?? [], Date.now()) : [];
+  const workingAgentCount = fleetCards.filter(card => card.health === "working" || card.health === "starting").length;
+  const attentionAgentCount = fleetCards.filter(card => card.health === "waiting" || card.health === "error").length;
+
   type CommandGroup =
     | "Workspaces"
     | "Navigate"
@@ -9529,6 +9608,18 @@ export function LocalWorkspace({
       run: () => {
         closeCommandPalette();
         openMyReviews();
+      },
+    },
+    {
+      id: "agent-fleet",
+      group: "Navigate",
+      label: "Agents",
+      description: "Monitor and control agent sessions",
+      keywords: "agents fleet sessions codex copilot running stop logs",
+      icon: "terminal",
+      run: () => {
+        closeCommandPalette();
+        openAgentFleet();
       },
     },
     {
@@ -9629,7 +9720,7 @@ export function LocalWorkspace({
       group: "Actions",
       label: "Environment & integrations",
       description: "Inspect tools, repositories, and connections",
-      keywords: "settings preferences tools jira openproject",
+      keywords: "settings preferences tools jira openproject activitywatch github gitlab models integrations",
       icon: "settings",
       run: () => {
         closeCommandPalette();
@@ -9681,7 +9772,16 @@ export function LocalWorkspace({
           },
         }))
     : [];
+  const matchingSessionItems: CommandItem[] = normalizedCommandQuery ? fleetCards.filter(card =>
+    [card.providerLabel, card.model, card.task, workspaces.find(workspace => workspace.id === card.workspaceId)?.title]
+      .join(" ").toLocaleLowerCase().includes(normalizedCommandQuery)
+  ).slice(0, 20).map(card => ({
+    id: "session-" + card.id, group: "Navigate", label: card.providerLabel + " · " + (workspaces.find(workspace => workspace.id === card.workspaceId)?.title ?? "Agent session"),
+    description: card.healthLabel + " · " + card.task.slice(0, 120), keywords: "agent session", icon: "terminal",
+    run: () => { closeCommandPalette(); openAgentFleet(); },
+  })) : [];
   const matchingCommandItems = [
+    ...matchingSessionItems,
     ...matchingWorkspaceItems,
     ...commandItems.filter((item) =>
       normalizedCommandQuery
@@ -9715,91 +9815,175 @@ export function LocalWorkspace({
           data-ui="wts.top-bar"
           data-ui-label="Top bar"
         >
-          <div
-            className={styles.brand}
-            data-ui="wts.navigation"
-            data-ui-label="WTS navigation"
-          >
-            <button
-              aria-current={view === "reviews" ? "page" : undefined}
-              className={styles.chromeNavButton}
-              onClick={openMyReviews}
-              type="button"
+          <div className={styles.chromeStart}>
+            <Button
+              aria-current={view === "board" ? "page" : undefined}
+              aria-label="Open Spaces"
+              className={styles.brandHome}
+              data-ui="wts.home"
+              data-ui-label="WTS home"
+              onPress={returnToWorkspaceBoard}
             >
-              My reviews
-              {assignedReviewCount > 0 && (
-                <span
-                  aria-label={`${assignedReviewCount} assigned reviews`}
-                  className={styles.reviewBadge}
-                >
-                  {assignedReviewCount > 99
-                    ? "99+"
-                    : assignedReviewCount}
-                </span>
-              )}
-            </button>
+              <span className={styles.brandMark}>
+                <Glyph name="branch" size={15} />
+              </span>
+              <b>WTS</b>
+            </Button>
+            <nav
+              aria-label="WTS sections"
+              className={styles.appNavigation}
+              data-ui="wts.navigation"
+              data-ui-label="WTS navigation"
+            >
+              <button
+                aria-current={view === "board" || view === "workbench" ? "page" : undefined}
+                className={styles.chromeNavButton}
+                onClick={returnToWorkspaceBoard}
+                type="button"
+              >
+                <Glyph name="folder" size={14} />
+                Spaces
+              </button>
+              <button
+                aria-current={view === "agents" ? "page" : undefined}
+                className={styles.chromeNavButton}
+                onClick={openAgentFleet}
+                type="button"
+              >
+                <Glyph name="terminal" size={14} />
+                Agents
+                {attentionAgentCount > 0 ? (
+                  <span
+                    aria-label={attentionAgentCount + " need you"}
+                    className={styles.navCount}
+                    data-tone="attention"
+                  >
+                    {attentionAgentCount}
+                  </span>
+                ) : workingAgentCount > 0 ? (
+                  <span
+                    aria-label={workingAgentCount + " working"}
+                    className={styles.navCount}
+                    data-tone="working"
+                  >
+                    {workingAgentCount}
+                  </span>
+                ) : null}
+              </button>
+              <button
+                aria-current={view === "time" ? "page" : undefined}
+                className={styles.chromeNavButton}
+                onClick={openTimeReview}
+                type="button"
+              >
+                <Glyph name="file" size={14} />
+                My time
+              </button>
+              <button
+                aria-current={view === "reviews" ? "page" : undefined}
+                className={styles.chromeNavButton}
+                onClick={openMyReviews}
+                type="button"
+              >
+                <Glyph name="code" size={14} />
+                My reviews
+                {assignedReviewCount > 0 && (
+                  <span
+                    aria-label={assignedReviewCount + " assigned reviews"}
+                    className={styles.reviewBadge}
+                  >
+                    {assignedReviewCount > 99 ? "99+" : assignedReviewCount}
+                  </span>
+                )}
+              </button>
+            </nav>
             {view === "workbench" && (
-              <>
-                <span className={styles.chromeDivider} />
+              <span className={styles.chromeCrumb}>
+                <Glyph name="arrow" size={12} />
                 <span>
-                  Workspace · {selectedWorkspace && selectedWorkspaceIsReady
+                  {selectedWorkspace && selectedWorkspaceIsReady
                     ? selectedWorkspace.title
-                    : "Loading"}
+                    : "Loading…"}
                 </span>
-              </>
+              </span>
             )}
           </div>
-          <Button
-            aria-current={view === "board" ? "page" : undefined}
-            aria-label="Open Spaces"
-            className={styles.brandHome}
-            data-ui="wts.home"
-            data-ui-label="WTS home"
-            onPress={returnToWorkspaceBoard}
-          >
-            <span className={styles.brandMark}>
-              <Glyph name="branch" size={15} />
-            </span>
-            <b>WTS</b>
-          </Button>
           <div
             className={styles.chromeTools}
             data-ui="wts.controls"
             data-ui-label="WTS controls"
           >
+            <button
+              aria-label={
+                workingAgentCount > 0
+                  ? workingAgentCount + " agents working. Open Agents."
+                  : "No agents working. Open Agents."
+              }
+              className={styles.statusBadge}
+              data-state={attentionAgentCount > 0 ? "attention" : workingAgentCount > 0 ? "working" : "idle"}
+              data-ui="wts.agent-status"
+              data-ui-label="Agent status badge"
+              onClick={openAgentFleet}
+              type="button"
+            >
+              <span className={styles.statusDot} aria-hidden="true" />
+              {attentionAgentCount > 0
+                ? attentionAgentCount + " need you"
+                : workingAgentCount > 0
+                  ? workingAgentCount + " working"
+                  : "Agents idle"}
+            </button>
             <Button
               aria-label="Open command palette"
               className={styles.quickHint}
               onPress={openCommandPalette}
             >
-              <Glyph name="command" size={13} /> K
+              <Glyph name="search" size={13} />
+              <span className={styles.quickHintText}>Search</span>
+              <kbd>⌘K</kbd>
             </Button>
             <Tooltip.Provider
               delayDuration={0}
               skipDelayDuration={0}
               disableHoverableContent
             >
+              <Button className={styles.chromeIcon} aria-label="Open agent feedback" onPress={openAgentFeedbackDrawer}>
+                <Glyph name="comment" size={15} />
+              </Button>
               <Tooltip.Root>
                 <Tooltip.Trigger asChild>
                   <Button
                     className={styles.chromeIcon}
-                    aria-label={`Switch to ${
-                      resolvedTheme === "dark" ? "light" : "dark"
-                    } mode`}
-                    onPress={toggleTheme}
+                    aria-label="Refresh status"
+                    onPress={() => {
+                      myReviews.refresh();
+                      refreshAttention(true);
+                      invalidateAgentSessions(client);
+                      requestAppRefresh(client);
+                      setNotice("Refreshing status…");
+                    }}
                   >
-                    <Glyph
-                      name={resolvedTheme === "dark" ? "sun" : "moon"}
-                      size={15}
-                    />
+                    <Glyph name="refresh" size={15} />
                   </Button>
                 </Tooltip.Trigger>
                 <Tooltip.Portal>
-                  <Tooltip.Content
-                    className={styles.tooltip}
-                    side="bottom"
-                    sideOffset={6}
+                  <Tooltip.Content className={styles.tooltip} side="bottom" sideOffset={6}>
+                    Refresh reviews, checks, and agents
+                  </Tooltip.Content>
+                </Tooltip.Portal>
+              </Tooltip.Root>
+              <Tooltip.Root>
+                <Tooltip.Trigger asChild>
+                  <Button
+                    className={styles.chromeIcon}
+                    aria-label={"Switch to " + (resolvedTheme === "dark" ? "light" : "dark") + " mode"}
+                    onPress={toggleTheme}
                   >
+                    <Glyph name={resolvedTheme === "dark" ? "sun" : "moon"} size={15} />
+                  </Button>
+                </Tooltip.Trigger>
+                <Tooltip.Portal>
+                  <Tooltip.Content className={styles.tooltip} side="bottom" sideOffset={6}>
                     Use {resolvedTheme === "dark" ? "light" : "dark"} mode
                   </Tooltip.Content>
                 </Tooltip.Portal>
@@ -9815,12 +9999,8 @@ export function LocalWorkspace({
                   </Button>
                 </Tooltip.Trigger>
                 <Tooltip.Portal>
-                  <Tooltip.Content
-                    className={styles.tooltip}
-                    side="bottom"
-                    sideOffset={6}
-                  >
-                    How to use WTS
+                  <Tooltip.Content className={styles.tooltip} side="bottom" sideOffset={6}>
+                    Guide and keyboard shortcuts
                   </Tooltip.Content>
                 </Tooltip.Portal>
               </Tooltip.Root>
@@ -9835,12 +10015,8 @@ export function LocalWorkspace({
                   </Button>
                 </Tooltip.Trigger>
                 <Tooltip.Portal>
-                  <Tooltip.Content
-                    className={styles.tooltip}
-                    side="bottom"
-                    sideOffset={6}
-                  >
-                    Environment &amp; integrations (⌘,)
+                  <Tooltip.Content className={styles.tooltip} side="bottom" sideOffset={6}>
+                    Settings and integrations (⌘,)
                   </Tooltip.Content>
                 </Tooltip.Portal>
               </Tooltip.Root>
@@ -9855,7 +10031,9 @@ export function LocalWorkspace({
               ? reviews
               : view === "updates"
                 ? updates
-                : workbench}
+                : view === "agents"
+                  ? agentFleet
+                  : workbench}
         <ToastStack toasts={toasts} onDismiss={dismissToast} />
         <CommandPalette
           open={commandOpen}
