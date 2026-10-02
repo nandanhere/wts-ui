@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-import-jira-issue"
+description = "Enables the import_jira_issue command without any pre-configured scope."
+commands.allow = ["import_jira_issue"]
+
+[[permission]]
+identifier = "deny-import-jira-issue"
+description = "Denies the import_jira_issue command without any pre-configured scope."
+commands.deny = ["import_jira_issue"]

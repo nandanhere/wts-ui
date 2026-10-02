@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-unlink-workspace-work-item"
+description = "Enables the unlink_workspace_work_item command without any pre-configured scope."
+commands.allow = ["unlink_workspace_work_item"]
+
+[[permission]]
+identifier = "deny-unlink-workspace-work-item"
+description = "Denies the unlink_workspace_work_item command without any pre-configured scope."
+commands.deny = ["unlink_workspace_work_item"]

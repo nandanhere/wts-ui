@@ -1,0 +1,27 @@
+name: wts
+
+services:
+  wtsd:
+    image: wts:0.1.0-amd64
+    platform: linux/amd64
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    # Linux host networking lets the container bind the host loopback directly.
+    # WTS intentionally refuses non-loopback listeners.
+    network_mode: host
+    environment:
+      WTS_ADDR: "127.0.0.1:${WTS_PORT:-3000}"
+      WTS_UI_DIR: /app/ui
+      WTS_DATA_DIR: /data
+      WTS_WORKSPACE_ROOT: /data/workspaces
+      WTS_REPOSITORY_ROOT: /repositories
+      RUST_LOG: wts_server=info,tower_http=info
+    volumes:
+      - wts-data:/data
+      # Bind only repository roots WTS should be able to inspect or mutate:
+      # - /srv/repositories:/repositories
+
+volumes:
+  wts-data:

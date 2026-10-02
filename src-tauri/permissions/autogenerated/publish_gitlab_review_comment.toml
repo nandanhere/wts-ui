@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-publish-gitlab-review-comment"
+description = "Enables the publish_gitlab_review_comment command without any pre-configured scope."
+commands.allow = ["publish_gitlab_review_comment"]
+
+[[permission]]
+identifier = "deny-publish-gitlab-review-comment"
+description = "Denies the publish_gitlab_review_comment command without any pre-configured scope."
+commands.deny = ["publish_gitlab_review_comment"]

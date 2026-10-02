@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-get-activity-watch-status"
+description = "Enables the get_activity_watch_status command without any pre-configured scope."
+commands.allow = ["get_activity_watch_status"]
+
+[[permission]]
+identifier = "deny-get-activity-watch-status"
+description = "Denies the get_activity_watch_status command without any pre-configured scope."
+commands.deny = ["get_activity_watch_status"]

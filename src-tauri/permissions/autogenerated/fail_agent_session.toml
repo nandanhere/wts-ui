@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-fail-agent-session"
+description = "Enables the fail_agent_session command without any pre-configured scope."
+commands.allow = ["fail_agent_session"]
+
+[[permission]]
+identifier = "deny-fail-agent-session"
+description = "Denies the fail_agent_session command without any pre-configured scope."
+commands.deny = ["fail_agent_session"]

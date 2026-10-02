@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-promote-agent-verification-check"
+description = "Enables the promote_agent_verification_check command without any pre-configured scope."
+commands.allow = ["promote_agent_verification_check"]
+
+[[permission]]
+identifier = "deny-promote-agent-verification-check"
+description = "Denies the promote_agent_verification_check command without any pre-configured scope."
+commands.deny = ["promote_agent_verification_check"]

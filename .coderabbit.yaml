@@ -1,0 +1,17 @@
+reviews:
+  profile: chill
+  request_changes_workflow: false
+  high_level_summary: true
+  poem: false
+  path_filters:
+    - '!**/node_modules/**'
+    - '!**/target/**'
+    - '!**/dist/**'
+    - '!**/build/**'
+    - '!**/.todo/evidence/**'
+
+chat:
+  auto_reply: true
+
+knowledge_base:
+  opt_out: false

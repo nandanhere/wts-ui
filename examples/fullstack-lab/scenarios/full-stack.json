@@ -1,0 +1,54 @@
+{
+  "schemaVersion": 1,
+  "id": "full-stack",
+  "issue": "PAY-303",
+  "title": "Use integer cents across checkout",
+  "repositories": ["shopfront-ui", "orders-api"],
+  "briefFile": "scenarios/full-stack.md",
+  "acceptance": [
+    {
+      "repository": "shopfront-ui",
+      "source": "acceptance/full-stack/wts_pay_303.test.js",
+      "target": "test/wts_pay_303.test.js"
+    },
+    {
+      "repository": "orders-api",
+      "source": "acceptance/full-stack/wts_pay_303.rs",
+      "target": "tests/wts_pay_303.rs"
+    }
+  ],
+  "checks": [
+    {
+      "id": "ui-contract",
+      "label": "Shopfront contract tests",
+      "repository": "shopfront-ui",
+      "executable": "node",
+      "args": ["--test"]
+    },
+    {
+      "id": "api-contract",
+      "label": "Orders API contract tests",
+      "repository": "orders-api",
+      "executable": "cargo",
+      "args": ["test", "--quiet"]
+    }
+  ],
+  "referenceChanges": [
+    {
+      "repository": "shopfront-ui",
+      "path": "src/orders.js",
+      "find": "return `$${Number(order.total).toFixed(2)}`;",
+      "replace": "return `$${(Number(order.total_cents) / 100).toFixed(2)}`;"
+    },
+    {
+      "repository": "orders-api",
+      "path": "src/lib.rs",
+      "find": "format!(\"{{\\\"total\\\":{:.2}}}\", total_cents as f64 / 100.0)",
+      "replace": "format!(\"{{\\\"total_cents\\\":{total_cents}}}\")"
+    }
+  ],
+  "expectedChangedSources": [
+    "shopfront-ui:src/orders.js",
+    "orders-api:src/lib.rs"
+  ]
+}

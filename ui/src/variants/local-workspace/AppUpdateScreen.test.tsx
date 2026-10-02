@@ -1,0 +1,264 @@
+import { act, render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { App } from "../../App";
+import { AppUpdateScreen, useAppUpdate } from "./AppUpdateScreen";
+import type { WorkspaceClient } from "../../lib/wtsClient";
+import {
+  fakeWorkspaceClient,
+  workspaceListFixture,
+} from "../../test/workspaceClientFake";
+
+const updateEvents = vi.hoisted(() => ({
+  handler: null as null | ((event: { payload: unknown }) => void),
+  unlisten: vi.fn(),
+  listen: vi.fn(async (
+    _event: string,
+    handler: (event: { payload: unknown }) => void,
+  ) => {
+    updateEvents.handler = handler;
+    return updateEvents.unlisten;
+  }),
+}));
+
+vi.mock("@tauri-apps/api/event", () => ({ listen: updateEvents.listen }));
+
+afterEach(() => {
+  delete (globalThis as typeof globalThis & { __TAURI_INTERNALS__?: unknown })
+    .__TAURI_INTERNALS__;
+  updateEvents.handler = null;
+  updateEvents.listen.mockClear();
+  updateEvents.unlisten.mockClear();
+});
+
+describe("WTS app updates", () => {
+  it("keeps Relaunch available when a late native progress event arrives after installation", async () => {
+    (globalThis as typeof globalThis & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};
+    const fake = fakeWorkspaceClient({ appUpdateStatus: {
+      schemaVersion: 1, state: "available", currentVersion: "0.1.0", availableVersion: "0.2.0", detail: "An update is available.",
+    } });
+    fake.downloadAndInstallUpdate.mockResolvedValue({ schemaVersion: 1, state: "ready", currentVersion: "0.1.0", availableVersion: "0.2.0", detail: "Relaunch WTS to use the update." });
+    function Updates() { return <AppUpdateScreen controller={useAppUpdate(fake.client)} />; }
+    render(<Updates />);
+    expect(await screen.findByRole("button", { name: "Relaunch WTS" })).toBeEnabled();
+    await waitFor(() => expect(updateEvents.handler).not.toBeNull());
+    act(() => updateEvents.handler?.({ payload: { version: "0.2.0", downloadedBytes: 512, totalBytes: 1024 } }));
+    expect(screen.getByRole("button", { name: "Relaunch WTS" })).toBeEnabled();
+    expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
+  });
+
+  it("keeps install recovery available after automatic and manual download failures", async () => {
+    const user = userEvent.setup();
+    const fake = fakeWorkspaceClient({ appUpdateStatus: {
+      schemaVersion: 1, state: "available", currentVersion: "0.1.0", availableVersion: "0.2.0", detail: "A signed update is available.",
+    } });
+    fake.downloadAndInstallUpdate
+      .mockRejectedValueOnce(new Error("The download was interrupted."))
+      .mockRejectedValueOnce(new Error("The download is still unavailable."))
+      .mockResolvedValue({ schemaVersion: 1, state: "ready", currentVersion: "0.1.0", availableVersion: "0.2.0", detail: "Relaunch WTS to use the update." });
+    function Updates({ client }: { client: WorkspaceClient }) {
+      return <AppUpdateScreen controller={useAppUpdate(client)} />;
+    }
+    render(<Updates client={fake.client} />);
+    expect(await screen.findByText("The download was interrupted.")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Update WTS" }));
+    expect(await screen.findByText("The download is still unavailable.")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Check for updates" })).toBeEnabled();
+    expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Update WTS" }));
+    expect(await screen.findByRole("button", { name: "Relaunch WTS" })).toBeEnabled();
+    expect(fake.downloadAndInstallUpdate).toHaveBeenCalledTimes(3);
+  });
+
+  it("keeps relaunch available after a rejected request", async () => {
+    const user = userEvent.setup();
+    const fake = fakeWorkspaceClient({ appUpdateStatus: {
+      schemaVersion: 1, state: "ready", currentVersion: "0.1.0", availableVersion: "0.2.0", detail: "Relaunch WTS to use the update.",
+    } });
+    fake.relaunchUpdatedApp.mockRejectedValueOnce(new Error("The app could not relaunch.")).mockResolvedValue({ accepted: true });
+    function Updates({ client }: { client: WorkspaceClient }) {
+      return <AppUpdateScreen controller={useAppUpdate(client)} />;
+    }
+    render(<Updates client={fake.client} />);
+    await user.click(await screen.findByRole("button", { name: "Relaunch WTS" }));
+    expect(await screen.findByText("The app could not relaunch.")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Relaunch WTS" }));
+    expect(fake.relaunchUpdatedApp).toHaveBeenCalledTimes(2);
+  });
+
+  it("checks and installs an available update automatically at startup", async () => {
+    const user = userEvent.setup();
+    const fake = fakeWorkspaceClient({
+      list: workspaceListFixture(),
+      appUpdateStatus: {
+        schemaVersion: 1,
+        state: "available",
+        currentVersion: "0.1.0",
+        availableVersion: "0.2.0",
+        detail: "A signed local update is available.",
+      },
+    });
+    fake.downloadAndInstallUpdate.mockResolvedValue({
+      schemaVersion: 1,
+      state: "ready",
+      currentVersion: "0.1.0",
+      availableVersion: "0.2.0",
+      detail: "The update is installed. Relaunch WTS to use it.",
+    });
+    fake.relaunchUpdatedApp.mockResolvedValue({ accepted: true });
+
+    render(<App initialPath="/" workspaceClient={fake.client} />);
+
+    const openSettings = await screen.findByRole(
+      "button",
+      { name: "Open Environment and integrations" },
+      { timeout: 5_000 },
+    );
+    await waitFor(() => expect(fake.checkForUpdate).toHaveBeenCalledOnce());
+    await waitFor(() => expect(fake.downloadAndInstallUpdate).toHaveBeenCalledOnce());
+    expect(
+      screen.queryByRole("button", { name: "Updates" }),
+    ).not.toBeInTheDocument();
+    await user.click(openSettings);
+    await user.click(screen.getByRole("tab", { name: /Updates/ }));
+    expect(await screen.findByText("WTS 0.2.0 is ready", {}, { timeout: 5_000 })).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Update WTS" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Relaunch WTS" }));
+    expect(fake.relaunchUpdatedApp).toHaveBeenCalledOnce();
+  });
+
+  it("checks again on focus and installs an update that arrived in the background", async () => {
+    const fake = fakeWorkspaceClient({
+      list: workspaceListFixture(),
+      appUpdateStatus: {
+        schemaVersion: 1,
+        state: "upToDate",
+        currentVersion: "0.1.0",
+        detail: "WTS is current.",
+      },
+    });
+    fake.checkForUpdate
+      .mockResolvedValueOnce({
+        schemaVersion: 1,
+        state: "upToDate",
+        currentVersion: "0.1.0",
+        detail: "WTS is current.",
+      })
+      .mockResolvedValueOnce({
+        schemaVersion: 1,
+        state: "available",
+        currentVersion: "0.1.0",
+        availableVersion: "0.2.0",
+        detail: "A signed local update is available.",
+      });
+    fake.downloadAndInstallUpdate.mockResolvedValue({
+      schemaVersion: 1,
+      state: "ready",
+      currentVersion: "0.1.0",
+      availableVersion: "0.2.0",
+      detail: "The update is installed. Restart WTS to use it.",
+    });
+
+    render(<App initialPath="/" workspaceClient={fake.client} />);
+    await waitFor(() => expect(fake.checkForUpdate).toHaveBeenCalledOnce());
+
+    window.dispatchEvent(new Event("focus"));
+
+    await waitFor(() => expect(fake.checkForUpdate).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(fake.downloadAndInstallUpdate).toHaveBeenCalledOnce());
+  });
+
+  it("shows download progress without exposing an update path", async () => {
+    const fake = fakeWorkspaceClient({
+      list: workspaceListFixture(),
+      appUpdateStatus: {
+        schemaVersion: 1,
+        state: "downloading",
+        currentVersion: "0.1.0",
+        availableVersion: "0.2.0",
+        downloadedBytes: 524_288,
+        totalBytes: 1_048_576,
+        detail: "Downloading and verifying the update…",
+      },
+    });
+
+    render(<App initialPath="/updates" workspaceClient={fake.client} />);
+
+    expect(await screen.findByRole("progressbar", {
+      name: "Update download progress",
+    })).toHaveValue(50);
+    expect(screen.getByText("512 KiB of 1.0 MiB")).toBeVisible();
+    expect(document.body.textContent).not.toMatch(/\/Applications|https?:\/\//);
+  });
+
+  it("applies bounded native progress events and removes the listener", async () => {
+    (globalThis as typeof globalThis & { __TAURI_INTERNALS__?: unknown })
+      .__TAURI_INTERNALS__ = {};
+    const fake = fakeWorkspaceClient({
+      list: workspaceListFixture(),
+      appUpdateStatus: {
+        schemaVersion: 1,
+        state: "available",
+        currentVersion: "0.1.0",
+        availableVersion: "0.2.0",
+        detail: "A signed local update is available.",
+      },
+    });
+    fake.downloadAndInstallUpdate.mockReturnValue(new Promise(() => {}));
+
+    const rendered = render(
+      <App initialPath="/updates" workspaceClient={fake.client} />,
+    );
+    await waitFor(() => expect(fake.downloadAndInstallUpdate).toHaveBeenCalledOnce());
+    await waitFor(() => expect(updateEvents.listen).toHaveBeenCalledWith(
+      "wts://update-progress",
+      expect.any(Function),
+    ));
+
+    act(() => {
+      updateEvents.handler?.({
+        payload: {
+          version: "0.2.0",
+          downloadedBytes: 524_288,
+          totalBytes: 1_048_576,
+        },
+      });
+    });
+    expect(screen.getByRole("progressbar", {
+      name: "Update download progress",
+    })).toHaveValue(50);
+    expect(screen.getByText("512 KiB of 1.0 MiB")).toBeVisible();
+
+    act(() => rendered.unmount());
+    expect(updateEvents.unlisten).toHaveBeenCalledOnce();
+  });
+
+  it("shows an offline recovery action and accepts a manual retry", async () => {
+    const user = userEvent.setup();
+    const fake = fakeWorkspaceClient({
+      list: workspaceListFixture(),
+      appUpdateStatus: {
+        schemaVersion: 1,
+        state: "error",
+        currentVersion: "0.1.0",
+        detail: "Could not reach the configured update channel.",
+        diagnosticCode: "networkUnavailable",
+      },
+    });
+
+    render(<App initialPath="/updates" workspaceClient={fake.client} />);
+
+    expect(await screen.findByRole("heading", { name: "Offline" })).toBeVisible();
+    fake.checkForUpdate.mockResolvedValueOnce({
+      schemaVersion: 1,
+      state: "upToDate",
+      currentVersion: "0.1.0",
+      detail: "WTS is current.",
+    });
+    await user.click(
+      screen.getByRole("button", { name: "Check for updates" }),
+    );
+    expect(await screen.findByText("Up to date")).toBeVisible();
+    expect(fake.checkForUpdate).toHaveBeenCalledTimes(2);
+  });
+});
