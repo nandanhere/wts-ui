@@ -51,7 +51,7 @@ export function AgentResultReview({ client, conversation, requestId, sessionId, 
       setRecorded({ value: result, client, key: scopeKey });
     } catch (cause) {
       if (request !== generation.current) return;
-      setError(cause instanceof WorkspaceClientError ? cause.message : cause instanceof Error ? cause.message : "WTS could not read the task change record. Select Retry record.");
+      setError(cause instanceof WorkspaceClientError ? cause.message : cause instanceof Error ? cause.message : "Could not read the task change record. Select Retry record.");
     } finally {
       if (request === generation.current) setPending(false);
     }
@@ -87,24 +87,24 @@ export function AgentResultReview({ client, conversation, requestId, sessionId, 
               {onReturnToSelection && <button onClick={() => { setOpen(false); onReturnToSelection(); }} type="button">Return to selection</button>}
               {client.getAgentTurnChanges && <button disabled={pending} onClick={() => void load()} type="button">{error ? "Retry record" : "Refresh record"}</button>}
             </div>
-            {pending && <p role="status">WTS reads the task change record.</p>}
+            {pending && <p role="status">Reading the task change record…</p>}
             {error && <p role="alert">{error}{receipt && " The displayed record remains available."}</p>}
             {receipt && <>
               <details><summary>About this record</summary><p>{receipt.detail}</p></details>
-              {receipt.state !== "ready" && <p role="status">{receipt.state === "capturing" ? "WTS has not finished this record. Select Refresh record to check again." : receipt.state === "incomplete" ? "This record is incomplete. Some changes can be absent." : "This task has no complete change record. Open the current local changes to inspect the workspace."}</p>}
-              {receipt.observation === "recovered" && <p>WTS recovered this record after an interruption. It can include changes from outside this task.</p>}
+              {receipt.state !== "ready" && <p role="status">{receipt.state === "capturing" ? "This record is not finished. Select Refresh record to check again." : receipt.state === "incomplete" ? "This record is incomplete. Some changes can be absent." : "This task has no complete change record. Open the current local changes to inspect the workspace."}</p>}
+              {receipt.observation === "recovered" && <p>This record was recovered after an interruption. It can include changes from outside this task.</p>}
               {receipt.files.some(file => file.preExistingChange) && <p>Some files had local changes before this task. The patch compares the recorded before and after states.</p>}
               <details className={styles.files}>
                 <summary>{receipt.files.length} {receipt.files.length === 1 ? "file" : "files"} changed{receipt.omittedFileCount > 0 ? ` · ${receipt.omittedFileCount} omitted` : ""}</summary>
                 <ul>{receipt.files.map(file => <li key={file.filePath}><code>{file.filePath}</code><span>{file.status === "typeChanged" ? "Type changed" : file.status}</span>{file.preExistingChange && <span>Local changes before task</span>}{file.detail && <p>{file.detail}</p>}</li>)}</ul>
               </details>
               {receipt.patchTruncated && <p role="status">The patch is incomplete. Some changed lines are not shown.</p>}
-              {!receipt.patch && <p>{receipt.files.length ? "No text patch is available for these changes." : receipt.state === "ready" ? "WTS observed no file changes during this task." : "No file changes are available in this record."}</p>}
+              {!receipt.patch && <p>{receipt.files.length ? "No text patch is available for these changes." : receipt.state === "ready" ? "No file changes during this task." : "No file changes are available in this record."}</p>}
             </>}
           </div>
           {receipt && <AgentResultActions client={client} receipt={receipt} calloutScope={calloutScope} onLeaveReview={() => { setOpen(false); onCloseFeedback?.(); }} onOpenVerification={() => { setOpen(false); onCloseFeedback?.(); window.dispatchEvent(new CustomEvent("wts:open-agent-workspace", { detail: { workspaceId, repositoryId, tab: "verification" } })); }} />}
           {receipt?.patch && <div className={styles.patch}>
-            <Suspense fallback={<p role="status">WTS opens the recorded patch.</p>}><RepositoryPatchViewer patch={receipt.patch} theme={resolvedTheme} disableFullFile singleFile={receipt.files.length === 1 && receipt.omittedFileCount === 0} calloutPrefix={calloutScope ? { id: `${calloutScope.id}.review`, label: `${calloutScope.label} result` } : { id: "agent-result-review", label: "Task result" }} /></Suspense>
+            <Suspense fallback={<p role="status">Opening the recorded patch…</p>}><RepositoryPatchViewer patch={receipt.patch} theme={resolvedTheme} disableFullFile singleFile={receipt.files.length === 1 && receipt.omittedFileCount === 0} calloutPrefix={calloutScope ? { id: `${calloutScope.id}.review`, label: `${calloutScope.label} result` } : { id: "agent-result-review", label: "Task result" }} /></Suspense>
           </div>}
         </div>
       </Dialog.Content>

@@ -1,10 +1,9 @@
+import { loadActivityReviewRange } from "../../lib/activityReviewRange";
 import { useEffect, useRef, useState } from "react";
 import type { WorkspaceClient } from "../../lib/wtsClient";
 import {
   activityWatchReviewIntervalId,
-  localDateKey,
   saveActivityWatchReviewHistorySnapshot,
-  saveActivityWatchReviewSnapshot,
 } from "./activityWatchReviewCache";
 import { sendDesktopNotification } from "./desktopNotifications";
 import {
@@ -72,7 +71,7 @@ export function TimeReviewScheduler({
           return;
         }
         const [reviewResult, jiraResult] = await Promise.allSettled([
-          client.getActivityWatchDailyReview(startedAtUnixMs, endedAtUnixMs),
+          loadActivityReviewRange(client, startedAtUnixMs, endedAtUnixMs),
           client.listActiveJiraIssues(),
         ]);
         if (
@@ -98,14 +97,7 @@ export function TimeReviewScheduler({
         });
         if (!historySaved) return;
 
-        saveActivityWatchReviewSnapshot({
-          schemaVersion: 1,
-          dateKey: localDateKey(),
-          builtAtUnixMs,
-          review: reviewResult.value,
-          jiraIssues: jiraResult.value,
-          assignments: {},
-        });
+
 
         const current = loadTimeReviewSchedule();
         const completed = completeScheduledTimeReview(current, endedAtUnixMs);
@@ -115,7 +107,7 @@ export function TimeReviewScheduler({
           const blockCount = reviewResult.value.sessions.length;
           void notify(
             "My time summary is ready",
-            `WTS found ${blockCount} ${blockCount === 1 ? "work block" : "work blocks"}.`,
+            `Found ${blockCount} ${blockCount === 1 ? "work block" : "work blocks"}.`,
             "wts-time-review",
           ).catch(() => false);
         }

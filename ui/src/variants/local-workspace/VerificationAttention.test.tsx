@@ -27,7 +27,7 @@ describe("verification attention links", () => {
       revealCheck={{ requestId: "missing-evidence", workspaceId: "missing-workspace", checkId: "checkout-unit", planRevision: 1, runStartedAt: 1 }} />);
     expect(await screen.findByRole("heading", { name: "No evidence bundle exists yet" })).toBeVisible();
     const selected = await screen.findByRole("region", { name: "Selected check result" });
-    expect(within(selected).getByText("WTS cannot find the saved evidence for this result. Select Check again to reload it.")).toBeVisible();
+    expect(within(selected).getByText("Cannot find the saved evidence for this result. Select Check again to reload it.")).toBeVisible();
     expect(screen.getByRole("button", { name: "Check again" })).toBeEnabled();
     expect(fake.runWorkspaceVerification).not.toHaveBeenCalled();
   });

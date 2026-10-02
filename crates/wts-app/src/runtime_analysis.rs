@@ -424,6 +424,12 @@ fn detect_repository(
         );
     }
 
+    let package_directories = package_services
+        .iter()
+        .map(|service| service.working_directory.clone())
+        .collect::<BTreeSet<_>>();
+    package_services.extend(detect_server_processes(source, blobs, &package_directories));
+
     let used_ports = package_services
         .iter()
         .flat_map(|service| {
@@ -1043,6 +1049,238 @@ fn dockerfile_ports(text: &str) -> Vec<u16> {
         }
     }
     ports.into_iter().collect()
+}
+
+const SERVER_EXECUTABLES: &[&str] = &[
+    "python", "python3", "uwsgi", "gunicorn", "uvicorn", "hypercorn", "flask", "node", "deno", "bun",
+];
+
+/// Parse the port and module from a uWSGI INI file. Only the `[uwsgi]`
+/// section is read, and only literal port values are accepted.
+fn uwsgi_port(text: &str) -> Option<u16> {
+    let mut in_section = false;
+    let mut port = None;
+    for line in text.lines().take(4096) {
+        let code = line.split(['#', ';']).next().unwrap_or_default().trim();
+        if code.starts_with('[') {
+            in_section = code.eq_ignore_ascii_case("[uwsgi]");
+            continue;
+        }
+        if !in_section {
+            continue;
+        }
+        let Some((key, value)) = code.split_once('=') else {
+            continue;
+        };
+        let key = key.trim().to_ascii_lowercase();
+        if !matches!(key.as_str(), "http" | "http-socket" | "socket" | "uwsgi-socket" | "https") {
+            continue;
+        }
+        let value = value.trim();
+        let candidate = value.rsplit_once(':').map_or(value, |(_, port)| port);
+        let candidate = candidate.split(',').next().unwrap_or_default();
+        if let Some(value) = parse_port_literal(candidate) {
+            // Prefer an HTTP listener over a binary uWSGI socket.
+            if key.starts_with("http") || port.is_none() {
+                port = Some(value);
+            }
+        }
+    }
+    port
+}
+
+/// Read the exec-form command from the last `ENTRYPOINT` and `CMD`
+/// instructions. Shell-form commands are ignored because they need a shell.
+fn dockerfile_command(text: &str) -> Option<Vec<String>> {
+    let mut entrypoint: Option<Vec<String>> = None;
+    let mut cmd: Option<Vec<String>> = None;
+    for line in text.lines().take(4096) {
+        let code = line.trim();
+        let Some((instruction, rest)) = code.split_once(char::is_whitespace) else {
+            continue;
+        };
+        let parsed = || serde_json::from_str::<Vec<String>>(rest.trim()).ok();
+        if instruction.eq_ignore_ascii_case("ENTRYPOINT") {
+            entrypoint = parsed();
+        } else if instruction.eq_ignore_ascii_case("CMD") {
+            cmd = parsed();
+        }
+    }
+    let mut command = entrypoint.unwrap_or_default();
+    command.extend(cmd.unwrap_or_default());
+    (!command.is_empty()).then_some(command)
+}
+
+fn server_candidate(
+    source: &RuntimeRepositorySource,
+    detector: &str,
+    path: &str,
+    directory: &str,
+    command: Vec<String>,
+    port: u16,
+    confidence: RuntimeConfidence,
+    service_evidence: Vec<RuntimeEvidence>,
+    port_evidence: Vec<RuntimeEvidence>,
+) -> RuntimeServiceCandidate {
+    let leaf = if directory == "." {
+        source.repository_label.as_str()
+    } else {
+        directory.rsplit('/').next().unwrap_or("service")
+    };
+    let service_id = sanitize_identifier(leaf);
+    RuntimeServiceCandidate {
+        candidate_id: candidate_id(source, detector, path, &service_id, directory),
+        display_name: display_name(&service_id),
+        service_id,
+        repository_id: source.repository_id.clone(),
+        repository_label: source.repository_label.clone(),
+        commit_oid: source.commit_oid.clone(),
+        working_directory: directory.to_owned(),
+        command,
+        dependencies: Vec::new(),
+        ports: vec![RuntimePortCandidate {
+            port_id: "http".to_owned(),
+            environment: None,
+            preferred_port: Some(port),
+            policy: RuntimePortPolicy::Fixed,
+            confidence,
+            evidence: port_evidence,
+        }],
+        confidence,
+        evidence: service_evidence,
+        // These services often read deployment paths and settings. The user
+        // opts in after reviewing the command.
+        included_by_default: false,
+    }
+}
+
+/// Suggest Python and other server processes from uWSGI configuration and
+/// exec-form Dockerfile commands. Directories that already have a package
+/// service are skipped.
+fn detect_server_processes(
+    source: &RuntimeRepositorySource,
+    blobs: &[CommitCandidateBlob],
+    skip_directories: &BTreeSet<String>,
+) -> Vec<RuntimeServiceCandidate> {
+    let dockerfiles = blobs
+        .iter()
+        .filter(|blob| blob.kind == CommitCandidateKind::Dockerfile)
+        .filter_map(|blob| {
+            let text = std::str::from_utf8(&blob.bytes).ok()?;
+            Some((blob, dockerfile_command(text), dockerfile_ports(text)))
+        })
+        .collect::<Vec<_>>();
+    let mut services = Vec::new();
+    let mut used_directories = skip_directories.clone();
+
+    for blob in blobs
+        .iter()
+        .filter(|blob| blob.kind == CommitCandidateKind::UwsgiConfig)
+    {
+        let directory = parent_directory(&blob.path);
+        let Some(port) = std::str::from_utf8(&blob.bytes).ok().and_then(uwsgi_port) else {
+            continue;
+        };
+        if used_directories.contains(&directory) {
+            continue;
+        }
+        let file_name = blob.path.rsplit('/').next().unwrap_or(&blob.path).to_owned();
+        let command = vec!["uwsgi".to_owned(), "--ini".to_owned(), file_name.clone()];
+        if !safe_command(&command[0], &command[1..], &directory) {
+            continue;
+        }
+        let mut service_evidence = vec![evidence(
+            source,
+            &blob.path,
+            "uwsgi-config",
+            format!("{file_name} configures a uWSGI application."),
+        )];
+        let port_evidence = vec![evidence(
+            source,
+            &blob.path,
+            "uwsgi-config",
+            format!("{file_name} binds port {port}. The port is fixed in the file."),
+        )];
+        let corroborating = dockerfiles.iter().find(|(dockerfile, command, _)| {
+            parent_directory(&dockerfile.path) == directory
+                && command.as_ref().is_some_and(|command| {
+                    command.first().is_some_and(|value| value == "uwsgi")
+                        && command.iter().any(|value| value == &file_name)
+                })
+        });
+        let confidence = if let Some((dockerfile, _, _)) = corroborating {
+            service_evidence.push(evidence(
+                source,
+                &dockerfile.path,
+                "dockerfile-command",
+                format!("{} starts uWSGI with {file_name}.", dockerfile.path),
+            ));
+            RuntimeConfidence::Corroborated
+        } else {
+            RuntimeConfidence::Inferred
+        };
+        used_directories.insert(directory.clone());
+        services.push(server_candidate(
+            source,
+            "uwsgi-config",
+            &blob.path,
+            &directory,
+            command,
+            port,
+            confidence,
+            service_evidence,
+            port_evidence,
+        ));
+    }
+
+    for (blob, command, ports) in &dockerfiles {
+        let directory = parent_directory(&blob.path);
+        let (Some(command), Some(port)) = (command, ports.first().copied()) else {
+            continue;
+        };
+        if used_directories.contains(&directory) {
+            continue;
+        }
+        let Some(executable) = command.first() else {
+            continue;
+        };
+        let executable_name = executable.rsplit('/').next().unwrap_or(executable);
+        if !SERVER_EXECUTABLES.contains(&executable_name)
+            || executable_name == "uwsgi"
+            // Container paths do not exist in a local checkout.
+            || command[1..].iter().any(|argument| argument.starts_with('/'))
+            || !safe_command(executable_name, &command[1..], &directory)
+        {
+            continue;
+        }
+        let mut local_command = vec![executable_name.to_owned()];
+        local_command.extend(command[1..].iter().cloned());
+        used_directories.insert(directory.clone());
+        services.push(server_candidate(
+            source,
+            "dockerfile-command",
+            &blob.path,
+            &directory,
+            local_command.clone(),
+            port,
+            RuntimeConfidence::Suggested,
+            vec![evidence(
+                source,
+                &blob.path,
+                "dockerfile-command",
+                format!("{} starts {}.", blob.path, local_command.join(" ")),
+            )],
+            vec![evidence(
+                source,
+                &blob.path,
+                "dockerfile-expose",
+                format!("{} exposes port {port}.", blob.path),
+            )],
+        ));
+    }
+    services.sort_by(|left, right| left.candidate_id.cmp(&right.candidate_id));
+    services.truncate(MAX_RUNTIME_SERVICES);
+    services
 }
 
 fn environment_example_ports(text: &str) -> Vec<(String, u16)> {
@@ -1719,6 +1957,65 @@ mod tests {
         );
         let serialized = serde_json::to_string(&result).expect("serialized analysis");
         assert!(!serialized.contains(SECRET_SENTINEL));
+    }
+
+
+    #[test]
+    fn python_uwsgi_service_is_found_from_lowercase_dockerfile_and_ini() {
+        let (_temporary, source) = repository(&[
+            (
+                "api/uwsgiconfig.ini",
+                b"[uwsgi]\nprotocol = http\nmodule = main:app\nsocket = 0.0.0.0:9001\n",
+            ),
+            (
+                "api/dockerfile",
+                b"FROM python:3.9\nCOPY . .\nENTRYPOINT [\"uwsgi\", \"--ini\", \"uwsgiconfig.ini\"]\n",
+            ),
+            (
+                "log-api/dockerfile",
+                b"FROM python:3.9\nEXPOSE 6001\nCMD [ \"python3\", \"wsgi.py\", \"--host=0.0.0.0\"]\n",
+            ),
+            ("log-api/wsgi.py", b"print('app')\n"),
+        ]);
+
+        let result = analyze_runtime(&[source]).expect("python analysis");
+
+        assert_eq!(result.services.len(), 2, "{:?}", result.services);
+        let api = result
+            .services
+            .iter()
+            .find(|service| service.working_directory == "api")
+            .expect("api service");
+        assert_eq!(api.command, ["uwsgi", "--ini", "uwsgiconfig.ini"]);
+        assert_eq!(api.ports[0].preferred_port, Some(9001));
+        assert_eq!(api.ports[0].policy, RuntimePortPolicy::Fixed);
+        assert_eq!(api.confidence, RuntimeConfidence::Corroborated);
+        assert!(!api.included_by_default);
+
+        let log_api = result
+            .services
+            .iter()
+            .find(|service| service.working_directory == "log-api")
+            .expect("log-api service");
+        assert_eq!(log_api.command, ["python3", "wsgi.py", "--host=0.0.0.0"]);
+        assert_eq!(log_api.ports[0].preferred_port, Some(6001));
+        assert_eq!(log_api.confidence, RuntimeConfidence::Suggested);
+        assert!(
+            !result
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("No runnable services"))
+        );
+    }
+
+    #[test]
+    fn dockerfile_command_with_container_paths_is_not_suggested() {
+        let (_temporary, source) = repository(&[(
+            "Dockerfile",
+            b"FROM python:3.9\nEXPOSE 8000\nCMD [\"python3\", \"/usr/app/main.py\"]\n",
+        )]);
+        let result = analyze_runtime(&[source]).expect("analysis");
+        assert!(result.services.is_empty());
     }
 
     #[test]

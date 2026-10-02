@@ -11,7 +11,7 @@ const AgentResultReview = lazy(() => import("./AgentResultReview").then(module =
 const terminal = new Set(["completed", "failed", "blocked", "cancelled"]);
 const states = { pending: "Pending", preparing: "Creates workspace", queued: "Queued", running: "Active", completed: "Completed", failed: "Failed", blocked: "Blocked", cancelled: "Cancelled" };
 type CalloutScope = { id: string; label: string };
-function errorText(cause: unknown) { return cause instanceof Error ? cause.message : "WTS could not complete this task request. Refresh the plans before you retry."; }
+function errorText(cause: unknown) { return cause instanceof Error ? cause.message : "Could not complete this task request. Refresh the plans before you retry."; }
 function initialDraft(key: string) { try { return { draft: readWorkSetDraft(key), error: "" }; } catch (cause) { return { draft: newWorkSetDraft(key), error: errorText(cause) }; } }
 function matches(set: AgentWorkSet, receipt: AgentTurnChanges) { return set.conversationId === receipt.conversationId && set.requestId === receipt.requestId && set.workspaceId === receipt.workspaceId && set.repositoryId === receipt.repositoryId && set.sourceCheckpointId === receipt.after?.checkpointId && set.sourceContextSha256 === receipt.sourceContextSha256; }
 export function AgentResultWorkSets({ client, receipt, calloutScope, onLeaveReview }: { client: WorkspaceClient; receipt: AgentTurnChanges; calloutScope?: CalloutScope; onLeaveReview: () => void }) {
@@ -39,7 +39,7 @@ function WorkSetPanel({ client, receipt, draftKey, calloutScope, onLeaveReview }
     const current = draftRef.current; let next = current;
     if (current.pending) {
       const acknowledged = incoming.find(set => set.workSetId === current.pending!.requestId);
-      if (acknowledged) { matchCreatedAgentWorkSet(acknowledged, () => { throw new Error("WTS did not confirm the saved task plan."); }, receipt.conversationId, receipt.requestId, current.pending); next = { ...newWorkSetDraft(draftKey), cancellations: current.cancellations }; selectedRef.current = acknowledged.workSetId; setSelected(acknowledged.workSetId); }
+      if (acknowledged) { matchCreatedAgentWorkSet(acknowledged, () => { throw new Error("The saved task plan is not confirmed."); }, receipt.conversationId, receipt.requestId, current.pending); next = { ...newWorkSetDraft(draftKey), cancellations: current.cancellations }; selectedRef.current = acknowledged.workSetId; setSelected(acknowledged.workSetId); }
     }
     const cancellations = next.cancellations.filter(cancel => { const task = incoming.find(set => set.workSetId === cancel.workSetId)?.tasks.find(task => task.taskId === cancel.taskId); return !task || !terminal.has(task.state); });
     if (cancellations.length !== next.cancellations.length) next = { ...next, cancellations };
@@ -64,7 +64,7 @@ function WorkSetPanel({ client, receipt, draftKey, calloutScope, onLeaveReview }
     const current = draftRef.current; const request = current.pending ?? { requestId: crypto.randomUUID(), expectedAfterCheckpointId: receipt.after.checkpointId, kind: current.kind, tasks: current.tasks };
     try { validateCreateAgentWorkSet(request, () => { throw new Error("Check the task titles, prompts, and dependencies before you start."); }); persist({ ...current, pending: request }); } catch (cause) { setError(errorText(cause)); return; }
     busyRef.current = true; setBusy(true); setError(""); const token = ++generation.current;
-    try { const result = await client.createAgentWorkSet(receipt.conversationId, receipt.requestId, request); if (token === generation.current) { matchCreatedAgentWorkSet(result, () => { throw new Error("WTS did not confirm the saved task plan."); }, receipt.conversationId, receipt.requestId, request); install([result]); } }
+    try { const result = await client.createAgentWorkSet(receipt.conversationId, receipt.requestId, request); if (token === generation.current) { matchCreatedAgentWorkSet(result, () => { throw new Error("The saved task plan is not confirmed."); }, receipt.conversationId, receipt.requestId, request); install([result]); } }
     catch (cause) {
       if (token !== generation.current) return;
       if (cause instanceof WorkspaceClientError && ["invalid_agent_conversation", "agent_conversation_conflict", "agent_conversation_storage_full"].includes(cause.code)) { try { persist({ ...current, pending: undefined }); } catch (storageCause) { setError(errorText(storageCause)); return; } }
@@ -80,7 +80,7 @@ function WorkSetPanel({ client, receipt, draftKey, calloutScope, onLeaveReview }
     try {
       const result = await client.cancelAgentWorkItem(set.workSetId, task.taskId, request.request);
       if (token !== generation.current) return;
-      if (result.workSetId !== set.workSetId || result.lastMutationRequestId !== request.request.requestId || result.tasks.find(item => item.taskId === task.taskId)?.state !== "cancelled") throw new Error("WTS did not confirm this cancellation. Refresh the plan before you retry.");
+      if (result.workSetId !== set.workSetId || result.lastMutationRequestId !== request.request.requestId || result.tasks.find(item => item.taskId === task.taskId)?.state !== "cancelled") throw new Error("This cancellation is not confirmed. Refresh the plan before you retry.");
       install([result]);
     } catch (cause) {
       if (token !== generation.current) return;
@@ -107,8 +107,8 @@ function WorkSetPanel({ client, receipt, draftKey, calloutScope, onLeaveReview }
     <section role="region" aria-label="Tasks and alternatives">
       <p>Tasks use separate workspaces. Dependencies add completed task results. Alternatives start from the same saved files.</p>
       {client.listAgentWorkSets ? <button type="button" disabled={busy} onClick={() => void refresh()}>Refresh plans</button> : <p>This WTS host cannot read task plans. Update WTS to use this control.</p>}
-      {busy && <p role="status">WTS reads or updates the task plan.</p>}{error && <p role="alert">{error}</p>}
-      {draft.pending && <p>WTS kept this plan for an exact retry. Refresh plans to find it. <button type="button" disabled={busy || !client.createAgentWorkSet} onClick={() => void start()}>Retry task plan</button></p>}
+      {busy && <p role="status">Reading or updating the task plan…</p>}{error && <p role="alert">{error}</p>}
+      {draft.pending && <p>This plan is kept for an exact retry. Refresh plans to find it. <button type="button" disabled={busy || !client.createAgentWorkSet} onClick={() => void start()}>Retry task plan</button></p>}
       {sets.length > 1 && <label className={styles.decisionReason}>Saved plans<select value={selectedSet?.workSetId} onChange={event => { setSelected(event.currentTarget.value); selectedRef.current = event.currentTarget.value; void refresh(event.currentTarget.value); }}>{sets.map(set => <option key={set.workSetId} value={set.workSetId}>{set.kind === "tasks" ? "Tasks" : "Alternatives"}: {set.tasks[0].title}</option>)}</select></label>}
       {selectedSet && <div className={styles.workSet}>
         <p>{selectedSet.detail}</p>
@@ -125,11 +125,11 @@ function WorkSetPanel({ client, receipt, draftKey, calloutScope, onLeaveReview }
             {cancelErrors[cancelKey] && <p role="alert">{cancelErrors[cancelKey]}</p>}
           </article></li>;
         })}</ol>
-        <button type="button" disabled={!!draft.pending || busy || dirtyPlan} onClick={() => { if (dirtyPlan) return; const ids = new Map(selectedSet.tasks.map(task => [task.taskId, crypto.randomUUID()])); edit({ kind: selectedSet.kind, tasks: selectedSet.tasks.map(task => ({ taskId: ids.get(task.taskId)!, title: task.title, prompt: task.prompt, dependsOn: task.dependsOn.map(id => ids.get(id)!) })) }); }}>Use this plan again</button>{dirtyPlan && <p>Discard the current plan before you use this saved plan again. WTS kept your draft.</p>}
+        <button type="button" disabled={!!draft.pending || busy || dirtyPlan} onClick={() => { if (dirtyPlan) return; const ids = new Map(selectedSet.tasks.map(task => [task.taskId, crypto.randomUUID()])); edit({ kind: selectedSet.kind, tasks: selectedSet.tasks.map(task => ({ taskId: ids.get(task.taskId)!, title: task.title, prompt: task.prompt, dependsOn: task.dependsOn.map(id => ids.get(id)!) })) }); }}>Use this plan again</button>{dirtyPlan && <p>Discard the current plan before you use this saved plan again. Your draft is kept.</p>}
       </div>}
       {child && <div className={styles.childResult} role="region" aria-label={`Result: ${child.task.title}`}>
-        <strong>{child.task.title}</strong>{child.loading && <p role="status">WTS reads the candidate result.</p>}{child.error && <p role="alert">{child.error} <button type="button" onClick={() => void readChild(child.set, child.task)}>Retry result</button></p>}
-        {child.conversation && <Suspense fallback={<p role="status">WTS opens the candidate review.</p>}><AgentResultReview client={client} conversation={child.conversation} requestId={child.task.requestId} sessionId={child.conversation.messages.find(message => message.role === "assistant" && message.requestId === child.task.requestId)?.sessionId} resultTitle={child.task.title} calloutScope={childScope} onCloseFeedback={onLeaveReview} onReturnToSelection={() => { onLeaveReview(); returnToFeedbackSelection(child.conversation!.source); }} /></Suspense>}
+        <strong>{child.task.title}</strong>{child.loading && <p role="status">Reading the candidate result…</p>}{child.error && <p role="alert">{child.error} <button type="button" onClick={() => void readChild(child.set, child.task)}>Retry result</button></p>}
+        {child.conversation && <Suspense fallback={<p role="status">Opening the candidate review…</p>}><AgentResultReview client={client} conversation={child.conversation} requestId={child.task.requestId} sessionId={child.conversation.messages.find(message => message.role === "assistant" && message.requestId === child.task.requestId)?.sessionId} resultTitle={child.task.title} calloutScope={childScope} onCloseFeedback={onLeaveReview} onReturnToSelection={() => { onLeaveReview(); returnToFeedbackSelection(child.conversation!.source); }} /></Suspense>}
       </div>}
       <fieldset className={styles.decisionChoices} disabled={busy || !!draft.pending || !receipt.after || !client.createAgentWorkSet}>
         <legend>New plan</legend>
@@ -174,6 +174,6 @@ function CandidatePreview({ client, set, task, onLeaveReview }: { client: Worksp
       {task.state === "completed" && task.afterCheckpointId && <button type="button" disabled={busy} onClick={() => void open()}>{error || (preview && preview.state !== "running") ? "Retry preview" : "Open live preview"}</button>}
       <a href={`/sessions/${encodeURIComponent(task.workspaceId!)}/changes?repository=${encodeURIComponent(task.repositoryId!)}`} onClick={event => { if (event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return; event.preventDefault(); onLeaveReview(); window.dispatchEvent(new CustomEvent("wts:open-agent-workspace", { detail: { workspaceId: task.workspaceId, repositoryId: task.repositoryId } })); }}>Open task workspace</a>
     </div>
-    {busy && <p role="status">WTS opens the candidate preview.</p>}{error && <p role="alert">{error}</p>}{preview && <p role="status">{preview.detail}</p>}
+    {busy && <p role="status">Opening the candidate preview…</p>}{error && <p role="alert">{error}</p>}{preview && <p role="status">{preview.detail}</p>}
   </div>;
 }

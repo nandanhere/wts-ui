@@ -24,7 +24,7 @@ describe("workspace service setup clarity", () => {
     fake.analyzeWorkspaceRuntime.mockReturnValue(pending.promise);
     const { dialog } = await openServices(fake);
     expect(within(dialog).queryByText(/WTS found runnable services/)).not.toBeInTheDocument();
-    expect(within(dialog).getByRole("status")).toHaveTextContent("WTS checks");
+    expect(within(dialog).getByRole("status")).toHaveTextContent("Analyzing 1 selected base commit");
     expect(within(dialog).queryByRole("group", { name: "Service selection summary" })).not.toBeInTheDocument();
     await act(async () => { pending.resolve(runtimeAnalysisFixture()); });
   });

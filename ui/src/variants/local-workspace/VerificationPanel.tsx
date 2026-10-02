@@ -286,7 +286,7 @@ export function buildGraphVerificationPlanningPrompt(
     `Workspace ID: ${promptField(evidence.context.workspaceId)}`,
     `Graph index: ${graphIndexLabel(evidence.graphManifest.status)}. ${
       graphReady
-        ? "An index exists, but WTS has not asserted that it is fresh for the current working tree."
+        ? "An index exists, but it is not confirmed as fresh for the current working tree."
         : "A usable index is not available; stop and ask for a build or re-index before making graph-informed claims."
     }`,
     "",
@@ -873,11 +873,11 @@ function AgentReportCard({
             <Icon name="error" />
           </span>
           <div>
-            <b>WTS could not use this report.</b>
+            <b>Could not use this report.</b>
             <p>{report.detail}</p>
             <small>
               Fix <code>{report.displayPath}</code>, save valid report JSON, then
-              refresh. WTS keeps the last verification result unchanged.
+              refresh. The last verification result stays unchanged.
             </small>
           </div>
         </div>
@@ -1108,7 +1108,7 @@ function SelectedCheckResult({ evidence, selection }: {
   return <section ref={ref} tabIndex={-1} className={styles.selectedResult}
     aria-label="Selected check result" data-ui="verification.selected-result" data-ui-label="Selected check result">
     <header><b>{label}</b><button type="button" onClick={() => setDismissed(selection.requestId)}>Close result</button></header>
-    {!evidence ? <p>WTS cannot find the saved evidence for this result. Select Check again to reload it.</p> : result ? <>
+    {!evidence ? <p>Cannot find the saved evidence for this result. Select Check again to reload it.</p> : result ? <>
       <p>{checkStatusLabel(result.status)} · {new Date(selection.runStartedAt).toLocaleString()}</p>
       <pre>{result.detail || "This check has no saved output."}</pre>
       {result.logDisplayPath && <p>Log: <code>{result.logDisplayPath}</code></p>}
@@ -1686,7 +1686,7 @@ export function VerificationPanel({
         <small>VERIFICATION NOT CONFIGURED</small>
         <h2 id="verification-missing-title">No evidence bundle exists yet</h2>
         <p>
-          WTS found the workspace, but its verification evidence has not been
+          The workspace exists, but its verification evidence has not been
           created. No checks were inferred and nothing was run.
         </p>
         <button className={styles.secondaryButton} onClick={() => void load()}>
@@ -1726,7 +1726,7 @@ export function VerificationPanel({
             </div>
             <p>
               {graphReady
-                ? "Ask an agent to inspect the repository graph and propose candidate commands. WTS prepares a review-only brief; it does not run or save the proposal."
+                ? "Ask an agent to inspect the repository graph and propose candidate commands. Prepares a review-only brief. The proposal is not run or saved."
                 : "Build the workspace graph, then ask an agent to identify candidate commands from repository evidence."}
             </p>
           </div>
@@ -1847,9 +1847,9 @@ export function VerificationPanel({
           </div>
           <p>
             {!hasPlan
-              ? "WTS did not discover a supported, argument-safe check. Nothing can run until a check is reviewed and added to a supported repository manifest."
+              ? "No supported, argument-safe check was found. Nothing can run until a check is reviewed and added to a supported repository manifest."
               : displayStatus === "running"
-                ? "WTS is running only the discovered checks listed below inside the selected worktrees."
+                ? "Running only the discovered checks listed below inside the selected worktrees…"
                 : displayStatus === "passed"
                   ? "Every required check in the current plan completed successfully."
                   : displayStatus === "failed"
@@ -1927,7 +1927,7 @@ export function VerificationPanel({
         <summary>
           <span>
             <b>After agent work</b>
-            <small>Run reviewed automation while WTS is open</small>
+            <small>Run reviewed automation while the app is open</small>
           </span>
           <span>
             Checks {automation.automaticVerification ? "on" : "off"} · Agent

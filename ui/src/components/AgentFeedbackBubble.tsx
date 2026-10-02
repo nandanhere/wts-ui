@@ -6,19 +6,21 @@ import { WorkspaceClientError, type AgentProvider, type WorkspaceClient } from "
 import type { AgentConversation, AgentConversationMessage, AgentConversationSource } from "../lib/agentConversations";
 import { cleanupFeedbackCaptures, discardUnstoredFeedbackCapture, hydrateFeedbackCapture, MAX_FEEDBACK_DRAFTS, newFeedbackDraft, persistFeedbackCapture, readFeedbackShelf, saveFeedbackShelf,
   type AgentFeedbackDraft, type AgentFeedbackShelf, type QueuedFeedbackEdit } from "../lib/agentFeedbackDraft";
-import { AGENT_FEEDBACK_REQUESTED_EVENT, AGENT_FEEDBACK_RESULT_REQUESTED_EVENT, AGENT_TASK_REQUESTED_EVENT, type AgentFeedbackResultTarget, type AgentTaskRequest } from "../lib/agentFeedbackEvents";
+import { AGENT_FEEDBACK_OPEN_EVENT, AGENT_FEEDBACK_REQUESTED_EVENT, AGENT_FEEDBACK_RESULT_REQUESTED_EVENT, AGENT_TASK_REQUESTED_EVENT, type AgentFeedbackResultTarget, type AgentTaskRequest } from "../lib/agentFeedbackEvents";
 import { canCaptureUiRegion, UI_REGION_SELECTED_EVENT, type UiRegionSelection } from "./uiRegionSelection";
 import { GitlabDiscussionBody } from "../variants/local-workspace/GitlabDiscussionBody";
 import type { GitlabDiscussionFixContext } from "../variants/local-workspace/gitlabDiscussionFixContext";
 import { SelectMenu } from "./SelectMenu";
 import { AgentResultReview } from "./AgentResultReview";
 import { returnToFeedbackSelection } from "../lib/agentFeedbackNavigation";
+import { AgentLessonsList, AgentResultRatingPanel } from "./AgentResultRating";
+import { AGENT_LESSONS_CHANGED_EVENT, loadAgentLessons, ratingKey, removeAgentLesson, withAgentLessons } from "../lib/agentLessons";
 import styles from "./AgentFeedbackBubble.module.css";
 
 type ChatError = { text: string; retry?: "send" | "refresh" | "mutation"; messageId?: string; settings?: boolean };
 type TaskOperation = { busy?: boolean; capturePending?: boolean; error?: ChatError; rejectedRequestId?: string };
-const uncertainSend: ChatError = { text: "WTS could not confirm this send. Your draft is saved. Retry send checks the same request.", retry: "send" };
-const storageBeforeSend: ChatError = { text: "WTS could not save this request. Free local storage, then select Retry send.", retry: "send" };
+const uncertainSend: ChatError = { text: "Could not confirm this send. Your draft is saved. Retry send checks the same request.", retry: "send" };
+const storageBeforeSend: ChatError = { text: "Could not save this request. Free local storage, then select Retry send.", retry: "send" };
 const rejectedBeforeExecution = new Set(["invalid_agent_conversation", "agent_conversation_source_unavailable", "agent_conversation_storage_full",
   "agent_conversation_limit", "agent_conversation_platform_unavailable", "agent_conversation_not_found", "agent_conversation_conflict", "agent_conversation_busy", "agent_conversation_queue_full"]);
 function sourceLabel(source: AgentConversationSource) {
@@ -50,7 +52,7 @@ function genericFailure(error: string) {
     || /^The provider stopped(?: with exit code -?\d+)?\. Review the diagnostic details and local changes before you continue from saved work\.$/.test(error);
 }
 
-export function AgentFeedbackBubble({ client }: { client: WorkspaceClient }) {
+export function AgentFeedbackBubble({ client, showLauncher = true }: { client: WorkspaceClient; showLauncher?: boolean }) {
   const [shelf, setShelfState] = useState<AgentFeedbackShelf>(readFeedbackShelf);
   const shelfRef = useRef(shelf);
   const [snapshots, setSnapshots] = useState<Record<string, AgentConversation>>({});
@@ -87,6 +89,13 @@ export function AgentFeedbackBubble({ client }: { client: WorkspaceClient }) {
   const returnFocus = useRef<HTMLElement | null>(null);
   const restoreFocus = useRef(false);
   const listRequest = useRef(0);
+  const [lessons, setLessons] = useState(loadAgentLessons);
+  const [lessonsOpen, setLessonsOpen] = useState(false);
+  useEffect(() => {
+    const reload = () => setLessons(loadAgentLessons());
+    window.addEventListener(AGENT_LESSONS_CHANGED_EVENT, reload);
+    return () => window.removeEventListener(AGENT_LESSONS_CHANGED_EVENT, reload);
+  }, []);
   const draft = shelf.drafts.find(item => item.id === shelf.selectedId);
   const conversation = draft?.conversationId ? snapshots[draft.conversationId] : undefined;
   const operation = draft ? operations[draft.id] ?? {} : {};
@@ -133,7 +142,7 @@ export function AgentFeedbackBubble({ client }: { client: WorkspaceClient }) {
       setResultNavigation({ target, pending: false, error: "" });
     } catch (cause) {
       if (isCurrentClient() && generation === resultNavigationGeneration.current) {
-        setResultNavigation({ target, pending: false, error: cause instanceof Error ? cause.message : "WTS could not read this saved result. Select Retry result." });
+        setResultNavigation({ target, pending: false, error: cause instanceof Error ? cause.message : "Could not read this saved result. Select Retry result." });
       }
     }
   }, [client, isCurrentClient, updateShelf]);
@@ -181,7 +190,7 @@ export function AgentFeedbackBubble({ client }: { client: WorkspaceClient }) {
       if (result.conversationId !== (current.conversationId ?? current.request.requestId)) throw new Error("Task identity changed");
       acceptConversation(result, id);
       if (!current.attempt) updateOperation(id, { error: undefined });
-    } catch { if (isCurrentClient()) updateOperation(id, { error: current.attempt ? operationsRef.current[id]?.error ?? uncertainSend : { text: "WTS could not refresh this task. Your draft is saved. Select Refresh task to check again.", retry: "refresh" } }); }
+    } catch { if (isCurrentClient()) updateOperation(id, { error: current.attempt ? operationsRef.current[id]?.error ?? uncertainSend : { text: "Could not refresh this task. Your draft is saved. Select Refresh task to check again.", retry: "refresh" } }); }
   }, [client, isCurrentClient, acceptConversation, updateOperation]);
   const refreshList = useCallback(async () => {
     const generation = ++listRequest.current;
@@ -196,7 +205,7 @@ export function AgentFeedbackBubble({ client }: { client: WorkspaceClient }) {
         shelfRef.current.drafts.some(draft => (draft.conversationId ?? draft.request.requestId) === id)));
       if (Object.keys(keep).length !== Object.keys(snapshotsRef.current).length) { snapshotsRef.current = keep; setSnapshots(keep); }
       setListError(current => current.startsWith("The draft list is full") ? current : "");
-    } catch { if (isCurrentClient() && generation === listRequest.current) setListError("WTS could not refresh the task list. Your drafts remain available."); }
+    } catch { if (isCurrentClient() && generation === listRequest.current) setListError("Could not refresh the task list. Your drafts remain available."); }
     finally { if (isCurrentClient() && generation === listRequest.current) setListPending(false); }
   }, [acceptConversation, client, isCurrentClient]);
   useEffect(() => {
@@ -247,13 +256,13 @@ export function AgentFeedbackBubble({ client }: { client: WorkspaceClient }) {
       clearResultNavigation();
       const generation = ++selectionGeneration.current; rememberFocus(); setSelectionPending(true);
       const route = window.location.href;
-      let capture; let captureNote = "WTS included the selected text and controls. An image is unavailable in this view.";
+      let capture; let captureNote = "Included the selected text and controls. An image is unavailable in this view.";
       if (detail.captureAllowed === true && client.captureUiRegion && canCaptureUiRegion(detail.rect)) {
         try { capture = await client.captureUiRegion({ rect: detail.rect, viewport: detail.viewport }); captureNote = ""; }
-        catch { captureNote = "WTS could not capture an image. You can send the selected text and controls."; }
+        catch { captureNote = "Could not capture an image. You can send the selected text and controls."; }
       }
       if (!isCurrentClient() || generation !== selectionGeneration.current) return;
-      if (capture && (route !== window.location.href || !canCaptureUiRegion(detail.rect))) { capture = undefined; captureNote = "The region changed during capture. WTS included only the selected text and controls."; }
+      if (capture && (route !== window.location.href || !canCaptureUiRegion(detail.rect))) { capture = undefined; captureNote = "The region changed during capture. Included only the selected text and controls."; }
       const source: AgentConversationSource = { kind: "ui", route: detail.route, calloutId: detail.id, label: detail.label,
         ...(detail.visibleText.trim() ? { selectedText: detail.visibleText } : {}), context: JSON.stringify({ rect: detail.rect, viewport: detail.viewport, ancestors: detail.ancestors, controls: detail.controls, capturedAtUnixMs: detail.capturedAtUnixMs }), ...(capture ? { capture } : {}) };
       const fresh = newFeedbackDraft(source, "", captureNote);
@@ -272,8 +281,10 @@ export function AgentFeedbackBubble({ client }: { client: WorkspaceClient }) {
       addDraft(newFeedbackDraft({ kind: "ui", route: window.location.href, calloutId: detail.calloutId, label: detail.label,
         ...(detail.selectedText?.trim() ? { selectedText: detail.selectedText } : {}) }, detail.body));
     };
+    const openDrawer = () => { rememberFocus(); updateShelf({ ...shelfRef.current, open: true }); };
+    window.addEventListener(AGENT_FEEDBACK_OPEN_EVENT, openDrawer);
     window.addEventListener(UI_REGION_SELECTED_EVENT, select); window.addEventListener(AGENT_FEEDBACK_REQUESTED_EVENT, review); window.addEventListener(AGENT_TASK_REQUESTED_EVENT, task);
-    return () => { ++selectionGeneration.current; window.removeEventListener(UI_REGION_SELECTED_EVENT, select); window.removeEventListener(AGENT_FEEDBACK_REQUESTED_EVENT, review); window.removeEventListener(AGENT_TASK_REQUESTED_EVENT, task); };
+    return () => { window.removeEventListener(AGENT_FEEDBACK_OPEN_EVENT, openDrawer); ++selectionGeneration.current; window.removeEventListener(UI_REGION_SELECTED_EVENT, select); window.removeEventListener(AGENT_FEEDBACK_REQUESTED_EVENT, review); window.removeEventListener(AGENT_TASK_REQUESTED_EVENT, task); };
   }, [client, isCurrentClient, addDraft, clearResultNavigation]);
   useEffect(() => {
     if (!shelf.open) {
@@ -292,9 +303,9 @@ export function AgentFeedbackBubble({ client }: { client: WorkspaceClient }) {
     let current = shelfRef.current.drafts.find(item => item.id === id);
     if (!current || operationsRef.current[id]?.busy || operationsRef.current[id]?.capturePending || (!current.attempt && !current.body.trim())) return;
     if (!client.createAgentConversation || !client.sendAgentConversationMessage) { updateOperation(id, { error: { text: "This WTS connection does not support agent chat. Update WTS, then select Retry send.", retry: "send" } }); return; }
-    if (!current.conversationId && current.captureId && current.request.source.kind === "ui" && !current.request.source.capture) { updateOperation(id, { error: { text: "WTS cannot read this request image. Select Refresh task to find the saved conversation. Other drafts remain available.", retry: "refresh" } }); return; }
+    if (!current.conversationId && current.captureId && current.request.source.kind === "ui" && !current.request.source.capture) { updateOperation(id, { error: { text: "Cannot read this request image. Select Refresh task to find the saved conversation. Other drafts remain available.", retry: "refresh" } }); return; }
     followLatestRef.current = !current.retryOrigin;
-    const attempt = current.attempt ?? { requestId: crypto.randomUUID(), body: current.body };
+    const attempt = current.attempt ?? { requestId: crypto.randomUUID(), body: current.conversationId ? current.body : withAgentLessons(current.body, loadAgentLessons()) };
     if (!updateDraft(id, { attempt })) { updateOperation(id, { error: storageBeforeSend }); return; }
     updateOperation(id, { busy: true, error: undefined, rejectedRequestId: undefined });
     try {
@@ -366,7 +377,7 @@ export function AgentFeedbackBubble({ client }: { client: WorkspaceClient }) {
     const edit: QueuedFeedbackEdit = current.queuedEdits?.[messageId] ?? { body: message.body, expectedBody: message.body };
     const mutation = edit.mutation ?? { requestId: crypto.randomUUID(), action, ...(action === "update" ? { body: edit.body } : {}) };
     if (mutation.action === "update" && !mutation.body?.trim()) return;
-    if (!updateDraft(id, { queuedEdits: { ...current.queuedEdits, [messageId]: { ...edit, mutation } } })) { updateOperation(id, { error: { text: "WTS could not save the queued edit. Free local storage before you retry.", retry: "mutation", messageId } }); return; }
+    if (!updateDraft(id, { queuedEdits: { ...current.queuedEdits, [messageId]: { ...edit, mutation } } })) { updateOperation(id, { error: { text: "Could not save the queued edit. Free local storage before you retry.", retry: "mutation", messageId } }); return; }
     updateOperation(id, { busy: true, error: undefined });
     try {
       const result = mutation.action === "update"
@@ -380,7 +391,7 @@ export function AgentFeedbackBubble({ client }: { client: WorkspaceClient }) {
           const latest = shelfRef.current.drafts.find(item => item.id === id)!;
           updateDraft(id, { queuedEdits: { ...latest.queuedEdits, [messageId]: { ...edit, mutation: undefined } } });
         }
-        updateOperation(id, { error: { text: cause instanceof WorkspaceClientError ? `${cause.message} WTS kept your edit.` : "WTS could not confirm this change. Retry the same queued change to check its result.", retry: definitive ? "refresh" : "mutation", messageId } });
+        updateOperation(id, { error: { text: cause instanceof WorkspaceClientError ? `${cause.message} Your edit is kept.` : "Could not confirm this change. Retry the same queued change to check its result.", retry: definitive ? "refresh" : "mutation", messageId } });
       }
     } finally { if (isCurrentClient()) updateOperation(id, { busy: false }); }
   };
@@ -445,7 +456,7 @@ export function AgentFeedbackBubble({ client }: { client: WorkspaceClient }) {
   };
   const visibleErrorFor = (item: AgentFeedbackDraft): ChatError | undefined => {
     const state = operations[item.id] ?? {}; const mutation = Object.entries(item.queuedEdits ?? {}).find(([, edit]) => edit.mutation);
-    return state.error ?? (!state.busy && item.attempt ? uncertainSend : !state.busy && mutation ? { text: "WTS did not confirm this queued change. Retry the same change to check its result.", retry: "mutation", messageId: mutation[0] } : undefined);
+    return state.error ?? (!state.busy && item.attempt ? uncertainSend : !state.busy && mutation ? { text: "This queued change is not confirmed. Retry the same change to check its result.", retry: "mutation", messageId: mutation[0] } : undefined);
   };
   const errorRows = shelf.drafts.flatMap(item => { const error = visibleErrorFor(item); return error ? [{ item, error }] : []; });
   const canDiscardCurrentDraft = draft && !visibleErrorFor(draft) && !draft.attempt && !operation.busy && (!draft.conversationId || draft.body.trim());
@@ -453,28 +464,30 @@ export function AgentFeedbackBubble({ client }: { client: WorkspaceClient }) {
   const renderContext = (context: AgentConversationSource) => context.kind === "ui" ? <>{context.capture && <img src={context.capture.dataUrl} alt={`Selected region: ${context.label}`} />}<p>{context.selectedText || context.label}</p><code>{context.calloutId}</code></> : context.kind === "workItem" ? <p>{context.label}</p> : context.comments.map(comment => <blockquote key={comment.id}><strong>@{comment.authorLogin}</strong><GitlabDiscussionBody body={comment.body} className={styles.body} /></blockquote>);
   const statusLabel = (message: AgentConversationMessage) => message.status === "queued" ? `Queued${message.queuePosition ? ` · ${message.queuePosition} in workspace queue` : ""}` : message.status === "running" ? "Active" : message.status === "pending" ? "Request accepted" : message.status === "cancelled" ? "Cancelled" : message.status === "interrupted" ? "Stopped" : message.status === "failed" ? "Failed" : "Completed";
   return <div ref={rootRef} className={styles.root} data-ui-context="exclude">
-    {!shelf.open && <Button ref={launcherRef} className={styles.launcher} onPress={() => { rememberFocus(); updateShelf({ ...shelfRef.current, open: true }); }} aria-label="Open agent feedback">
-      {selectionPending ? "WTS captures the region…" : "Agent feedback"}{!!(activeCount + waitingCount) && ` · ${activeCount} active · ${waitingCount} queued`}
+    {showLauncher && !shelf.open && <Button ref={launcherRef} className={styles.launcher} onPress={() => { rememberFocus(); updateShelf({ ...shelfRef.current, open: true }); }} aria-label="Open agent feedback">
+      <span className={styles.launcherIcon} aria-hidden="true">✦</span>{selectionPending ? "Capturing the region…" : "Agent feedback"}{!!(activeCount + waitingCount) && ` · ${activeCount} active · ${waitingCount} queued`}
     </Button>}
     {shelf.open && <section role="dialog" aria-label="Agent feedback" className={styles.bubble} data-ui="agent.feedback" data-ui-label="Agent feedback chat"
       onClickCapture={event => { if (event.detail > 1 && event.target instanceof Element && event.target.closest("button, a, [role=button], [role=menuitem]")) { event.preventDefault(); event.stopPropagation(); } }}
       onKeyDown={event => { if (event.key === "Escape") { event.stopPropagation(); close(); } }}>
-      <header className={styles.header}><div><strong>Agent feedback</strong>{!!(activeCount + waitingCount) && <span>{activeCount} active · {waitingCount} queued</span>}</div>
+      <header className={styles.header}><div><strong>Agent feedback</strong><span>{activeCount + waitingCount ? activeCount + " active · " + waitingCount + " queued" : "Ask an agent to change the UI or code. Rate each result."}{lessons.length ? " · " + lessons.length + " lessons" : ""}</span></div>
         <DropdownMenu.Root modal={false}>
           <DropdownMenu.Trigger aria-label="Feedback options" title="Feedback options">⋯</DropdownMenu.Trigger>
           <DropdownMenu.Portal><DropdownMenu.Content className={styles.optionsMenu} align="end" sideOffset={6} onEscapeKeyDown={event => event.stopPropagation()}>
             <DropdownMenu.Item className={styles.option} onSelect={() => void refreshList()}>Refresh tasks</DropdownMenu.Item>
+            <DropdownMenu.Item className={styles.option} onSelect={() => setLessonsOpen((current) => !current)}>{lessonsOpen ? "Hide lessons" : "Lessons (" + lessons.length + ")"}</DropdownMenu.Item>
             {canDiscardCurrentDraft && <DropdownMenu.Item className={styles.option} onSelect={() => discardDraft(draft)}>Discard current draft</DropdownMenu.Item>}
           </DropdownMenu.Content></DropdownMenu.Portal>
         </DropdownMenu.Root>
         <Button onPress={close} aria-label="Close agent feedback">×</Button></header>
+      {lessonsOpen && <section className={styles.lessonsPanel} aria-label="Lessons for agents"><strong>Lessons for agents</strong><p className={styles.muted}>New requests include these lessons after your message.</p><AgentLessonsList lessons={lessons} onRemove={(id) => { removeAgentLesson(id); setLessons(loadAgentLessons()); }} /></section>}
       {listError && <div role="alert" className={styles.error}>{listError}<Button onPress={() => void refreshList()}>Retry task list</Button></div>}
       <div ref={chatRef} className={styles.chat} onScroll={event => { if (event.target === event.currentTarget) rememberScroll(event.currentTarget); }}>
         <div ref={contentRef} className={styles.content} onScroll={event => { if (event.target === event.currentTarget) rememberScroll(event.currentTarget); }}>
-          {resultNavigation?.pending && <p role="status">WTS opens the saved result…</p>}
+          {resultNavigation?.pending && <p role="status">Opening the saved result…</p>}
           {resultNavigation?.error && <div ref={resultErrorRef} role="alert" tabIndex={-1} className={styles.error}>{resultNavigation.error}{client.getAgentConversation && <Button onPress={() => void openResult(resultNavigation.target)}>Retry result</Button>}</div>}
-          {selectionPending && <p role="status">WTS captures the selected region…</p>}
-          {listPending && !timeline.length && <p role="status">WTS reads saved messages…</p>}
+          {selectionPending && <p role="status">Capturing the selected region…</p>}
+          {listPending && !timeline.length && <p role="status">Reading saved messages…</p>}
           {!timeline.length && <p className={styles.intro}>Describe the change. Hold Option and select a region to include its context.</p>}
           <div role="log" aria-label="Agent messages" aria-live="polite" aria-relevant="additions text">
             {timeline.map(({ key, conversation: item, message, request }) => {
@@ -485,7 +498,7 @@ export function AgentFeedbackBubble({ client }: { client: WorkspaceClient }) {
                 <div className={styles.messageHeading}><strong>{message.role === "user" ? "You" : message.role === "assistant" ? providerLabel(item.provider) : "WTS"}</strong>{message.role !== "user" && <span>{statusLabel(message)}</span>}</div>
                 {message.role === "user" && <div className={styles.contextChips}><Button className={styles.sourceChip} onPress={() => selectTask(item)}>{sourceLabel(item.source)} · {statusLabel(message)}</Button>
                   <details className={styles.context}><summary>Context</summary>{renderContext(item.source)}</details></div>}
-                {message.role === "user" && ["pending", "running"].includes(message.status) && <div className={styles.actions}>{localChangesLink(item)}{item.activeSessionId && <Button onPress={() => { void client.stopAgentSession(item.activeSessionId!).then(() => { if (isCurrentClient()) return refreshList(); }).catch(() => { const target = draftForConversation(item) ?? storeInternalDraft(item); if (isCurrentClient() && target) updateOperation(target.id, { error: { text: "WTS could not stop this task. Refresh the task to check its state.", retry: "refresh" } }); }); }}>Stop current task</Button>}</div>}
+                {message.role === "user" && ["pending", "running"].includes(message.status) && <div className={styles.actions}>{localChangesLink(item)}{item.activeSessionId && <Button onPress={() => { void client.stopAgentSession(item.activeSessionId!).then(() => { if (isCurrentClient()) return refreshList(); }).catch(() => { const target = draftForConversation(item) ?? storeInternalDraft(item); if (isCurrentClient() && target) updateOperation(target.id, { error: { text: "Could not stop this task. Refresh the task to check its state.", retry: "refresh" } }); }); }}>Stop current task</Button>}</div>}
                 {message.error && <p className={styles.messageError}>{isFailure && genericFailure(message.error) ? "The agent stopped before it finished." : message.error}</p>}
                 {isFailure ? <>
                   {(message.progress || message.body || message.diagnostic || (message.error && genericFailure(message.error))) && <details className={styles.outputDetails}>
@@ -500,6 +513,7 @@ export function AgentFeedbackBubble({ client }: { client: WorkspaceClient }) {
                   {message.body && (message.role === "assistant" && message.status !== "completed" ? <details className={styles.outputDetails}><summary>Provider output</summary><GitlabDiscussionBody body={message.body} className={styles.body} /></details> : <GitlabDiscussionBody body={message.body} className={styles.body} />)}
                   {message.diagnostic && <details className={styles.outputDetails}><summary>Provider diagnostics</summary><pre>{message.diagnostic}</pre></details>}
                 </>}
+                {message.role === "assistant" && message.status === "completed" && <AgentResultRatingPanel ratingId={ratingKey(item.conversationId, message.messageId)} sourceLabel={sourceLabel(item.source)} />}
                 {message.role === "assistant" && ["completed", "failed", "interrupted"].includes(message.status) && <div className={styles.actions}>
                   {request?.requestId && <AgentResultReview onCloseFeedback={close} client={client} conversation={item} requestId={request.requestId} sessionId={message.sessionId ?? request.sessionId} onReturnToSelection={() => { close(); returnToFeedbackSelection(item.source); }} />}
                   {!request?.requestId && localChangesLink(item)}
@@ -508,7 +522,7 @@ export function AgentFeedbackBubble({ client }: { client: WorkspaceClient }) {
               </article>;
             })}
           </div>
-        {storageError && <p role="alert" className={styles.error}>WTS could not save all drafts on this device. Keep this window open. Free local storage before you send.</p>}
+        {storageError && <p role="alert" className={styles.error}>Could not save all drafts on this device. Keep this window open. Free local storage before you send.</p>}
         {errorRows.map(({ item, error }) => <div role="alert" key={item.id} className={styles.error}><strong>{sourceLabel(item.request.source)}</strong> {error.text}<div className={styles.actions}>
           {error.retry && <Button isDisabled={operations[item.id]?.busy} onPress={() => error.retry === "send" ? void send(item.id) : error.retry === "mutation" && error.messageId ? void mutateQueued(item.id, error.messageId, item.queuedEdits?.[error.messageId]?.mutation?.action ?? "update") : void refreshTask(item.id)}>{error.retry === "send" ? "Retry send" : error.retry === "mutation" ? "Retry queued change" : "Refresh task"}</Button>}
           {error.settings && <Button onPress={() => window.dispatchEvent(new CustomEvent("wts:open-agent-settings"))}>Open Settings</Button>}
@@ -523,7 +537,7 @@ export function AgentFeedbackBubble({ client }: { client: WorkspaceClient }) {
               {!edit && <div className={styles.actions}><Button aria-label="Edit queued request" onPress={() => editQueued(item, message)} isDisabled={busy}>Edit</Button><Button aria-label="Cancel request" isDisabled={busy} onPress={() => { const owner = target ?? storeInternalDraft(item); if (owner) void mutateQueued(owner.id, message.messageId, "cancel"); }}>Cancel</Button></div>}
               {edit && target && <div className={styles.queuedEdit}><label htmlFor={`queued-${message.messageId}`}>Queued request</label><textarea ref={input => { if (input) queuedInputRefs.current.set(message.messageId, input); else queuedInputRefs.current.delete(message.messageId); }} id={`queued-${message.messageId}`} value={edit.body} disabled={busy || !!edit.mutation} onChange={event => updateDraft(target.id, { queuedEdits: { ...target.queuedEdits, [message.messageId]: { ...edit, body: [...event.target.value].slice(0, 16_384).join("") } } })} />
                 <div className={styles.actions}>{message.status === "queued" && !edit.mutation && <Button isDisabled={busy || !edit.body.trim()} onPress={() => void mutateQueued(target.id, message.messageId, "update")}>Save queued edit</Button>}
-                  {!edit.mutation && <Button isDisabled={busy} onPress={() => { const body = [target.body, edit.body].filter(Boolean).join("\n\n"); if ([...body].length > 16_384) { updateOperation(target.id, { error: { text: "The combined message exceeds 16,384 characters. Shorten either text before you use it as a follow-up. WTS kept both drafts." } }); return; } const edits = { ...target.queuedEdits }; delete edits[message.messageId]; updateDraft(target.id, { queuedEdits: edits, body }); selectTask(target); updateOperation(target.id, { error: undefined }); }}>Use as follow-up</Button>}
+                  {!edit.mutation && <Button isDisabled={busy} onPress={() => { const body = [target.body, edit.body].filter(Boolean).join("\n\n"); if ([...body].length > 16_384) { updateOperation(target.id, { error: { text: "The combined message exceeds 16,384 characters. Shorten either text before you use it as a follow-up. Both drafts are kept." } }); return; } const edits = { ...target.queuedEdits }; delete edits[message.messageId]; updateDraft(target.id, { queuedEdits: edits, body }); selectTask(target); updateOperation(target.id, { error: undefined }); }}>Use as follow-up</Button>}
                   {!edit.mutation && <Button isDisabled={busy} onPress={() => { const edits = { ...target.queuedEdits }; delete edits[message.messageId]; updateDraft(target.id, { queuedEdits: edits }); }}>Discard queued edit</Button>}</div></div>}
             </div>;
           })}

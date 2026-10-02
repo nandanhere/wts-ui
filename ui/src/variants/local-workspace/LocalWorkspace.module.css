@@ -75,17 +75,25 @@
 .chrome {
   position: relative;
   z-index: 30;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  display: flex;
   align-items: center;
+  justify-content: space-between;
+  gap: 16px;
   height: var(--workspace-chrome-height);
-  padding: 0 18px;
+  padding: 0 14px 0 12px;
   color: var(--wts-text);
   background: var(--wts-chrome);
   border-bottom: 1px solid var(--line);
   box-shadow: 0 1px var(--wts-chrome-highlight) inset;
   backdrop-filter: blur(16px);
   user-select: none;
+}
+
+.chromeStart {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
 }
 
 .brand {
@@ -98,16 +106,15 @@
 
 .brandHome {
   display: inline-flex;
-  min-width: 0;
+  flex: none;
   min-height: 32px;
   align-items: center;
   gap: 8px;
-  padding: 3px 7px 3px 3px;
+  padding: 3px 8px 3px 3px;
   color: var(--wts-ink);
   background: transparent;
   border-radius: var(--wts-radius-sm);
   cursor: pointer;
-  justify-self: center;
 }
 
 .brandHome:hover {
@@ -121,26 +128,20 @@
 
 .brandHome b {
   color: var(--wts-ink);
-  font-size: 13px;
-  letter-spacing: 0.03em;
-}
-
-.brand > span:last-child {
-  max-width: 240px;
-  overflow: hidden;
-  color: var(--wts-muted);
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
 }
 
 .brandMark {
   display: grid;
   width: 26px;
   height: 26px;
-  color: var(--wts-on-accent);
-  background: var(--wts-strong-surface);
-  border-radius: var(--wts-radius-sm);
+  color: #fff;
+  background: linear-gradient(135deg, #3b82f6, #6366f1);
+  border-radius: 7px;
   place-items: center;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.08) inset;
 }
 
 .chromeDivider {
@@ -150,47 +151,79 @@
   background: var(--wts-line-strong);
 }
 
+.chromeCrumb {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  color: var(--wts-muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.chromeCrumb span {
+  max-width: 260px;
+  overflow: hidden;
+  color: var(--wts-ink);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .chromeTools {
   display: flex;
+  flex: none;
   align-items: center;
   justify-content: flex-end;
-  gap: 8px;
+  gap: 6px;
 }
 
 .appNavigation {
   display: flex;
   align-items: center;
-  gap: 3px;
+  gap: 2px;
   padding: 3px;
   background: var(--wts-surface-muted);
   border: 1px solid var(--wts-line);
-  border-radius: 7px;
+  border-radius: 9px;
 }
 
 .chromeNavButton {
   display: inline-flex;
-  min-height: 28px;
+  min-height: 30px;
   align-items: center;
-  gap: 6px;
-  padding: 0 9px;
+  gap: 7px;
+  padding: 0 11px;
   color: var(--wts-muted);
   background: transparent;
-  border-radius: 5px;
-  font-size: 12px;
-  font-weight: 650;
+  border-radius: 6px;
+  font-size: 12.5px;
+  font-weight: 600;
+  white-space: nowrap;
   cursor: pointer;
+  transition: color 120ms ease, background-color 120ms ease;
 }
 
-.reviewBadge {
+.reviewBadge,
+.navCount {
   min-width: 18px;
   padding: 1px 5px;
   color: var(--wts-on-accent);
-  background: var(--wts-blue);
+  background: var(--wts-accent, var(--wts-blue));
   border-radius: 99px;
-  font-size: 12px;
+  font-size: 11px;
   font-variant-numeric: tabular-nums;
   line-height: 16px;
   text-align: center;
+}
+
+.navCount[data-tone="working"] {
+  color: #052e16;
+  background: var(--wts-green);
+}
+
+.navCount[data-tone="attention"] {
+  color: #2d1b00;
+  background: var(--wts-amber);
 }
 
 .chromeNavButton:hover {
@@ -199,14 +232,77 @@
 }
 
 .chromeNavButton[aria-current="page"] {
+  color: var(--wts-ink);
+  background: var(--wts-surface);
+  box-shadow: 0 0 0 1px var(--wts-line-strong), var(--wts-shadow-sm);
+}
+
+.chromeNavButton[aria-current="page"] svg {
   color: var(--wts-blue);
-  background: var(--wts-surface-subtle);
-  box-shadow: var(--wts-shadow-sm);
 }
 
 .chromeNavButton:focus-visible {
   outline: none;
   box-shadow: var(--wts-focus-ring);
+}
+
+.statusBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 28px;
+  padding: 0 10px;
+  color: var(--wts-muted);
+  background: var(--wts-surface-subtle);
+  border: 1px solid var(--wts-line) !important;
+  border-radius: 99px;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.statusBadge:hover {
+  color: var(--wts-ink);
+  border-color: var(--wts-line-strong) !important;
+}
+
+.statusBadge:focus-visible {
+  outline: none;
+  box-shadow: var(--wts-focus-ring);
+}
+
+.statusBadge[data-state="working"] {
+  color: var(--wts-green);
+  border-color: var(--wts-green-line) !important;
+  background: var(--wts-green-soft);
+}
+
+.statusBadge[data-state="attention"] {
+  color: var(--wts-amber);
+  border-color: var(--wts-amber-line) !important;
+  background: var(--wts-amber-soft);
+}
+
+.statusDot {
+  width: 7px;
+  height: 7px;
+  background: currentColor;
+  border-radius: 50%;
+}
+
+.statusBadge[data-state="working"] .statusDot {
+  animation: chromePulse 1.8s ease-out infinite;
+}
+
+@keyframes chromePulse {
+  0% { box-shadow: 0 0 0 0 color-mix(in srgb, currentColor 55%, transparent); }
+  70% { box-shadow: 0 0 0 6px transparent; }
+  100% { box-shadow: 0 0 0 0 transparent; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .statusBadge[data-state="working"] .statusDot { animation: none; }
 }
 
 .timeReview {
@@ -218,16 +314,29 @@
 .quickHint {
   display: flex;
   align-items: center;
-  gap: 3px;
-  height: 28px;
-  padding: 0 8px;
-  color: var(--wts-faint);
-  background: color-mix(in srgb, var(--wts-surface) 50%, transparent);
-  border: 1px solid var(--wts-line-strong);
-  border-radius: 5px;
+  gap: 8px;
+  height: 30px;
+  min-width: 170px;
+  padding: 0 6px 0 10px;
+  color: var(--wts-muted);
+  background: var(--wts-surface-subtle);
+  border: 1px solid var(--wts-line);
+  border-radius: 7px;
   font-size: 12px;
-  font-weight: 600;
+  font-weight: 500;
   cursor: pointer;
+}
+
+.quickHint kbd {
+  margin-left: auto;
+  padding: 1px 6px;
+  color: var(--wts-muted);
+  background: var(--wts-surface-muted);
+  border: 1px solid var(--wts-line);
+  border-radius: 4px;
+  font-family: var(--wts-font-sans);
+  font-size: 11px;
+  font-weight: 600;
 }
 
 .quickHint:hover,
@@ -247,8 +356,8 @@
 
 .chromeIcon {
   display: grid;
-  width: var(--wts-control-height-compact);
-  height: var(--wts-control-height-compact);
+  width: 34px;
+  height: 34px;
   padding: 0;
   color: var(--wts-muted);
   background: transparent;
@@ -971,20 +1080,61 @@
   opacity: 0.28;
 }
 
-.workspacePlacementBadge {
+/* Pin toggle: top right of the card. It stays visible when pinned and
+   appears on hover or focus otherwise. */
+.cardPinToggle {
   position: absolute;
   z-index: 3;
-  bottom: 12px;
-  left: 18px;
-  padding: 2px 6px;
+  top: 10px;
+  right: 10px;
+  display: inline-grid;
+  width: 26px;
+  height: 26px;
+  place-items: center;
+  padding: 0;
   color: var(--wts-muted);
-  background: color-mix(in srgb, var(--wts-surface-muted) 92%, transparent);
-  border: 1px solid var(--wts-line);
-  border-radius: 999px;
-  font-size: 12px;
-  font-weight: 700;
-  line-height: 1.2;
-  pointer-events: none;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  cursor: pointer;
+  opacity: 0;
+  transition:
+    opacity 120ms ease,
+    color 120ms ease,
+    background 120ms ease;
+}
+
+.cardPinToggle[data-selected] {
+  opacity: 1;
+}
+
+.cardPinToggle:hover {
+  color: var(--wts-ink);
+  background: var(--wts-surface-muted);
+  border-color: var(--wts-line);
+}
+
+.cardPinToggle[data-selected] {
+  color: var(--wts-blue);
+}
+
+.cardPinToggle[data-selected] svg {
+  fill: currentColor;
+}
+
+.cardPinToggle[data-focus-visible] {
+  outline: none;
+  box-shadow: var(--wts-focus-ring);
+}
+
+.cardPinToggle[data-disabled] {
+  cursor: default;
+}
+
+@media (hover: none) {
+  .cardPinToggle {
+    opacity: 1;
+  }
 }
 
 .workspaceActionShelf {
@@ -1515,6 +1665,15 @@
     0 7px 18px color-mix(in srgb, var(--wts-ink) 10%, transparent),
     inset 0 1px 0 color-mix(in srgb, var(--wts-ink) 5%, transparent);
   transform: translateY(-1px);
+}
+
+.workspaceCardShell:hover .cardPinToggle,
+.workspaceCardShell:focus-within .cardPinToggle {
+  opacity: 1;
+}
+
+.workspaceCardShell[data-pinnable] .cardHeader {
+  padding-right: 28px;
 }
 
 .workspaceCard {
@@ -13056,4 +13215,30 @@
 
 .identitySlot {
   min-width: 0;
+}
+
+@media (max-width: 1180px) {
+  .quickHint { min-width: 0; }
+  .quickHintText { display: none; }
+  .chromeCrumb { display: none; }
+}
+
+@media (max-width: 960px) {
+  .chromeNavButton svg { display: none; }
+  .chromeNavButton { padding-inline: 8px; }
+  .statusBadge { display: none; }
+}
+
+@media (max-width: 720px) {
+  .app, .portalSurface { --workspace-chrome-height: 96px; }
+  .chrome { display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-rows: 40px 40px; gap: 4px 8px; padding: 4px 10px 7px; }
+  .chromeStart { display: contents; }
+  .brandHome { grid-column: 1; grid-row: 1; justify-self: start; }
+  .brandHome b { display: inline; }
+  .chromeTools { grid-column: 2; grid-row: 1; gap: 2px; }
+  .appNavigation { grid-column: 1 / -1; grid-row: 2; width: 100%; min-width: 0; justify-self: stretch; }
+  .chromeNavButton { flex: 1; justify-content: center; padding-inline: 6px; }
+  .quickHint { display: inline-flex; width: 30px; min-width: 30px; height: 30px; padding: 0; justify-content: center; }
+  .quickHint kbd { display: none; }
+  .chromeIcon { width: 30px; height: 30px; min-width: 30px; }
 }

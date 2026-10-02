@@ -123,6 +123,8 @@ export function App({
     content = <LocalWorkspace client={workspaceClient} />;
   } else if (path === "/time") {
     content = <LocalWorkspace initialView="time" client={workspaceClient} />;
+  } else if (path === "/agents") {
+    content = <LocalWorkspace initialView="agents" client={workspaceClient} />;
   } else if (path === "/reviews") {
     content = <LocalWorkspace initialView="reviews" client={workspaceClient} />;
   } else if (path === "/updates") {
@@ -166,7 +168,7 @@ export function App({
     <ThemeProvider>
       <Suspense fallback={<AppLoader />}>{content}</Suspense>
       <UiCallouts />
-      <AgentFeedbackBubble client={workspaceClient ?? defaultWorkspaceClient} />
+      <AgentFeedbackBubble showLauncher={false} client={workspaceClient ?? defaultWorkspaceClient} />
     </ThemeProvider>
   );
 }

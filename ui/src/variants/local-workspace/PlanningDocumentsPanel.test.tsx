@@ -240,7 +240,7 @@ describe("PlanningDocumentsPanel", () => {
   it.each(["planning_document_too_large", "invalid_planning_document"])("opens the workspace for a planning file WTS cannot read: %s", async (code) => {
     const user = userEvent.setup();
     const fake = planningClient();
-    fake.readWorkspacePlanningDocument.mockRejectedValue(new WorkspaceClientError("WTS cannot read this file.", { code }));
+    fake.readWorkspacePlanningDocument.mockRejectedValue(new WorkspaceClientError("Cannot read this file.", { code }));
     render(<PlanningDocumentsPanel client={fake.client} workspaceId={workspaceId} workspaceKey="PLATFORM-42" />);
     await user.click(await screen.findByRole("button", { name: "Open workspace in VS Code" }));
     expect(fake.openWorkspaceInVscode).toHaveBeenCalledWith(workspaceId);
@@ -400,7 +400,7 @@ describe("PlanningDocumentsPanel", () => {
     render(<PlanningDocumentsPanel client={fake.client} workspaceId={workspaceId} workspaceKey="PLATFORM-42" />);
     await user.click(await screen.findByRole("button", { name: "Edit" }));
     expect(screen.queryByRole("textbox", { name: "Edit PLAN.md" })).not.toBeInTheDocument();
-    expect(screen.getByText(/WTS has 24 unfinished planning drafts/)).toBeVisible();
+    expect(screen.getByText(/24 planning drafts are unfinished/)).toBeVisible();
     expect(planningViewFor(fake.client, "draft-0")?.draft).toBe("Draft 0");
     const previous = planningViewFor(fake.client, "draft-0")!;
     rememberPlanningView(fake.client, "draft-0", { ...previous, editing: false, draft: previous.document!.contents });
@@ -1570,7 +1570,7 @@ describe("PlanningDocumentsPanel", () => {
     );
 
     expect(
-      await screen.findByText("WTS could not render this diagram."),
+      await screen.findByText("Could not render this diagram."),
     ).toBeVisible();
     expect(screen.getByText("not a diagram")).toBeVisible();
   });

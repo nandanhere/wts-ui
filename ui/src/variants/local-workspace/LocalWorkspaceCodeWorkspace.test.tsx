@@ -782,7 +782,7 @@ describe("personal local workspace registry", () => {
     );
     expect(within(dialog).queryByRole("alert")).not.toBeInTheDocument();
     expect(
-      within(dialog).getByText(/treats its folder paths as lookup hints/i),
+      within(dialog).getByText(/its folder paths are\s+lookup hints/i),
     ).toHaveTextContent(/bounded search under your trusted repository roots/i);
 
     await user.click(within(dialog).getByText("Developer diagnostics"));

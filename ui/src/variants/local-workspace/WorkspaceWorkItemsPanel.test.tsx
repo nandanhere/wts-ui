@@ -578,7 +578,7 @@ describe("WorkspaceWorkItemsPanel", () => {
     ).toBeVisible();
     await user.click(screen.getByRole("button", { name: "Prepare draft" }));
     expect(await screen.findByRole("status")).toHaveTextContent(
-      "WTS cannot create this issue.",
+      "Cannot create this issue.",
     );
     expect(screen.getByRole("status")).toHaveTextContent(
       "No safe Jira create adapter is available.",

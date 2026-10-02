@@ -319,7 +319,7 @@ where
                 cached,
                 fetched_at,
                 Some(code),
-                "GitHub is unavailable. WTS shows the last successful review list.",
+                "GitHub is unavailable. Showing the last successful review list.",
             )
         } else {
             inbox(state, Vec::new(), None, Some(code), detail)

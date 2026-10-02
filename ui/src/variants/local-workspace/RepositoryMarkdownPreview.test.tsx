@@ -81,7 +81,7 @@ describe("Markdown preview in the patch viewer", () => {
     fake.getWorkspaceRepositoryFileReview.mockReturnValue(new Promise(done => { resolve = done; }));
     const view = render(<RepositoryPatchViewer patch={patch()} feedback={feedback} theme="dark" />);
     await userEvent.click(screen.getByRole("button", { name: "Preview Markdown for README.md" }));
-    expect(screen.getByText("WTS reads the complete file…")).toHaveAttribute("role", "status");
+    expect(screen.getByText("Reading the complete file…")).toHaveAttribute("role", "status");
     view.rerender(<RepositoryPatchViewer patch={patch("OTHER.md")} feedback={{ ...feedback, patchSha256: "next" }} theme="dark" />);
     await act(async () => { resolve(response); });
     expect(screen.queryByText(/complete context/)).not.toBeInTheDocument();
@@ -123,7 +123,7 @@ describe("Mermaid in repository Markdown", () => {
     mermaid.render.mockRejectedValue(new Error("Invalid diagram"));
     render(<RepositoryPatchViewer patch={diagramPatch("invalid diagram")} theme="dark" />);
     await userEvent.click(screen.getByRole("button", { name: "Preview Markdown for README.md" }));
-    expect(await screen.findByText("WTS could not render this diagram.")).toBeVisible();
+    expect(await screen.findByText("Could not render this diagram.")).toBeVisible();
     expect(screen.getByText("invalid diagram").closest("pre")).not.toBeNull();
     expect(screen.getByRole("heading", { name: "Diagram" })).toBeVisible();
   });

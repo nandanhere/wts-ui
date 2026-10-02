@@ -86,7 +86,7 @@ pub(super) fn show_preview(
                 && url.password().is_none()
         })
         .ok_or_else(|| {
-            preview_error("WTS did not return a valid preview address. Retry the preview.")
+            preview_error("The preview address is not valid. Retry the preview.")
         })?;
     let label = format!(
         "{}-{}",
@@ -102,7 +102,7 @@ pub(super) fn show_preview(
             *claim.lock().unwrap_or_else(|error| error.into_inner()) = preview.preview_instance_id;
         }
         window.set_focus().map_err(|_| {
-            preview_error("WTS could not focus the preview. Close its window and retry.")
+            preview_error("Could not focus the preview. Close its window and retry.")
         })?;
         return Ok(preview);
     }
@@ -118,7 +118,7 @@ pub(super) fn show_preview(
         let _ =
             service.stop_agent_work_item_preview(workspace_id, task_id, &expected_url, claim_id);
         return Err(preview_error(
-            "WTS could not prepare the read-only preview. Retry the preview.",
+            "Could not prepare the read-only preview. Retry the preview.",
         ));
     }
     let window = tauri::WebviewWindowBuilder::new(app, &label, tauri::WebviewUrl::External(url))
@@ -137,7 +137,7 @@ pub(super) fn show_preview(
                 claim_id,
             );
             return Err(preview_error(
-                "WTS could not open the preview window. Retry the preview.",
+                "Could not open the preview window. Retry the preview.",
             ));
         }
     };

@@ -121,10 +121,10 @@ impl JiraMcpError {
                 "No supported Jira MCP stdio registration was found in VS Code."
             }
             Self::ConfigurationUnsupported => {
-                "The Jira MCP registration uses a command or substitution WTS does not allow."
+                "The Jira MCP registration uses a command or substitution that is not allowed."
             }
             Self::ConfigurationInvalid => "The Jira MCP registration could not be read safely.",
-            Self::SpawnFailed => "WTS could not start Jira. Start Podman, then try again.",
+            Self::SpawnFailed => "Could not start Jira. Start Podman, then try again.",
             Self::ProtocolTimedOut => "The Jira MCP process did not answer before the timeout.",
             Self::ProtocolInvalid => "The Jira MCP process returned an invalid protocol message.",
             Self::IssueToolMissing => "The Jira MCP server does not expose jira_get_issue.",

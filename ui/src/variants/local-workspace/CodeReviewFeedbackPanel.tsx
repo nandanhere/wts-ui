@@ -87,7 +87,7 @@ export function CodeReviewFeedbackPanel({
   const activePending = pending || Boolean(draftKey && gitlabDiscussionDrafts.isPending(draftKey));
   const setBody = (value: string) => {
     if (!draftKey) setLocalBody(value);
-    else if (!gitlabDiscussionDrafts.write(draftKey, value)) setError("Clear a reply draft to start another. WTS retained your drafts.");
+    else if (!gitlabDiscussionDrafts.write(draftKey, value)) setError("Clear a reply draft to start another. Your drafts are kept.");
   };
   const [gitlabDiscussions, setGitlabDiscussions] = useState(
     gitlabReview?.discussions ?? [],
@@ -119,7 +119,7 @@ export function CodeReviewFeedbackPanel({
         setError(
           cause instanceof Error
             ? cause.message
-            : "WTS could not load review feedback.",
+            : "Could not load review feedback.",
         );
         setState("error");
       });
@@ -208,11 +208,11 @@ export function CodeReviewFeedbackPanel({
             true,
           );
           if (openerRef.current !== operationContext) return;
-          if (patch.repositoryId !== gitlabReview.repositoryId || patch.iid !== gitlabReview.iid) throw new Error("WTS received feedback for another merge request.");
+          if (patch.repositoryId !== gitlabReview.repositoryId || patch.iid !== gitlabReview.iid) throw new Error("Received feedback for another merge request.");
           setGitlabDiscussions(patch.discussions);
         } catch {
           if (openerRef.current !== operationContext) return;
-          setError("Comment published. WTS could not refresh GitLab threads.");
+          setError("Comment published. Could not refresh GitLab threads.");
         }
         return;
       }
@@ -230,7 +230,7 @@ export function CodeReviewFeedbackPanel({
       setError(
         cause instanceof Error
           ? cause.message
-          : "WTS could not save this review comment.",
+          : "Could not save this review comment.",
       );
     } finally {
       if (draftKey) gitlabDiscussionDrafts.finishReply(draftKey, body, sent);
@@ -259,7 +259,7 @@ export function CodeReviewFeedbackPanel({
       setError(
         cause instanceof Error
           ? cause.message
-          : "WTS could not resolve this review thread.",
+          : "Could not resolve this review thread.",
       );
     } finally {
       if (openerRef.current === operationContext) setPending(false);
@@ -272,9 +272,9 @@ export function CodeReviewFeedbackPanel({
     setOpenError("");
     try {
       const result = await client.openGitlabMergeRequest(gitlabReview.repositoryId, gitlabReview.iid);
-      if (!result.accepted || result.repositoryId !== gitlabReview.repositoryId || result.iid !== gitlabReview.iid) throw new Error("WTS could not open this merge request.");
+      if (!result.accepted || result.repositoryId !== gitlabReview.repositoryId || result.iid !== gitlabReview.iid) throw new Error("Could not open this merge request.");
     } catch (cause) {
-      if (openerRef.current === operationContext) setOpenError(cause instanceof Error ? cause.message : "WTS could not open this merge request.");
+      if (openerRef.current === operationContext) setOpenError(cause instanceof Error ? cause.message : "Could not open this merge request.");
     } finally {
       if (openerRef.current === operationContext) setOpening(false);
     }
@@ -312,8 +312,8 @@ export function CodeReviewFeedbackPanel({
         <p>
           {selectedTarget
             ? gitlabReview
-              ? "WTS publishes this comment to the GitLab merge request."
-              : "Your comment becomes agent input. WTS does not change the code."
+              ? "Publishes this comment to the GitLab merge request."
+              : "Your comment becomes agent input. The code does not change."
             : "Select an added or deleted line in the diff."}
         </p>
       </header>
@@ -380,7 +380,7 @@ export function CodeReviewFeedbackPanel({
           )}
         </div>
         {state === "loading" ? (
-          <p role="status">WTS loads review feedback.</p>
+          <p role="status">Loading review feedback…</p>
         ) : orderedThreads.length === 0 && gitlabDiscussions.length === 0 ? (
           <p>No code review feedback exists for this repository.</p>
         ) : (

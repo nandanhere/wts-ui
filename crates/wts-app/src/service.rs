@@ -240,7 +240,7 @@ pub enum LocalWtsError {
     #[error("The conversation or its workspace is unavailable. Check the workspace and try again.")]
     AgentConversationUnavailable,
     #[error(
-        "WTS needs its source repository. Start WTS with WTS_UI_REPOSITORY_ROOT set to the source checkout."
+        "The source repository is missing. Start WTS with WTS_UI_REPOSITORY_ROOT set to the source checkout."
     )]
     AgentConversationSourceUnavailable,
     #[error("Conversation storage is full. Open an existing conversation to continue.")]
@@ -278,10 +278,10 @@ pub enum LocalWtsError {
     #[error("The source file revision is invalid.")]
     InvalidRepositoryFileRevision,
     #[error(
-        "WTS could not load the merge request comparison. Refresh the merge request and check the local branch."
+        "Could not load the merge request comparison. Refresh the merge request and check the local branch."
     )]
     GitlabComparisonUnavailable,
-    #[error("WTS could not verify this merge request in the trusted GitLab project.")]
+    #[error("Could not verify this merge request in the trusted GitLab project.")]
     GitlabMergeRequestLinkUnavailable,
     #[error("the Git remote URL is invalid or unsupported")]
     InvalidRepositoryRemote,
@@ -303,9 +303,9 @@ pub enum LocalWtsError {
     RepositoryForgeUnsupported,
     #[error("GitLab did not accept the review comment")]
     GitlabReviewCommentFailed,
-    #[error("WTS could not load the GitLab discussions.")]
+    #[error("Could not load the GitLab discussions.")]
     GitlabDiscussionsUnavailable,
-    #[error("WTS could not confirm the GitLab reply.")]
+    #[error("Could not confirm the GitLab reply.")]
     GitlabDiscussionReplyFailed,
     #[error("the system browser is unavailable")]
     BrowserUnavailable,
@@ -373,7 +373,7 @@ pub enum LocalWtsError {
     ReviewThreadConflict,
     #[error("another managed workspace already uses the requested name")]
     WorkspaceRenameConflict,
-    #[error("workspace rename is blocked while WTS runs work in this workspace")]
+    #[error("workspace rename is blocked while work runs in this workspace")]
     WorkspaceRenameBusy,
     #[error("workspace rename failed")]
     WorkspaceRenameFailed { cleanup_complete: bool },
@@ -3620,14 +3620,14 @@ impl LocalWtsService {
             }
             Ok(_) => (
                 false,
-                "The repository was added, but WTS could not save the rebuilt graph evidence. Re-index the graph before you start an agent."
+                "The repository was added, but the rebuilt graph evidence could not be saved. Re-index the graph before you start an agent."
                     .to_owned(),
             ),
             Err(failure) => {
                 let _ = self.record_graph_failure(&materialization, failure);
                 (
                     false,
-                    "The repository was added, but WTS could not rebuild the workspace graph. Re-index the graph before you start an agent."
+                    "The repository was added, but the workspace graph could not be rebuilt. Re-index the graph before you start an agent."
                         .to_owned(),
                 )
             }
@@ -6520,7 +6520,7 @@ impl LocalWtsService {
             source_document_sha256: plan.map(|document| document.sha256),
             can_execute: false,
             requires_explicit_approval: true,
-            detail: "WTS can prepare this Jira issue. Jira creation is unavailable because the connected adapter does not expose an approved create operation."
+            detail: "This Jira issue can be prepared. Jira creation is unavailable because the connected adapter does not expose an approved create operation."
                 .to_owned(),
         })
     }
@@ -6758,7 +6758,7 @@ impl LocalWtsService {
             let path = Path::new(&prepared.public.workspace_display_path);
             let mut blocker = removal_blocker(
                 RemovalBlockerCode::ActiveOperation,
-                "An agent task or workspace operation is active or queued. WTS cannot remove this workspace yet."
+                "An agent task or workspace operation is active or queued. Cannot remove this workspace yet."
                     .to_owned(),
                 None,
             )
@@ -6807,7 +6807,7 @@ impl LocalWtsService {
 
         if kind == WorkspaceRemovalKind::SavedPlan {
             if root_exists {
-                blockers.push(removal_blocker(RemovalBlockerCode::UnexpectedPath, "The saved plan has a filesystem path that WTS did not materialize; it will not be removed."
+                blockers.push(removal_blocker(RemovalBlockerCode::UnexpectedPath, "The saved plan has a filesystem path outside the created workspace. It will not be removed."
                             .to_owned(), None).at(&workspace_path));
             }
         } else {
@@ -7133,7 +7133,7 @@ impl LocalWtsService {
                                     let blocker = validate_known_generated_tree_at(&planning_path, 0, &mut entries)
                                         .err().unwrap_or_else(|| removal_tree_blocker(
                                             &planning_path,
-                                            "WTS could not read all planning paths within its inspection limits.",
+                                            "Could not read all planning paths within the inspection limits.",
                                         ));
                                     blockers.push(*blocker);
                                 }
@@ -7169,7 +7169,7 @@ impl LocalWtsService {
                                 blockers.push(
                                     removal_blocker(
                                         RemovalBlockerCode::UnexpectedPath,
-                                        "The workspace root contains a path that WTS does not own."
+                                        "The workspace root contains a path that is not managed by WTS."
                                             .to_owned(),
                                         None,
                                     )
@@ -7610,11 +7610,11 @@ impl LocalWtsService {
                                 None
                             }
                             Ok(_) => Some(format!(
-                                "WTS cannot create its files at `{}`. Preserve the existing contents and move this path outside the workspace. Select Check again.",
+                                "Cannot create workspace files at `{}`. Preserve the existing contents and move this path outside the workspace. Select Check again.",
                                 path.display()
                             )),
                             Err(_) => Some(format!(
-                                "WTS cannot inspect `{}`. Check access to this path, then select Check again.",
+                                "Cannot inspect `{}`. Check access to this path, then select Check again.",
                                 path.display()
                             )),
                         };
@@ -9810,7 +9810,7 @@ fn blocker_for_git(error: GitError) -> PreflightBlocker {
         ),
         GitError::BranchConflict => (
             PreflightBlockerCode::BranchConflict,
-            "The workspace branch already exists locally. WTS will not overwrite or delete it; create a revised plan to use a new branch.",
+            "The workspace branch already exists locally. It will not be overwritten or deleted. create a revised plan to use a new branch.",
         ),
         GitError::TargetPathConflict => (
             PreflightBlockerCode::TargetConflict,
@@ -10082,7 +10082,7 @@ fn removal_worktree_blocker(
                 if error.kind() == std::io::ErrorKind::NotFound {
                     "The worktree path is missing."
                 } else {
-                    "WTS cannot read the worktree path."
+                    "Cannot read the worktree path."
                 }
                 .to_owned(),
             );
@@ -10263,7 +10263,7 @@ fn validate_known_generated_tree_at(
     }
     let metadata = path
         .symlink_metadata()
-        .map_err(|_| removal_tree_blocker(path, "WTS cannot inspect this path."))?;
+        .map_err(|_| removal_tree_blocker(path, "Cannot inspect this path."))?;
     if metadata.file_type().is_symlink() || !metadata.is_dir() {
         return Err(removal_tree_blocker(
             path,
@@ -10271,10 +10271,10 @@ fn validate_known_generated_tree_at(
         ));
     }
     for entry in fs::read_dir(path)
-        .map_err(|_| removal_tree_blocker(path, "WTS cannot read this folder."))?
+        .map_err(|_| removal_tree_blocker(path, "Cannot read this folder."))?
     {
         let entry =
-            entry.map_err(|_| removal_tree_blocker(path, "WTS cannot read a folder entry."))?;
+            entry.map_err(|_| removal_tree_blocker(path, "Cannot read a folder entry."))?;
         *entries = entries.checked_add(1).ok_or_else(|| {
             removal_tree_blocker(path, "This folder exceeds the inspection entry limit.")
         })?;
@@ -10293,11 +10293,11 @@ fn validate_known_generated_tree_at(
         }
         let metadata = child
             .symlink_metadata()
-            .map_err(|_| removal_tree_blocker(&child, "WTS cannot inspect this path."))?;
+            .map_err(|_| removal_tree_blocker(&child, "Cannot inspect this path."))?;
         if metadata.file_type().is_symlink() {
             return Err(removal_tree_blocker(
                 &child,
-                "This path is a symbolic link. WTS will not follow it.",
+                "This path is a symbolic link. It is not followed.",
             ));
         }
         if metadata.is_dir() {
@@ -10315,7 +10315,7 @@ fn validate_known_generated_tree_at(
 fn removal_tree_blocker(path: &Path, reason: &str) -> Box<RemovalBlocker> {
     let mut blocker = removal_blocker(
         RemovalBlockerCode::UnexpectedPath,
-        "WTS cannot safely inspect this workspace entry.".to_owned(),
+        "Cannot safely inspect this workspace entry.".to_owned(),
         None,
     )
     .at(path);
@@ -11612,7 +11612,7 @@ fn merge_observed_repository_recommendations(
                     .sources
                     .push(RepositoryRecommendationSource::WorkspaceHistory);
                 recommendation.reason.push_str(
-                    " WTS also observed this issue in a workspace that uses the repository.",
+                    " This issue also appeared in a workspace that uses the repository.",
                 );
             }
         } else {
@@ -11620,7 +11620,7 @@ fn merge_observed_repository_recommendations(
                 repository_id: repository.id.clone(),
                 label: repository.label.clone(),
                 confidence: 80,
-                reason: "WTS observed this issue in a workspace that uses the repository."
+                reason: "This issue appeared in a workspace that uses the repository."
                     .to_owned(),
                 sources: vec![RepositoryRecommendationSource::WorkspaceHistory],
             });

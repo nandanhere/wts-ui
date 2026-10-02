@@ -272,21 +272,18 @@ describe("unified WTS routes", () => {
     expect(
       await screen.findByRole(
         "heading",
-        { name: "Work activity" },
+        { name: "My time" },
         { timeout: 5_000 },
       ),
     ).toBeVisible();
-    await userEvent.setup().click(
-      screen.getByRole("tab", { name: /Agent activity/i }),
-    );
-    expect(screen.getByText("PLATFORM-42")).toBeVisible();
+    expect(await screen.findByText("PLATFORM-42")).toBeVisible();
     expect(
       screen.getByText("Checkout retries create duplicate captures"),
     ).toBeVisible();
-    expect(screen.queryByRole("navigation", { name: "WTS sections" })).toBeNull();
+    expect(screen.getByRole("navigation", { name: "WTS sections" })).toBeVisible();
     expect(screen.getByRole("button", { name: "Open Spaces" })).toBeVisible();
     const topBar = screen.getByRole("button", { name: "Open Spaces" }).parentElement;
-    expect(topBar?.children[1]).toHaveAttribute("data-ui", "wts.home");
+    expect(topBar?.querySelector('[data-ui="wts.home"]')).toBeInTheDocument();
     expect(fake.listAgentSessions).toHaveBeenCalledWith();
   });
 });

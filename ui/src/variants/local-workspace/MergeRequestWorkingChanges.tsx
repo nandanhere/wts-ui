@@ -28,7 +28,7 @@ function originalContext(discussion: GitlabReviewDiscussion, published: GitlabRe
   const position = discussion.position;
   const location = `${discussion.filePath}:${discussion.side === "deletions" ? "−" : "+"}${discussion.line ?? "?"}`;
   if (!position || position.baseCommitOid !== published.baseCommitOid || position.startCommitOid !== published.startCommitOid || position.headCommitOid !== published.headCommitOid) {
-    return <aside className={styles.originalContext}><b>Original MR location · {location}</b><p>WTS cannot map this conversation to this MR version. Its local line is not mapped.</p></aside>;
+    return <aside className={styles.originalContext}><b>Original MR location · {location}</b><p>Cannot map this conversation to this MR version. Its local line is not mapped.</p></aside>;
   }
   const block = [...patchFiles(published.patch)].find(([path, file]) => path === discussion.filePath || file.previousPath === discussion.filePath)?.[1].patch;
   const lines: { text: string; old?: number; next?: number }[] = [];
@@ -97,7 +97,7 @@ export function MergeRequestWorkingChanges({ client, workspaceId, repositoryId, 
     store.update(key, (current) => ({ ...current, requestToken, pending: true, refreshQueued: false, error: "", errorCode: undefined }));
     void client.getWorkspaceGitlabComparison(workspaceId, repositoryId, target.iid, provider).then((result) => {
       if (store.entries.get(key)?.requestToken !== requestToken) return;
-      if (result.workspaceId !== workspaceId || result.repositoryId !== repositoryId || result.iid !== target.iid || result.published.repositoryId !== repositoryId) throw new Error("WTS returned changes for another merge request.");
+      if (result.workspaceId !== workspaceId || result.repositoryId !== repositoryId || result.iid !== target.iid || result.published.repositoryId !== repositoryId) throw new Error("Received changes for another merge request.");
       if (store.entries.get(key)?.refreshQueued) {
         store.update(key, (current) => ({ ...current, pending: false, refreshQueued: false }));
         refresh();
@@ -113,7 +113,7 @@ export function MergeRequestWorkingChanges({ client, workspaceId, repositoryId, 
         refresh();
         return;
       }
-      store.update(key, (current) => ({ ...current, pending: false, error: error instanceof Error ? error.message : "WTS could not read these changes.", errorCode: typeof (error as { code?: unknown })?.code === "string" ? (error as { code: string }).code : undefined }));
+      store.update(key, (current) => ({ ...current, pending: false, error: error instanceof Error ? error.message : "Could not read these changes.", errorCode: typeof (error as { code?: unknown })?.code === "string" ? (error as { code: string }).code : undefined }));
     });
   }, [client, key, repositoryId, store, target.iid, target.repositoryId, workspaceId]);
 
@@ -200,19 +200,19 @@ export function MergeRequestWorkingChanges({ client, workspaceId, repositoryId, 
       <label><span className={styles.srOnly}>Compare code</span><SelectMenu aria-label="Code comparison" value={view} onChange={(next) => store.update(key, (current) => ({ ...current, view: next as WorkingComparisonView, viewChosen: true }))}><option value="latestWork">Local workspace vs target</option><option value="inMr">Published MR</option><option value="sinceMr">Local work after the MR</option></SelectMenu></label>
       {comparison && <span className={styles.version} title={`MR ${comparison.published.headCommitOid} · local ${comparison.localHeadCommitOid}`}>{comparisonStatus}</span>}
       <button aria-label="Refresh changes" className={styles.quietButton} disabled={entry?.pending} onClick={() => refresh(true)} type="button"><Glyph name="refresh" size={14} />Refresh</button>
-      {entry?.pending && comparison && <span className={styles.srOnly} role="status">WTS refreshes changes.</span>}
+      {entry?.pending && comparison && <span className={styles.srOnly} role="status">Refreshing changes…</span>}
     </header>
     {entry?.error && <div className={styles.error} role="alert" data-ui="changes.comparison-error" data-ui-label="Comparison error"><span>{entry.error}{comparison ? " The displayed comparison remains available." : ""}</span><button disabled={entry.pending} onClick={() => refresh(true)} type="button">Retry changes</button>{onOpenIntegrations && !localHostError(entry.errorCode) && <button onClick={onOpenIntegrations} type="button">Check GitLab connection</button>}</div>}
-    {comparison?.published.fromCache && <p className={styles.notice}>GitLab is unavailable. WTS shows the saved MR snapshot and current local files.</p>}
+    {comparison?.published.fromCache && <p className={styles.notice}>GitLab is unavailable. Showing the saved MR snapshot and current local files.</p>}
     {limited && <div className={styles.notice} role="alert" data-ui="changes.comparison-limited" data-ui-label="Local comparison notice"><span>{comparison.status === "missingCommits" ? "The MR commits are not in this local checkout." : "The local history differs from the published MR."} You can read the published changes.</span><button onClick={() => store.update(key, (current) => ({ ...current, view: "inMr", viewChosen: true }))} type="button">Show published changes</button></div>}
-    {comparison && comparison.status !== "ready" && view === "inMr" && !entry?.viewChosen && <p className={styles.notice} data-ui="changes.comparison-published-fallback" data-ui-label="Published changes notice">{comparison.status === "missingCommits" ? "The MR commits are not in this local checkout." : "The local history differs from the published MR."} WTS shows the published changes at {comparison.published.headCommitOid.slice(0, 8)}.</p>}
-    {view === "inMr" && comparison && (!freshConversationScope || comparison.published.fromCache) && <div className={styles.notice}>Line comments are unavailable until WTS checks this MR and account. <button disabled={controller.loading || conversationEntry?.state === "loading"} onClick={() => controller.refresh(target.key)} type="button">Refresh conversations</button>{onOpenIntegrations && <button onClick={onOpenIntegrations} type="button">Check GitLab connection</button>}</div>}
+    {comparison && comparison.status !== "ready" && view === "inMr" && !entry?.viewChosen && <p className={styles.notice} data-ui="changes.comparison-published-fallback" data-ui-label="Published changes notice">{comparison.status === "missingCommits" ? "The MR commits are not in this local checkout." : "The local history differs from the published MR."} Showing the published changes at {comparison.published.headCommitOid.slice(0, 8)}.</p>}
+    {view === "inMr" && comparison && (!freshConversationScope || comparison.published.fromCache) && <div className={styles.notice}>Line comments are unavailable until the MR and account are checked. <button disabled={controller.loading || conversationEntry?.state === "loading"} onClick={() => controller.refresh(target.key)} type="button">Refresh conversations</button>{onOpenIntegrations && <button onClick={onOpenIntegrations} type="button">Check GitLab connection</button>}</div>}
     {patchTruncated && <p className={styles.notice}>This patch is incomplete. Some changes are not shown.</p>}
     {mrReview && aiFindingCount > 0 && view !== "inMr" && <div className={styles.notice} data-ui="changes.comparison-ai-hint" data-ui-label="AI findings hint">The AI review of the published MR has {aiFindingCount} {aiFindingCount === 1 ? "finding" : "findings"}. The findings show on the lines of the published MR. <button onClick={() => store.update(key, (current) => ({ ...current, view: "inMr", viewChosen: true }))} type="button">Show the published MR</button></div>}
     {!comparison ? (entry?.error && !entry.pending
       ? <p className={styles.empty} role="status">No comparison to show. Retry changes to read it again.</p>
       : <div className={styles.loading} role="status" aria-busy="true" data-ui="changes.comparison-loading" data-ui-label="Comparison loading">
-          <p>WTS reads MR !{target.iid} from GitLab and compares it with the local work.</p>
+          <p>Reading MR !{target.iid} from GitLab and comparing it with the local work…</p>
           <span aria-hidden="true" /><span aria-hidden="true" /><span aria-hidden="true" />
         </div>) : <div className={styles.layout} data-panel={editorOpen || conversationsOpen || undefined}>
       <nav className={styles.files} aria-label="MR and local files" data-ui="changes.comparison-files" data-ui-label="MR and local files">
@@ -234,7 +234,7 @@ export function MergeRequestWorkingChanges({ client, workspaceId, repositoryId, 
               feedback: { client, workspaceId, repositoryId, baseCommitOid: comparison.published.baseCommitOid, headCommitOid: comparison.published.headCommitOid, patchSha256: "provider",
                 gitlabReview: { repositoryId: target.repositoryId, iid: target.iid, scopeId, discussions: comparison.published.discussions, expectedPosition: { baseCommitOid: comparison.published.baseCommitOid, startCommitOid: comparison.published.startCommitOid, headCommitOid: comparison.published.headCommitOid } } },
             } : {})}
-          /> : <>{selected && <div className={styles.emptyActions}><span>{selected}</span>{fileActions}</div>}<p className={styles.empty}>{limited ? "WTS cannot compare this local history with the MR." : view === "sinceMr" ? "No newer changes in this file. Local work matches the published version." : view === "latestWork" && fileSets.published.has(selected) ? "This file has no local change. It remains in the published MR." : view === "inMr" ? "This file is not in the published MR." : "No local changes in this file."}</p></>}
+          /> : <>{selected && <div className={styles.emptyActions}><span>{selected}</span>{fileActions}</div>}<p className={styles.empty}>{limited ? "Cannot compare this local history with the MR." : view === "sinceMr" ? "No newer changes in this file. Local work matches the published version." : view === "latestWork" && fileSets.published.has(selected) ? "This file has no local change. It remains in the published MR." : view === "inMr" ? "This file is not in the published MR." : "No local changes in this file."}</p></>}
         </div>
       </div>
       {selected && (editorOpen || conversationsOpen) && <aside className={styles.sidePanel} aria-label={editorOpen ? "Local editor" : "Conversations for this file"} onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); closePanel(); } }}>

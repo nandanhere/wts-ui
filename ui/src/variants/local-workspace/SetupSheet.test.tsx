@@ -558,7 +558,7 @@ describe("SetupSheet", () => {
               setup: "unverified",
               blockingFor: [],
               detail:
-                "Jira MCP is configured and running in VS Code over stdio. WTS will start a separate process when you explicitly verify or import.",
+                "Jira MCP is configured and running in VS Code over stdio. A separate process starts when you verify or import.",
             }
           : integration,
       ),
@@ -580,7 +580,7 @@ describe("SetupSheet", () => {
     expect(jiraRow).not.toBeNull();
     const connectionNotice = within(jiraRow!)
       .getAllByText(
-        "Jira MCP is configured and running in VS Code over stdio. WTS will start a separate process when you explicitly verify or import.",
+        "Jira MCP is configured and running in VS Code over stdio. A separate process starts when you verify or import.",
       )
       .find((element) => !element.closest("details"));
     expect(connectionNotice).toBeVisible();
@@ -640,7 +640,7 @@ describe("SetupSheet", () => {
     const user = userEvent.setup();
     const onVerifyJira = vi.fn().mockRejectedValue(
       new Error(
-        "WTS could not start Jira. Start Podman, then try again.",
+        "Could not start Jira. Start Podman, then try again.",
       ),
     );
     const externalJiraSnapshot: SetupSnapshot = {
@@ -676,7 +676,7 @@ describe("SetupSheet", () => {
     );
 
     expect(await within(jiraRow!).findByRole("alert")).toHaveTextContent(
-      "WTS could not start Jira. Start Podman, then try again.",
+      "Could not start Jira. Start Podman, then try again.",
     );
     expect(
       within(jiraRow!).getByRole("button", { name: "Try again" }),

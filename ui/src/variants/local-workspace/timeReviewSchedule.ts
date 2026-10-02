@@ -4,7 +4,7 @@ const TIME_REVIEW_SNAPSHOT_EVENT = "wts:time-review-snapshot-changed";
 const HOUR_MS = 60 * 60 * 1_000;
 const MAX_CATCH_UP_MS = 48 * HOUR_MS;
 
-export const timeReviewIntervals = [2, 4, 6, 8, 12] as const;
+export const timeReviewIntervals = [2, 4, 6, 8, 12, 24, 168] as const;
 
 export type TimeReviewIntervalHours = (typeof timeReviewIntervals)[number];
 
@@ -143,7 +143,7 @@ export function scheduledTimeReview(
   return {
     due: nowUnixMs >= dueAtUnixMs,
     dueAtUnixMs,
-    startedAtUnixMs: Math.max(anchor, endedAtUnixMs - MAX_CATCH_UP_MS),
+    startedAtUnixMs: Math.max(anchor, endedAtUnixMs - Math.max(MAX_CATCH_UP_MS, intervalMs)),
     endedAtUnixMs,
   };
 }

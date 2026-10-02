@@ -322,21 +322,21 @@ export function RepositoryReviewScreen({
                     patch.iid !== gitlabPatchTarget.number
                   ) {
                     throw new Error(
-                      "WTS returned changes for a different GitLab review.",
+                      "Received changes for a different GitLab review.",
                     );
                   }
                   if (current && !selectedCommitOid) {
                     const previousHead = providerHeadCommitRef.current;
                     if (patch.fromCache) {
                       setReviewUpdateMessage(
-                        "GitLab is unavailable. WTS shows the saved merge request changes.",
+                        "GitLab is unavailable. Showing the saved merge request changes.",
                       );
                     } else if (previousHead && previousHead !== patch.headCommitOid) {
                       setReviewUpdateMessage(
                         `New changes loaded at ${patch.headCommitOid.slice(0, 8)}.`,
                       );
                     } else if (forceProviderRefresh) {
-                      setReviewUpdateMessage("No new changes. WTS checked GitLab now.");
+                      setReviewUpdateMessage("No new changes. GitLab checked just now.");
                     }
                     providerHeadCommitRef.current = patch.headCommitOid;
                   }
@@ -365,7 +365,7 @@ export function RepositoryReviewScreen({
             result.workspaceId !== workspaceId ||
             result.repositoryId !== candidateId
           ) {
-            throw new Error("WTS returned changes for a different repository.");
+            throw new Error("Received changes for a different repository.");
           }
           firstCleanDiff ??= result;
           if (result.patch || result.untrackedPaths.length) {
@@ -417,20 +417,20 @@ export function RepositoryReviewScreen({
       }
       if (preserveDisplayedReview) {
         if (!gitlabPatchTarget) {
-          setError(firstError instanceof Error ? firstError.message : "WTS could not refresh the local changes.");
+          setError(firstError instanceof Error ? firstError.message : "Could not refresh the local changes.");
           return;
         }
         setReviewUpdateMessage(
           firstError instanceof Error && firstError.message.trim()
-            ? `WTS could not check GitLab: ${firstError.message}`
-            : "WTS could not check GitLab. The loaded changes remain available.",
+            ? `Could not check GitLab: ${firstError.message}`
+            : "Could not check GitLab. The loaded changes remain available.",
         );
         return;
       }
       setError(
         firstError instanceof Error
           ? firstError.message
-          : "WTS could not read the repository changes.",
+          : "Could not read the repository changes.",
       );
       setState("error");
     })().finally(() => {
@@ -721,7 +721,7 @@ export function RepositoryReviewScreen({
               ? `GitLab MR !${gitlabReview.number} · Select a changed line to comment in GitLab.`
               : diff
               ? `${diff.baseCommitOid.slice(0, 8)} to ${diff.headCommitOid.slice(0, 8)}`
-              : "WTS checks repositories for local changes"}
+              : "Checking repositories for local changes…"}
           </p>
         </div>
         <label>
@@ -779,7 +779,7 @@ export function RepositoryReviewScreen({
         {reportState === "loading" && (
           <span className={styles.reviewSignal} role="status">
             <i aria-hidden="true" />
-            WTS checks review context
+            Checking review context…
           </span>
         )}
         {reportState === "ready" &&
@@ -888,7 +888,7 @@ export function RepositoryReviewScreen({
                   data-ui="repository-review.next-unread"
                   data-ui-label="Next unread button"
                   onClick={() => openUnreadConversation(nextUnread)}
-                  title="Open the first unread thread. WTS marks a thread as read when you open it."
+                  title="Open the first unread thread. A thread is marked read when you open it."
                   type="button"
                 >
                   {nextUnreadIsHere ? "Open next unread" : `Next unread in ${unreadLabel(nextUnread)}`}
@@ -900,7 +900,7 @@ export function RepositoryReviewScreen({
                     const label = unreadLabel(entry);
                     const count = entry.unreadCommentIds.length;
                     const single = unreadEntries.length === 1;
-                    return <button className={single ? styles.nextUnread : undefined} data-ui={single ? "repository-review.next-unread" : undefined} data-ui-label={single ? "Next unread button" : undefined} key={entry.target.key} type="button" onClick={() => openUnreadConversation(entry)} aria-label={`Open ${count} unread ${count === 1 ? "comment" : "comments"} in ${label} !${entry.target.iid}`} title="Open the first unread thread. WTS marks a thread as read when you open it.">
+                    return <button className={single ? styles.nextUnread : undefined} data-ui={single ? "repository-review.next-unread" : undefined} data-ui-label={single ? "Next unread button" : undefined} key={entry.target.key} type="button" onClick={() => openUnreadConversation(entry)} aria-label={`Open ${count} unread ${count === 1 ? "comment" : "comments"} in ${label} !${entry.target.iid}`} title="Open the first unread thread. A thread is marked read when you open it.">
                       {single ? <span>Open next unread</span> : <><span>{label} <span className={styles.unreadMr}>!{entry.target.iid}</span></span><b>{count}</b></>}
                       {entry.snapshot?.fromCache && <small>Saved</small>}
                       {single && <Glyph name="arrow" size={12} />}
@@ -991,7 +991,7 @@ export function RepositoryReviewScreen({
             type="button"
           >
             <Glyph name="refresh" size={13} />
-            {checkingReviewUpdates ? "Checking GitLab" : "Check for new commits"}
+            {checkingReviewUpdates ? "Checking GitLab…" : "Check for new commits"}
           </button>
         </div>
       )}
@@ -1009,7 +1009,7 @@ export function RepositoryReviewScreen({
         </div>
       ) : state === "error" ? (
         <div className={styles.empty} role="alert">
-          <b>WTS could not read these changes</b>
+          <b>Could not read these changes</b>
           <p>{error}</p>
           <button onClick={retryRepositoryRequest} type="button">
             Try again

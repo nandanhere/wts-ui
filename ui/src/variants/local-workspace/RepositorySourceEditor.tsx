@@ -81,7 +81,7 @@ export function RepositorySourceEditor({ client, workspaceId, repositoryId, file
     setOpenError("");
     try {
       const result = await client.openWorkspaceInVscode(workspaceId);
-      if (!result.accepted || result.workspaceId !== workspaceId) throw new Error("WTS could not open this workspace in VS Code.");
+      if (!result.accepted || result.workspaceId !== workspaceId) throw new Error("Could not open this workspace in VS Code.");
     } catch (error) {
       if (contextRef.current.client === client && contextRef.current.key === key) setOpenError(error instanceof Error ? error.message : "Open VS Code, then open the saved workspace file.");
     } finally {
@@ -116,7 +116,7 @@ export function RepositorySourceEditor({ client, workspaceId, repositoryId, file
     const mutation = current.mutation;
     store.update(key, (draft) => ({ ...draft, request, reading: true, loading: !draft.source, error: draft.saving ? draft.error : "" }));
     void client.getWorkspaceRepositorySource(workspaceId, repositoryId, filePath).then((source) => {
-      if (!sourceMatches(source, workspaceId, repositoryId, filePath)) throw new Error("WTS returned a different local file.");
+      if (!sourceMatches(source, workspaceId, repositoryId, filePath)) throw new Error("Received a different local file.");
       if (store.drafts.get(key)?.token !== token) return;
       store.update(key, (draft) => {
         if (draft.request !== request || draft.mutation !== mutation) return draft;
@@ -127,7 +127,7 @@ export function RepositorySourceEditor({ client, workspaceId, repositoryId, file
       });
     }).catch((error) => {
       if (store.drafts.get(key)?.token !== token) return;
-      store.update(key, (draft) => draft.request !== request || draft.mutation !== mutation ? draft : { ...draft, reading: false, loading: false, error: error instanceof Error ? error.message : "WTS could not read the local file.", errorCode: error instanceof WorkspaceClientError ? error.code : "" });
+      store.update(key, (draft) => draft.request !== request || draft.mutation !== mutation ? draft : { ...draft, reading: false, loading: false, error: error instanceof Error ? error.message : "Could not read the local file.", errorCode: error instanceof WorkspaceClientError ? error.code : "" });
     });
   }, [active, capacity, client, embedded, filePath, key, refreshToken, repositoryId, retry, store, workspaceId]);
 
@@ -139,11 +139,11 @@ export function RepositorySourceEditor({ client, workspaceId, repositoryId, file
     store.update(key, (draft) => ({ ...draft, reading: false, saving: true, saved: false, error: "", mutation: draft.mutation + 1 }));
     try {
       const source = await client.saveWorkspaceRepositorySource(workspaceId, repositoryId, { filePath, content, expectedRevision: current.source.revision });
-      if (!sourceMatches(source, workspaceId, repositoryId, filePath)) throw new Error("WTS returned a different saved file.");
+      if (!sourceMatches(source, workspaceId, repositoryId, filePath)) throw new Error("Received a different saved file.");
       store.update(key, (draft) => ({ ...draft, source, text: draft.text === content ? source.content : draft.text, newer: undefined, reading: false, loading: false, saving: false, saved: true, mutation: draft.mutation + 1 }));
       onSaved();
     } catch (error) {
-      store.update(key, (draft) => ({ ...draft, saving: false, error: error instanceof Error ? error.message : "WTS could not save the local file.", errorCode: error instanceof WorkspaceClientError ? error.code : "" }));
+      store.update(key, (draft) => ({ ...draft, saving: false, error: error instanceof Error ? error.message : "Could not save the local file.", errorCode: error instanceof WorkspaceClientError ? error.code : "" }));
       if (error instanceof WorkspaceClientError && error.code === "repository_file_conflict") {
         const recovery = store.drafts.get(key)!;
         try {
@@ -157,10 +157,10 @@ export function RepositorySourceEditor({ client, workspaceId, repositoryId, file
   return <section className={`${styles.editor} ${embedded ? styles.embedded : ""}`} aria-label="Latest local file" data-ui="changes.local-editor" data-ui-label="Local file editor">
     <header><div><strong>{embedded && !previewReadOnly ? "Edit local file" : "Latest local file"}</strong><span title={filePath}>{filePath}</span></div>
       {!previewReadOnly && !embedded && record?.source && !record.editing && <button onClick={() => store.update(key, (draft) => ({ ...draft, editing: true, saved: false }))} type="button">Edit locally</button>}
-      {(record?.editing || embedded) && <>{!previewReadOnly && <button disabled={record?.saving || !dirty} onClick={() => void save()} type="button">{record?.saving ? "WTS saves the file" : "Save local file"}</button>}<button disabled={record?.saving} onClick={() => { if (onClose) onClose(); else store.update(key, (draft) => ({ ...draft, editing: false })); }} type="button">Close editor</button></>}
+      {(record?.editing || embedded) && <>{!previewReadOnly && <button disabled={record?.saving || !dirty} onClick={() => void save()} type="button">{record?.saving ? "Saving the file…" : "Save local file"}</button>}<button disabled={record?.saving} onClick={() => { if (onClose) onClose(); else store.update(key, (draft) => ({ ...draft, editing: false })); }} type="button">Close editor</button></>}
     </header>
-    {!capacity && <p role="alert">Save an open draft before you edit another file. WTS retained your drafts.</p>}
-    {record?.loading && <p role="status">WTS reads the local file.</p>}
+    {!capacity && <p role="alert">Save an open draft before you edit another file. Your drafts are kept.</p>}
+    {record?.loading && <p role="status">Reading the local file…</p>}
     {previewReadOnly && !record?.error && <p role="status">{NATIVE_PREVIEW_READ_ONLY_MESSAGE}</p>}
     {record?.error && <div className={styles.error} role="alert">{previewReadOnly ? NATIVE_PREVIEW_READ_ONLY_MESSAGE : record.error}
       {!previewReadOnly && (externalEditorRequired ? <><p>Open the workspace in VS Code to inspect this file, or select another file.</p><button disabled={opening} onClick={() => void openWorkspace()} type="button">Open workspace in VS Code</button></> : <button onClick={() => setRetry((value) => value + 1)} type="button">Read file again</button>)}
@@ -170,7 +170,7 @@ export function RepositorySourceEditor({ client, workspaceId, repositoryId, file
     {copyState !== "idle" && <p role="status">{copyState === "copied" ? "Draft copied." : "Clipboard access failed. Select the draft text below, then copy it."}</p>}
     {record?.newer && <div className={styles.notice}><p>The local file changed while you edited it. Your draft is unchanged.</p><button onClick={() => setCompare((value) => !value)} type="button">{compare ? "Hide newer file" : "Compare newer file"}</button><button disabled={record.saving} onClick={() => { store.update(key, (draft) => draft.newer ? { ...draft, source: draft.newer, text: draft.newer.content, newer: undefined, reading: false, loading: false, error: "", saved: false, mutation: draft.mutation + 1, request: draft.request + 1 } : draft); setCompare(false); }} type="button">Use newer file</button></div>}
     {compare && record?.newer && <pre aria-label="Newer local file">{record.newer.content}</pre>}
-    {record?.editing && record.source ? <><textarea autoFocus={embedded} aria-label="Local file editor" readOnly={previewReadOnly} disabled={record.saving} spellCheck={false} value={record.text} onChange={(event) => { if (previewReadOnly) return; const text = event.currentTarget.value; store.update(key, (draft) => ({ ...draft, text, saved: false })); }} />{!previewReadOnly && <p>Save changes only in this local file. WTS does not commit or push.</p>}</> : (!embedded || previewReadOnly) && record?.source && <pre aria-label="Current local file">{record.source.content}</pre>}
+    {record?.editing && record.source ? <><textarea autoFocus={embedded} aria-label="Local file editor" readOnly={previewReadOnly} disabled={record.saving} spellCheck={false} value={record.text} onChange={(event) => { if (previewReadOnly) return; const text = event.currentTarget.value; store.update(key, (draft) => ({ ...draft, text, saved: false })); }} />{!previewReadOnly && <p>Save changes only in this local file. Nothing is committed or pushed.</p>}</> : (!embedded || previewReadOnly) && record?.source && <pre aria-label="Current local file">{record.source.content}</pre>}
     {record?.saved && <p role="status">Local file saved. The MR is unchanged.</p>}
   </section>;
 }

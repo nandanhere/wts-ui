@@ -216,7 +216,7 @@ describe("MR and local code comparisons", () => {
     const f = fixture(status); render(<MergeRequestWorkingChanges {...f.props} />);
     // The first read opens the published MR, so the reviewer never lands on an empty diff.
     expect(await screen.findByLabelText("Displayed comparison")).toHaveTextContent("+published");
-    expect(screen.getByText(/WTS shows the published changes at bbbbbbbb/)).toBeVisible();
+    expect(screen.getByText(/Showing the published changes at bbbbbbbb/)).toBeVisible();
     expect(screen.getByText(status === "missingCommits" ? /The MR commits are not in this local checkout/ : /The local history differs from the published MR/)).toBeVisible();
     changeView("latestWork");
     expect(await screen.findByRole("alert")).toHaveTextContent(status === "missingCommits" ? "The MR commits are not in this local checkout." : "The local history differs from the published MR.");
@@ -233,18 +233,18 @@ describe("MR and local code comparisons", () => {
     let resolve!: (value: WorkspaceGitlabComparison) => void;
     f.getWorkspaceGitlabComparison.mockReturnValueOnce(new Promise((next) => { resolve = next; }));
     render(<MergeRequestWorkingChanges {...f.props} />);
-    expect(await screen.findByRole("status")).toHaveTextContent("WTS reads MR !9 from GitLab and compares it with the local work.");
+    expect(await screen.findByRole("status")).toHaveTextContent("Reading MR !9 from GitLab and comparing it with the local work…");
     await act(async () => resolve(f.comparison));
     expect(await screen.findByLabelText("Displayed comparison")).toBeVisible();
   });
 
   it("retries a failed comparison in place and keeps GitLab settings out of a local host limit", async () => {
     const f = fixture();
-    const busy = Object.assign(new Error("WTS is already running the maximum number of local operations. Retry shortly."), { code: "operation_capacity_exhausted" });
+    const busy = Object.assign(new Error("Too many local operations are running. Retry shortly."), { code: "operation_capacity_exhausted" });
     f.getWorkspaceGitlabComparison.mockRejectedValueOnce(busy);
     const onOpenIntegrations = vi.fn();
     render(<MergeRequestWorkingChanges {...f.props} onOpenIntegrations={onOpenIntegrations} />);
-    expect(await screen.findByRole("alert")).toHaveTextContent("maximum number of local operations");
+    expect(await screen.findByRole("alert")).toHaveTextContent("Too many local operations are running");
     expect(screen.queryByRole("button", { name: "Check GitLab connection" })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Retry changes" }));
     expect(await screen.findByLabelText("Displayed comparison")).toBeVisible();
@@ -280,7 +280,7 @@ describe("MR and local code comparisons", () => {
     await screen.findByLabelText("Displayed comparison");
     fireEvent.click(screen.getByRole("button", { name: /File conversations/ }));
     fireEvent.click(screen.getByRole("button", { name: /src\/checkout.ts:\+1/ }));
-    expect(screen.getByText("WTS cannot map this conversation to this MR version. Its local line is not mapped.")).toBeVisible();
+    expect(screen.getByText("Cannot map this conversation to this MR version. Its local line is not mapped.")).toBeVisible();
     expect(screen.getByRole("button", { name: "Reply to GitLab" })).toBeVisible();
     expect(screen.queryByRole("button", { name: "Publish to GitLab" })).not.toBeInTheDocument();
   });

@@ -242,7 +242,7 @@ test("setup and failed cached reads offer recovery", async ({ page, productOrigi
     await screenshot(page, testInfo, "03-empty-review-inbox");
     await page.getByRole("button", { name: "Open Spaces", exact: true }).click();
     await page.getByRole("button", { name: "My time", exact: true }).click();
-    await expect(page.getByRole("heading", { name: "Work activity", exact: true })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "My time", exact: true, level: 2 })).toBeVisible();
     await screenshot(page, testInfo, "04-work-activity");
     expect(fixture.errors).toEqual([]); expect(fixture.unexpected).toEqual([]);
   } finally { await saveEvidence(page, testInfo, fixture); }

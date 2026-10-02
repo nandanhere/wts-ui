@@ -48,7 +48,7 @@ const STORAGE_KEY = "wts.workspace-attention.v1";
 const DECISIONS_STORAGE_KEY = "wts.workspace-agent-reviewed.v1";
 const REVIEWS_STORAGE_KEY = "wts.workspace-attention-reviewed.v1";
 const MAX_REVIEWS = 4096;
-const REVIEW_SAVE_ERROR = "WTS could not save the review state. Free local storage, then select Reviewed again.";
+const REVIEW_SAVE_ERROR = "Could not save the review state. Free local storage, then select Reviewed again.";
 const MAX_RECORDS = 1024;
 const MAX_WORKSPACES = 96;
 const MAX_THREADS = 4096;
@@ -248,7 +248,7 @@ class AttentionStore implements WorkspaceAttentionStore {
         reads.push(this.refreshVerification(workspace.workspaceId), this.refreshGitlab(workspace.workspaceId, options.force));
       }
       for (const workspace of workspaces.slice(MAX_WORKSPACES)) {
-        for (const kind of kinds) this.failSource(workspace.workspaceId, kind, "WTS checks up to 96 workspaces on the board. Open this workspace to check its state.");
+        for (const kind of kinds) this.failSource(workspace.workspaceId, kind, "The board checks up to 96 workspaces. Open this workspace to check its state.");
       }
       await Promise.all(reads);
       this.lastRefresh = Date.now();
@@ -390,7 +390,7 @@ class AttentionStore implements WorkspaceAttentionStore {
       for (const workspace of workspaces) this.finishSource(workspace.workspaceId, "agent", "Recent results from up to 50 saved conversations. The board keeps up to 1,024 items and 4,096 review choices.", false, updatedAt, false);
       this.publish();
     } catch {
-      for (const workspace of workspaces) this.failSource(workspace.workspaceId, "agent", "WTS could not refresh agent results. Select Refresh status to retry.", false);
+      for (const workspace of workspaces) this.failSource(workspace.workspaceId, "agent", "Could not refresh agent results. Select Refresh status to retry.", false);
       this.publish();
     }
   }
@@ -407,7 +407,7 @@ class AttentionStore implements WorkspaceAttentionStore {
         this.applyVerification(workspaceId, evidence);
       }
       this.finishSource(workspaceId, "verification");
-    } catch { this.failSource(workspaceId, "verification", "WTS could not refresh verification. Select Refresh status to retry."); }
+    } catch { this.failSource(workspaceId, "verification", "Could not refresh verification. Select Refresh status to retry."); }
   }
   private applyVerification(workspaceId: string, evidence: VerificationSummary): void {
     if (evidence.verificationPlan.revision < (this.planRevisions.get(workspaceId) ?? -1)) return;
@@ -444,7 +444,7 @@ class AttentionStore implements WorkspaceAttentionStore {
       if (!this.workspaceIds.has(workspaceId)) return;
       if (inbox.state !== "fresh" && inbox.state !== "stale") throw new Error("unavailable");
       if ((inbox.fetchedAtUnixMs ?? 0) < (this.discoveryRevisions.get(workspaceId) ?? -1)) {
-        this.finishSource(workspaceId, "gitlab", "WTS kept a newer merge request response. Select Refresh status to retry.", true, this.snapshot.sources[workspaceId]!.gitlab.updatedAt ?? 0);
+        this.finishSource(workspaceId, "gitlab", "Kept a newer merge request response. Select Refresh status to retry.", true, this.snapshot.sources[workspaceId]!.gitlab.updatedAt ?? 0);
         return;
       }
       this.discoveryRevisions.set(workspaceId, inbox.fetchedAtUnixMs ?? 0);
@@ -467,9 +467,9 @@ class AttentionStore implements WorkspaceAttentionStore {
           if (!this.applyDiscussions(workspaceId, snapshot)) stale = true;
         } catch { failed = true; }
       }));
-      if (failed) this.failSource(workspaceId, "gitlab", "WTS could not refresh some conversations. Select Refresh status to retry.");
+      if (failed) this.failSource(workspaceId, "gitlab", "Could not refresh some conversations. Select Refresh status to retry.");
       else this.finishSource(workspaceId, "gitlab", stale ? "Some conversations are cached or incomplete. Open Changes to check the merge request." : "", stale, updatedAt);
-    } catch { this.failSource(workspaceId, "gitlab", "WTS could not refresh merge requests. Select Refresh status to retry."); }
+    } catch { this.failSource(workspaceId, "gitlab", "Could not refresh merge requests. Select Refresh status to retry."); }
   }
   private applyDiscussions(workspaceId: string, snapshot: GitlabDiscussions): boolean {
     if (!this.workspaceIds.has(workspaceId)) return false;

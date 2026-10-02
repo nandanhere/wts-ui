@@ -43,7 +43,7 @@ pub struct CaptureError {
 fn unavailable() -> CaptureError {
     CaptureError {
         code: "ui_capture_unavailable",
-        message: "WTS could not capture this region. You can continue with the selected context.",
+        message: "Could not capture this region. You can continue with the selected context.",
         retryable: true,
     }
 }

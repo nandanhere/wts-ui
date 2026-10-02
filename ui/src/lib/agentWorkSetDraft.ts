@@ -4,7 +4,7 @@ export interface PendingWorkItemCancel { workSetId: string; taskId: string; requ
 export interface AgentWorkSetDraft { key: string; kind: AgentWorkSetKind; tasks: AgentWorkItemPlan[]; pending?: CreateAgentWorkSetRequest; cancellations: PendingWorkItemCancel[]; }
 export function newWorkItemDraft(): AgentWorkItemPlan { return { taskId: crypto.randomUUID(), title: "", prompt: "", dependsOn: [] }; }
 export function newWorkSetDraft(key: string): AgentWorkSetDraft { return { key, kind: "tasks", tasks: [newWorkItemDraft()], cancellations: [] }; }
-const storageError = () => { throw new Error("WTS could not save this task plan. Check browser storage before you start tasks."); };
+const storageError = () => { throw new Error("Could not save this task plan. Check browser storage before you start tasks."); };
 function validateDraft(value: AgentWorkSetDraft) {
   if (!value || typeof value.key !== "string" || !value.key || value.key.length > 16384 || !["tasks", "alternatives"].includes(value.kind) || !Array.isArray(value.tasks) || !value.tasks.length || value.tasks.length > 8 || !Array.isArray(value.cancellations) || value.cancellations.length > 512) storageError();
   const ids = new Set<string>();
@@ -26,7 +26,7 @@ export function readWorkSetDraft(key: string) { return drafts().find(draft => dr
 export function saveWorkSetDraft(draft: AgentWorkSetDraft) {
   validateDraft(draft); const items = drafts().filter(item => item.key !== draft.key);
   if (draft.pending || draft.cancellations.length || draft.kind !== "tasks" || draft.tasks.some(task => task.title || task.prompt || task.dependsOn.length)) {
-    if (items.length >= 64) throw new Error("Discard an earlier task plan before you start another one. WTS kept your saved plans."); items.push(draft);
+    if (items.length >= 64) throw new Error("Discard an earlier task plan before you start another one. Your saved plans are kept."); items.push(draft);
   }
   try { localStorage.setItem(WORK_SET_DRAFT_KEY, JSON.stringify(items)); } catch { storageError(); }
 }

@@ -718,7 +718,7 @@ where
                     signing_key_configured: false,
                     gpg_available: false,
                     private_key_available: false,
-                    detail: "Git is unavailable, so WTS could not check commit signing.".to_owned(),
+                    detail: "Git is unavailable. Commit signing is not checked.".to_owned(),
                     diagnostic_code: Some(GitSigningDiagnosticCode::GitUnavailable),
                 };
             }
@@ -1194,18 +1194,18 @@ where
             );
             let detail = match self.host_signals.jira_mcp_registration() {
                 JiraMcpRegistration::WtsEndpointSignal => {
-                    "Host-managed Jira MCP endpoint signal is present; WTS has not completed an authentication handshake."
+                    "Host-managed Jira MCP endpoint signal is present; no authentication handshake is complete."
                 }
                 JiraMcpRegistration::VscodeRegistration => {
-                    "Jira MCP is registered in VS Code. WTS cannot share that client's session and has not imported or handshaken with it."
+                    "Jira MCP is registered in VS Code. That session cannot be shared, and it is not imported."
                 }
                 JiraMcpRegistration::VscodePodmanRegistration
                     if self.mcp_atlassian_container_is_running() =>
                 {
-                    "Jira MCP is configured and running in VS Code over stdio. WTS will start a separate process when you explicitly verify or import."
+                    "Jira MCP is configured and running in VS Code over stdio. A separate process starts when you verify or import."
                 }
                 JiraMcpRegistration::VscodePodmanRegistration => {
-                    "Jira MCP is registered in VS Code over stdio. WTS did not find its external container running and has not imported it."
+                    "Jira MCP is registered in VS Code over stdio. Its external container is not running, and it is not imported."
                 }
                 JiraMcpRegistration::None => unreachable!("configured signal must have a source"),
             };
@@ -2086,7 +2086,7 @@ mod tests {
         assert_eq!(
             jira.detail.as_deref(),
             Some(
-                "Jira MCP is configured and running in VS Code over stdio. WTS will start a separate process when you explicitly verify or import."
+                "Jira MCP is configured and running in VS Code over stdio. A separate process starts when you verify or import."
             )
         );
         assert_eq!(jira.blocking_for, Vec::<BlockingCapability>::new());

@@ -166,7 +166,7 @@ export function WorkspaceWorkItemsPanel({
       setLoadState("ready");
     } catch (error) {
       if (generation !== listGeneration.current) return;
-      setLoadError(messageFor(error, "WTS could not load the linked work items."));
+      setLoadError(messageFor(error, "Could not load the linked work items."));
       setLoadState("error");
     }
   }, [client, workspaceId]);
@@ -246,7 +246,7 @@ export function WorkspaceWorkItemsPanel({
         generation !== previewGeneration.current ||
         workspaceRequestGeneration !== workspaceGeneration.current
       ) return;
-      setPreviewError(messageFor(error, "WTS could not preview this Jira issue."));
+      setPreviewError(messageFor(error, "Could not preview this Jira issue."));
       setPreviewState("error");
     }
   };
@@ -258,7 +258,7 @@ export function WorkspaceWorkItemsPanel({
     const workspaceRequestGeneration = workspaceGeneration.current;
     try {
       if (typeof globalThis.crypto?.randomUUID !== "function") {
-        throw new Error("WTS could not create a safe retry key.");
+        throw new Error("Could not create a safe retry key.");
       }
       linkIdempotencyKey.current ??= globalThis.crypto.randomUUID();
       const result = await client.confirmWorkspaceJiraLink(
@@ -280,7 +280,7 @@ export function WorkspaceWorkItemsPanel({
       onNotice?.(`${result.link.snapshot.issueKey} linked to ${workspaceKey}`);
     } catch (error) {
       if (workspaceRequestGeneration !== workspaceGeneration.current) return;
-      setLinkError(messageFor(error, "WTS could not link this Jira issue."));
+      setLinkError(messageFor(error, "Could not link this Jira issue."));
       setLinkErrorCode(error instanceof WorkspaceClientError ? error.code : "");
       setLinkState("error");
     }
@@ -301,7 +301,7 @@ export function WorkspaceWorkItemsPanel({
       onNotice?.(`${link.snapshot.issueKey} unlinked from ${workspaceKey}`);
     } catch (error) {
       if (workspaceRequestGeneration !== workspaceGeneration.current) return;
-      setUnlinkError(messageFor(error, "WTS could not unlink this work item."));
+      setUnlinkError(messageFor(error, "Could not unlink this work item."));
       setUnlinkState("error");
       onNotice?.("The work item was not unlinked", "error");
     }
@@ -325,7 +325,7 @@ export function WorkspaceWorkItemsPanel({
         generation !== proposalGeneration.current ||
         workspaceRequestGeneration !== workspaceGeneration.current
       ) return;
-      setProposalError(messageFor(error, "WTS could not prepare the Jira proposal."));
+      setProposalError(messageFor(error, "Could not prepare the Jira proposal."));
       setProposalState("error");
     }
   };
@@ -351,7 +351,7 @@ export function WorkspaceWorkItemsPanel({
       if (workspaceRequestGeneration !== workspaceGeneration.current) return;
     } catch (error) {
       if (workspaceRequestGeneration !== workspaceGeneration.current) return;
-      setOpenError(messageFor(error, "WTS could not open this Jira issue."));
+      setOpenError(messageFor(error, "Could not open this Jira issue."));
     }
   };
 
@@ -369,7 +369,7 @@ export function WorkspaceWorkItemsPanel({
       if (workspaceRequestGeneration !== workspaceGeneration.current) return;
     } catch (error) {
       if (workspaceRequestGeneration !== workspaceGeneration.current) return;
-      setOpenError(messageFor(error, "WTS could not open this Jira issue."));
+      setOpenError(messageFor(error, "Could not open this Jira issue."));
     }
   };
 
@@ -696,7 +696,7 @@ export function WorkspaceWorkItemsPanel({
             <div className={styles.proposal}>
               {!proposal.canExecute ? (
                 <p className={styles.proposalNote} role="status">
-                  WTS cannot create this issue. {proposal.detail}
+                  Cannot create this issue. {proposal.detail}
                 </p>
               ) : null}
               <label>

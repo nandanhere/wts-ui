@@ -38,6 +38,13 @@ describe("time review schedule", () => {
       .toBe(true);
   });
 
+  it("keeps seven days for a weekly rollup", () => {
+    const start = 1_000;
+    const week = 168 * 3_600_000;
+    const result = scheduledTimeReview({ ...defaultTimeReviewSchedule, intervalHours: 168, startedAtUnixMs: start }, start + week);
+    expect(result).toMatchObject({ due: true, startedAtUnixMs: start, endedAtUnixMs: start + week });
+  });
+
   it("bounds restart catch-up to 48 hours", () => {
     const now = 10 * 24 * 60 * 60 * 1_000;
     const result = scheduledTimeReview(

@@ -153,7 +153,7 @@ describe("task result review", () => {
     get.mockResolvedValue(agentTurnChangesFixture({ state, before: undefined, after: undefined, files: [], patch: "" }));
     render(<AgentResultReview {...props} />); fireEvent.click(screen.getByRole("button", { name: "Review changes" }));
     await screen.findByText("No file changes are available in this record.");
-    expect(screen.queryByText("WTS observed no file changes during this task.")).not.toBeInTheDocument();
+    expect(screen.queryByText("No file changes during this task.")).not.toBeInTheDocument();
   });
 
   it.each(["conversationId", "requestId", "workspaceId", "repositoryId", "sessionId"] as const)("rejects a record from another %s", async (field) => {

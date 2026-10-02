@@ -18,6 +18,10 @@ pub const DEFAULT_ACTIVITYWATCH_URL: &str = "http://127.0.0.1:5600";
 
 const CONNECT_TIMEOUT: Duration = Duration::from_millis(500);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(2);
+/// A daily review reads a full day of events per bucket. A cold ActivityWatch
+/// database can take several seconds, so review reads get a longer limit than
+/// the quick status check.
+const REVIEW_REQUEST_TIMEOUT: Duration = Duration::from_secs(12);
 const MAX_RESPONSE_BYTES: usize = 16 * 1024;
 const MAX_VERSION_BYTES: usize = 128;
 const MAX_REVIEW_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
@@ -109,16 +113,16 @@ impl ActivityWatchReviewError {
             Self::InvalidTimeRange => {
                 "Choose an ActivityWatch review window after the start time and no longer than 48 hours."
             }
-            Self::ConnectionFailed => "WTS could not reach ActivityWatch on the local endpoint.",
+            Self::ConnectionFailed => "Could not reach ActivityWatch on the local endpoint.",
             Self::RequestTimedOut => "ActivityWatch did not answer within the local read timeout.",
             Self::ResponseTooLarge => {
-                "ActivityWatch returned more activity than WTS can safely review at once."
+                "ActivityWatch returned too much activity to review at one time."
             }
             Self::ResponseInvalid => {
                 "ActivityWatch returned an invalid response for the requested review."
             }
             Self::EndpointRedirected => {
-                "ActivityWatch redirected a local API request. WTS requires the canonical loopback endpoint."
+                "ActivityWatch redirected a local API request. Use the canonical loopback endpoint."
             }
             Self::ServerRejected => "ActivityWatch rejected the local review request.",
         }
@@ -191,7 +195,7 @@ impl ActivityWatchError {
                 "The ActivityWatch endpoint must be an HTTP URL using a numeric loopback address."
             }
             Self::ClientInitializationFailed => {
-                "WTS could not initialize the local ActivityWatch connector."
+                "Could not initialize the local ActivityWatch connector."
             }
         }
     }
@@ -211,6 +215,7 @@ pub struct ActivityWatchConnector {
     origin: Url,
     display_origin: String,
     max_response_bytes: usize,
+    review_timeout: Duration,
 }
 
 impl fmt::Debug for ActivityWatchConnector {
@@ -260,7 +265,14 @@ impl ActivityWatchConnector {
             origin,
             display_origin,
             max_response_bytes,
+            review_timeout: REVIEW_REQUEST_TIMEOUT.max(request_timeout),
         })
+    }
+
+    #[cfg(test)]
+    fn with_review_timeout(mut self, review_timeout: Duration) -> Self {
+        self.review_timeout = review_timeout;
+        self
     }
 
     pub fn status(&self) -> ActivityWatchStatus {
@@ -314,7 +326,7 @@ impl ActivityWatchConnector {
                 ActivityWatchCapability::Status,
                 ActivityWatchCapability::DailyReview,
             ],
-            detail: "ActivityWatch is running locally. WTS reads activity only when you explicitly build a daily review."
+            detail: "ActivityWatch is running locally. Activity is read only when you build a daily review."
                 .to_owned(),
             diagnostic_code: None,
         }
@@ -440,6 +452,7 @@ impl ActivityWatchConnector {
         let response = self
             .client
             .get(endpoint)
+            .timeout(self.review_timeout)
             .header(reqwest::header::ACCEPT, "application/json")
             .send()
             .map_err(|error| {
@@ -474,7 +487,7 @@ impl ActivityWatchConnector {
             api_version: None,
             server_version: None,
             capabilities: vec![],
-            detail: "WTS could not reach ActivityWatch locally. Installation cannot be determined from the API."
+            detail: "Could not reach ActivityWatch locally. Installation cannot be determined from the API."
                 .to_owned(),
             diagnostic_code: Some(diagnostic_code),
         }
@@ -1373,6 +1386,39 @@ mod tests {
         .into_bytes()
     }
 
+    /// Answers each request after the delay, like a cold ActivityWatch database.
+    fn slow_responses(responses: Vec<Vec<u8>>, delay: Duration) -> (String, thread::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock ActivityWatch");
+        let address = listener.local_addr().expect("mock address");
+        let handle = thread::spawn(move || {
+            for response in responses {
+                let Ok((mut stream, _)) = listener.accept() else { return };
+                let mut request = vec![0; 8192];
+                let _ = stream.read(&mut request);
+                thread::sleep(delay);
+                let _ = stream.write_all(&response);
+            }
+        });
+        (format!("http://{address}"), handle)
+    }
+
+    #[test]
+    fn daily_review_allows_a_slow_bucket_read_beyond_the_status_timeout() {
+        let (endpoint, server) = slow_responses(vec![json_response("{}")], Duration::from_millis(2_600));
+        let review = ActivityWatchConnector::new(&endpoint)
+            .unwrap()
+            .daily_review(1_785_402_000_000, 1_785_403_200_000);
+        server.join().unwrap();
+        assert!(review.is_ok(), "a 2.6 second read must not fail the review: {review:?}");
+
+        let (endpoint, _server) = slow_responses(vec![json_response("{}")], Duration::from_millis(1_500));
+        let review = ActivityWatchConnector::new(&endpoint)
+            .unwrap()
+            .with_review_timeout(Duration::from_millis(300))
+            .daily_review(1_785_402_000_000, 1_785_403_200_000);
+        assert!(matches!(review, Err(ActivityWatchReviewError::RequestTimedOut)));
+    }
+
     #[test]
     fn rejects_every_non_loopback_or_credentialed_endpoint_before_connecting() {
         for endpoint in [
@@ -1812,7 +1858,7 @@ mod tests {
         assert_eq!(error, ActivityWatchReviewError::EndpointRedirected);
         assert_eq!(
             error.safe_message(),
-            "ActivityWatch redirected a local API request. WTS requires the canonical loopback endpoint."
+            "ActivityWatch redirected a local API request. Use the canonical loopback endpoint."
         );
     }
 

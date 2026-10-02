@@ -286,7 +286,7 @@ describe("VerificationPanel", () => {
     expect(prompt).not.toContain("worktree=~/cd/platform-42-7fd1/checkout-api");
     expect(prompt).not.toContain("command=cargo test");
     expect(prompt).toContain(
-      "An index exists, but WTS has not asserted that it is fresh for the current working tree.",
+      "An index exists, but it is not confirmed as fresh for the current working tree.",
     );
     expect(onNotice).toHaveBeenCalledWith(
       "PLATFORM-42 · graph-informed task prepared for the workspace CLI",
@@ -318,7 +318,7 @@ describe("VerificationPanel", () => {
         ],
         nextActions: ["Add a retry regression test."],
         detail:
-          "Agent-authored notes loaded. WTS has not independently verified them.",
+          "Agent-authored notes loaded. They are not independently verified.",
       },
     });
     const fake = fakeWorkspaceClient({ evidence: initial });
@@ -605,7 +605,7 @@ describe("VerificationPanel", () => {
             },
           ],
           detail:
-            "Agent-authored notes loaded. WTS has not independently verified them.",
+            "Agent-authored notes loaded. They are not independently verified.",
         },
       });
       const fake = fakeWorkspaceClient({ evidence: initial });
@@ -772,7 +772,7 @@ describe("VerificationPanel", () => {
     await expandOptionalSection(user, "Evidence and history");
     const alert = await screen.findByRole("alert");
     expect(
-      within(alert).getByText("WTS could not use this report."),
+      within(alert).getByText("Could not use this report."),
     ).toBeVisible();
     expect(within(alert).getByText(invalid.agentReport.detail)).toBeVisible();
     expect(within(alert).getByText(invalid.agentReport.displayPath)).toBeVisible();
@@ -851,7 +851,7 @@ describe("VerificationPanel", () => {
           },
         ],
         detail:
-          "Agent-authored notes loaded. WTS has not independently verified them.",
+          "Agent-authored notes loaded. They are not independently verified.",
       },
     });
     const promoted = workspaceEvidenceFixture({

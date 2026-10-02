@@ -93,10 +93,7 @@ describe("TimeReviewScheduler", () => {
     );
     expect(fake.listActiveJiraIssues).toHaveBeenCalledTimes(1);
     await waitFor(() => {
-      expect(loadActivityWatchReviewSnapshot()).toMatchObject({
-        review: { detail: "One work block was found." },
-        assignments: {},
-      });
+      expect(loadActivityWatchReviewSnapshot()).toBeNull();
       expect(loadTimeReviewSchedule().lastSuccessfulAtUnixMs).toBeGreaterThan(
         lastSuccessfulAtUnixMs,
       );
@@ -114,7 +111,7 @@ describe("TimeReviewScheduler", () => {
     expect(loadTimeReviewSchedule().lastSuccessfulAtUnixMs).toBe(reviewEnd);
     expect(notify).toHaveBeenCalledWith(
       "My time summary is ready",
-      "WTS found 1 work block.",
+      "Found 1 work block.",
       "wts-time-review",
     );
   });

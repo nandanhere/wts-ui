@@ -329,7 +329,7 @@ describe("personal local workspace registry", () => {
     );
 
     expect(await within(dialog).findByRole("alert")).toHaveTextContent(
-      "WTS did not return a separate revised workspace",
+      "No separate revised workspace was returned",
     );
     expect(dialog).toHaveAccessibleName("Save needs attention");
     expect(
@@ -1528,6 +1528,13 @@ describe("personal local workspace registry", () => {
         name: "Repositories in this workspace plan",
       }),
     ).toHaveTextContent("new-api");
+    expect(
+      within(dialog).getByRole("textbox", { name: "Workspace name" }),
+    ).toHaveAttribute("placeholder", "new-api");
+    await user.type(
+      within(dialog).getByRole("textbox", { name: "Workspace name" }),
+      "Asset status fixes",
+    );
     await user.click(
       within(dialog).getByRole("button", { name: /Review repositories/i }),
     );
@@ -1551,7 +1558,7 @@ describe("personal local workspace registry", () => {
         name: "Base branch for new-api [repo_new_api]",
       }),
     ).toHaveValue("develop");
-    expect(within(dialog).getByText("Local repositories · new-api"))
+    expect(within(dialog).getAllByText("Asset status fixes")[0])
       .toBeVisible();
 
     await user.click(
@@ -1563,14 +1570,14 @@ describe("personal local workspace registry", () => {
     await user.click(
       within(dialog).getByRole("button", { name: /Save workspace plan/i }),
     );
-    await within(dialog).findByText("Local repositories · new-api is saved");
+    await within(dialog).findByText("Asset status fixes is saved");
     expect(fake.createWorkspace).toHaveBeenCalledWith(
       {
         intent: {
           type: "repositorySet",
-          label: "Local repositories · new-api",
+          label: "Asset status fixes",
         },
-        title: "Repositories: new-api",
+        title: "Asset status fixes",
         preferredProvider: "codex",
         repositories: [
           {
@@ -1800,7 +1807,7 @@ describe("personal local workspace registry", () => {
       within(dialog).getByRole("button", { name: "Stop waiting" }),
     );
     expect(await within(dialog).findByRole("alert")).toHaveTextContent(
-      "the original save may still complete",
+      "The original save may still complete",
     );
     expect(
       within(dialog).getByRole("button", {

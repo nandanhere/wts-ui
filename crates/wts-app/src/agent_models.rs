@@ -135,11 +135,16 @@ pub(crate) fn discover_agent_models(
         .as_deref()
         .and_then(hermes_configured_model)
         .map(|model| (model, "~/.hermes/config.yaml".to_owned()));
+    let hermes_models = sources
+        .home
+        .as_deref()
+        .map(hermes_cached_models)
+        .unwrap_or_default();
     providers.push(provider_models(
         AgentProvider::Hermes,
         sources.installed(AgentProvider::Hermes),
         hermes_default,
-        Vec::new(),
+        hermes_models,
         true,
     ));
 
@@ -340,6 +345,26 @@ fn hermes_configured_model(home: &Path) -> Option<String> {
     hermes_model_from_yaml(&read_small(&home.join(".hermes/config.yaml"))?)
 }
 
+/// Reads the model lists that Hermes caches from each provider's /v1/models.
+fn hermes_cached_models(home: &Path) -> Vec<String> {
+    let Some(value) = read_small(&home.join(".hermes/provider_models_cache.json"))
+        .and_then(|text| serde_json::from_str::<Value>(&text).ok())
+    else {
+        return Vec::new();
+    };
+    let mut models = Vec::new();
+    for provider in value.as_object().into_iter().flat_map(|object| object.values()) {
+        for model in provider["models"].as_array().into_iter().flatten() {
+            if let Some(model) = model.as_str()
+                && !models.iter().any(|known| known == model)
+            {
+                models.push(model.to_owned());
+            }
+        }
+    }
+    models
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -376,6 +401,10 @@ mod tests {
         write(
             &home.join(".hermes/config.yaml"),
             "model:\n  default: gpt-5.6-terra\n  provider: openai\nagent:\n  default: other\n",
+        );
+        write(
+            &home.join(".hermes/provider_models_cache.json"),
+            r#"{"openai-codex":{"fp":"x","models":["gpt-5.6-terra","gpt-5.6-sol","gpt-5.5"]}}"#,
         );
         let sources = ModelSources {
             codex_home: None,
@@ -419,6 +448,7 @@ mod tests {
         assert!(!hermes.installed);
         assert!(hermes.model_selectable);
         assert_eq!(hermes.default_model.as_deref(), Some("gpt-5.6-terra"));
+        assert_eq!(hermes.models, vec!["gpt-5.6-terra", "gpt-5.6-sol", "gpt-5.5"]);
         assert_eq!(
             calls,
             vec![

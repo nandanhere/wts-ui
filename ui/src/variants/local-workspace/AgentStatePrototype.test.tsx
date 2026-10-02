@@ -76,7 +76,7 @@ describe("managed agent connection", () => {
       screen.getByRole("button", { name: "Run Codex in background" }),
     ).toBeVisible();
     expect(
-      screen.getByText(/It does not show hidden reasoning/),
+      screen.getByText(/Hidden reasoning and raw tool arguments stay hidden/),
     ).toBeVisible();
     expect(
       screen.queryByRole("button", { name: "Stop task" }),

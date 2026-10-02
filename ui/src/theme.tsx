@@ -79,7 +79,7 @@ export function applyResolvedTheme(
   documentTarget.documentElement.style.colorScheme = theme;
   documentTarget
     .querySelector('meta[name="theme-color"]')
-    ?.setAttribute("content", theme === "dark" ? "#0f141c" : "#f2f4f7");
+    ?.setAttribute("content", theme === "dark" ? "#090d16" : "#f2f4f7");
 }
 
 function currentSystemPreference() {

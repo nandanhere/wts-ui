@@ -9,7 +9,7 @@ import { CSS } from "@dnd-kit/utilities";
 import type { Lane, Workspace, WorkspaceAgentSnapshot } from "./LocalWorkspace";
 import type { GitlabMergeRequest, GitlabReview } from "../../lib/wtsClient";
 import { Glyph } from "./Glyph";
-import { WorkspaceCard } from "./WorkspaceCard";
+import { WorkspaceCard, type WorkspaceCardProps } from "./WorkspaceCard";
 import styles from "./LocalWorkspace.module.css";
 
 export const WORKSPACE_BOARD_ORDER_STORAGE_KEY = "wts.workspace-board-order.v1";
@@ -248,7 +248,7 @@ export function AssignedReviewCard({
           )}
           <strong className={styles.assignedReviewCreateIcon}>
             <Glyph name={preparing ? "refresh" : "folder"} size={14} />
-            {preparing ? "Starts review…" : "Start review"}
+            {preparing ? "Starting review…" : "Start review"}
           </strong>
         </footer>
       </button>
@@ -275,7 +275,7 @@ export function DraggableWorkspaceCard({
   index,
   onOpen,
   onOpenWorkspace,
-  placementLabel,
+  pin,
   primaryActionLabel,
   reorderDisabled = false,
   issueAction,
@@ -293,7 +293,7 @@ export function DraggableWorkspaceCard({
   index: number;
   onOpen: (modified: boolean) => void;
   onOpenWorkspace?: () => void;
-  placementLabel?: string;
+  pin?: WorkspaceCardProps["pin"];
   primaryActionLabel?: string;
   reorderDisabled?: boolean;
   issueAction?: {
@@ -369,6 +369,7 @@ export function DraggableWorkspaceCard({
         }}
         onOpen={onOpen}
         onOpenWorkspace={onOpenWorkspace}
+        pin={pin}
         primaryActionLabel={primaryActionLabel}
         issueAction={issueAction}
         gitlabReview={gitlabReview}
@@ -381,9 +382,6 @@ export function DraggableWorkspaceCard({
             : { ...workspace, lane: displayLane }
         }
       />
-      {placementLabel && (
-        <span className={styles.workspacePlacementBadge}>{placementLabel}</span>
-      )}
     </div>
   );
 }

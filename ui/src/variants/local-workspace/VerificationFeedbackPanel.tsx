@@ -76,7 +76,7 @@ export function VerificationFeedbackPanel({
       setState("ready");
     } catch (cause) {
       if (requestGeneration !== generation.current) return;
-      setError(errorMessage(cause, "WTS could not load check feedback."));
+      setError(errorMessage(cause, "Could not load check feedback."));
       setState("error");
     }
   };
@@ -138,7 +138,7 @@ export function VerificationFeedbackPanel({
     } catch (cause) {
       if (requestGeneration !== generation.current) return;
       setSaving(false);
-      setError(errorMessage(cause, "WTS could not save the check context."));
+      setError(errorMessage(cause, "Could not save the check context."));
       onNotice(`${workspaceKey} · check context was not saved`, "error");
     }
   };
@@ -165,7 +165,7 @@ export function VerificationFeedbackPanel({
     } catch (cause) {
       if (requestGeneration !== generation.current) return;
       setResolvingId(null);
-      setError(errorMessage(cause, "WTS could not resolve this feedback."));
+      setError(errorMessage(cause, "Could not resolve this feedback."));
       void load();
     }
   };
@@ -191,7 +191,7 @@ export function VerificationFeedbackPanel({
       </summary>
       {open && <div className={styles.content}>
         {state === "loading" ? (
-          <p role="status">WTS loads check feedback…</p>
+          <p role="status">Loading check feedback…</p>
         ) : state === "error" ? (
           <div className={styles.error} role="alert">
             <span>{error}</span>
@@ -233,7 +233,7 @@ export function VerificationFeedbackPanel({
                 />
               </label>
               <button disabled={!body.trim() || saving} type="submit">
-                {saving ? "WTS saves…" : "Send context"}
+                {saving ? "Saving…" : "Send context"}
               </button>
             </form>
             {error && <p className={styles.inlineError} role="alert">{error}</p>}
@@ -268,7 +268,7 @@ export function VerificationFeedbackPanel({
                           onClick={() => void resolveThread(thread)}
                           type="button"
                         >
-                          {resolvingId === thread.threadId ? "WTS resolves…" : "Resolve"}
+                          {resolvingId === thread.threadId ? "Resolving…" : "Resolve"}
                         </button>
                       )}
                     </article>

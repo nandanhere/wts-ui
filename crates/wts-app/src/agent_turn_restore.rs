@@ -171,7 +171,7 @@ fn effect_digest(receipt: &AgentTurnChanges, files: &[AgentTurnRestoreFile]) -> 
 }
 fn initial_preflight(receipt: &AgentTurnChanges) -> AgentTurnRestorePreflight {
     let files = actions(receipt);
-    AgentTurnRestorePreflight { schema_version: 1, conversation_id: receipt.conversation_id, request_id: receipt.request_id, session_id: receipt.session_id, workspace_id: receipt.workspace_id, repository_id: receipt.repository_id.clone(), after_checkpoint_id: receipt.after.as_ref().map(|checkpoint| checkpoint.checkpoint_id), state: AgentTurnRestorePreflightState::Ready, effect_digest: effect_digest(receipt, &files), resume_request_id: None, files, blockers: vec![], detail: "Restore the captured working files to their state before this task. Existing dirty changes from before the task remain. Git history and the index will not change. WTS checks files before each write. Keep other editors and Git tools idle during restore.".to_owned(), restored_at_unix_ms: None }
+    AgentTurnRestorePreflight { schema_version: 1, conversation_id: receipt.conversation_id, request_id: receipt.request_id, session_id: receipt.session_id, workspace_id: receipt.workspace_id, repository_id: receipt.repository_id.clone(), after_checkpoint_id: receipt.after.as_ref().map(|checkpoint| checkpoint.checkpoint_id), state: AgentTurnRestorePreflightState::Ready, effect_digest: effect_digest(receipt, &files), resume_request_id: None, files, blockers: vec![], detail: "Restore the captured working files to their state before this task. Existing dirty changes from before the task remain. Git history and the index will not change. Each file is checked before it is written. Keep other editors and Git tools idle during restore.".to_owned(), restored_at_unix_ms: None }
 }
 fn historical_result(
     store: &ConversationStore,
@@ -236,7 +236,7 @@ fn resume_preflight(
     {
         preflight.state = AgentTurnRestorePreflightState::Ready;
         preflight.blockers.clear();
-        preflight.detail = "Continue the earlier restore. WTS checked files already restored and the remaining files. Keep other editors and Git tools idle until restore finishes.".to_owned();
+        preflight.detail = "Continue the earlier restore. Restored files and the remaining files are checked. Keep other editors and Git tools idle until restore finishes.".to_owned();
     } else {
         preflight.state = AgentTurnRestorePreflightState::Blocked;
         preflight.blockers = vec![blocker(
@@ -667,7 +667,7 @@ fn apply_restore(
     if journal.result.blockers.is_empty() {
         journal.result.state = AgentTurnRestoreResultState::Restored;
         journal.result.restored_at_unix_ms = Some(now_unix_ms());
-        journal.result.detail = "WTS restored the listed working files and checked their captured state. Git history and the index were not changed by this restore.".to_owned();
+        journal.result.detail = "Restored the listed working files and checked their captured state. Git history and the index were not changed by this restore.".to_owned();
     } else {
         journal.result.state = AgentTurnRestoreResultState::Incomplete;
         journal.result.detail = "Restore stopped. Review the listed files and conflicts, then retry this restore. Files already restored are checked before the remaining files continue. The private snapshots were kept.".to_owned();

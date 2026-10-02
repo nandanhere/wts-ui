@@ -105,3 +105,36 @@
 .queueSummary .sourceChip { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .composerContext > .context { flex: 1; }
 .composerContext > .context:not([open]) > summary { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+
+/* Slide-over drawer */
+.bubble { position: fixed; top: 0; right: 0; bottom: 0; width: min(520px, 100vw); height: 100dvh; max-height: none; border-width: 0 0 0 1px; border-radius: 0; box-shadow: -24px 0 60px rgba(0, 0, 0, 0.35); animation: drawerIn 180ms var(--wts-ease-out, ease-out); }
+@keyframes drawerIn { from { transform: translateX(24px); opacity: 0; } to { transform: none; opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .bubble { animation: none; } }
+.header { min-height: 52px; box-sizing: border-box; }
+.header span { white-space: normal; }
+.root .launcher { display: inline-flex; align-items: center; gap: 8px; min-height: 36px; padding: 0 14px 0 12px; color: var(--wts-ink); background: var(--wts-surface); border: 1px solid var(--wts-line-strong); border-radius: 99px; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25); font-weight: 600; }
+.root .launcher:hover { border-color: var(--wts-blue); }
+.launcherIcon { color: var(--wts-blue); font-size: 13px; }
+
+.rating { display: grid; gap: 8px; margin: 10px 0 4px; padding: 10px 12px; background: var(--wts-surface-subtle); border: 1px solid var(--wts-line); border-radius: 8px; }
+.ratingRow { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.ratingLabel { margin-right: 4px; color: var(--wts-muted); font-size: 12px; font-weight: 600; }
+.root .thumb { min-width: 32px; min-height: 28px; padding: 0 6px; font-size: 13px; line-height: 1; }
+.root .thumb[aria-pressed="true"][data-tone="up"] { border-color: var(--wts-green-line); background: var(--wts-green-soft); }
+.root .thumb[aria-pressed="true"][data-tone="down"] { border-color: var(--wts-red-line); background: var(--wts-red-soft); }
+.stars { display: inline-flex; gap: 0; margin-left: 4px; }
+.root .star { min-width: 24px; padding: 2px 3px; color: var(--wts-line-strong); background: transparent; border: 0; font-size: 16px; line-height: 1; }
+.root .star[data-filled] { color: #fbbf24; }
+.root .ratingToggle { margin-left: auto; padding: 3px 8px; color: var(--wts-blue); background: transparent; border: 0; font-size: 12px; }
+.correction { display: grid; gap: 6px; }
+.correction label { color: var(--wts-text); font-size: 12px; font-weight: 600; }
+.correction textarea { min-height: 64px; padding: 8px 10px; color: var(--wts-ink); background: var(--wts-canvas); border: 1px solid var(--wts-line); border-radius: 7px; font: inherit; resize: vertical; }
+.ratingStatus { margin: 0; color: var(--wts-muted); font-size: 12px; }
+.lessonsPanel { display: grid; gap: 6px; padding: 12px 16px; border-bottom: 1px solid var(--wts-line); background: var(--wts-surface-subtle); }
+.lessonsPanel p { margin: 0; font-size: 12px; }
+.lessons { display: grid; gap: 6px; margin: 4px 0 0; padding: 0; list-style: none; }
+.lessons li { display: grid; grid-template-columns: 1fr auto; gap: 2px 8px; padding: 8px 10px; background: var(--wts-surface); border: 1px solid var(--wts-line); border-radius: 7px; font-size: 12px; }
+.lessons small { grid-column: 1; color: var(--wts-muted); }
+.lessons button { grid-column: 2; grid-row: 1 / span 2; align-self: center; font-size: 12px; }
+

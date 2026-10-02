@@ -19,6 +19,7 @@ export type GlyphName =
   | "openProject"
   | "more"
   | "pause"
+  | "pin"
   | "play"
   | "plug"
   | "plus"
@@ -126,6 +127,12 @@ export const Glyph = memo(function Glyph({
       </>
     ),
     play: <path d="m8 5 11 7-11 7V5Z" />,
+    pin: (
+      <>
+        <path d="M9 4h6l-1 6 3 3v2H7v-2l3-3-1-6Z" />
+        <path d="M12 15v6" />
+      </>
+    ),
     plug: (
       <>
         <path d="m8 12 8-8M14 4l6 6M4 14l6 6M7 17l-3 3M11 13l-4-4" />

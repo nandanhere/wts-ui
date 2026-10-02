@@ -81,7 +81,7 @@ describe("WorkspaceChangeRequestDialog", () => {
     expect(screen.getByText("2 changed files")).toBeVisible();
     expect(screen.getByText("PLATFORM-7197")).toBeVisible();
     expect(screen.getByText("8 verification checks passed")).toBeVisible();
-    expect(screen.getByText("WTS opens the form. GitLab creates the merge request.")).toBeVisible();
+    expect(screen.getByText("Opens the form. GitLab creates the merge request.")).toBeVisible();
 
     const title = screen.getByRole("textbox", { name: "Title" });
     await user.clear(title);

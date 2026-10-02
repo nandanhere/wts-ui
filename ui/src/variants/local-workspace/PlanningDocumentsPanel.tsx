@@ -507,7 +507,7 @@ function MermaidDiagram({ source }: MermaidDiagramProps) {
     return (
       <div className={styles.mermaidState} role="status">
         <span className={styles.spinner} aria-hidden="true" />
-        <span>WTS renders the diagram.</span>
+        <span>Rendering the diagram…</span>
       </div>
     );
   }
@@ -517,7 +517,7 @@ function MermaidDiagram({ source }: MermaidDiagramProps) {
       <figcaption>
         {renderState === "oversize"
           ? "This diagram is too large to render."
-          : "WTS could not render this diagram."}
+          : "Could not render this diagram."}
       </figcaption>
       <pre>
         <code>{source}</code>
@@ -1010,7 +1010,7 @@ function PlanningDocumentsPanelContent({
   };
   const retainDraft = (next: Partial<PlanningView>): boolean => {
     if (rememberPlanningView(client, workspaceId, { ...currentView, ...next })) return true;
-    setSelectionMessage("WTS has 24 unfinished planning drafts. Save or clear one before you edit another workspace.");
+    setSelectionMessage("24 planning drafts are unfinished. Save or clear one before you edit another workspace.");
     return false;
   };
 
@@ -1068,7 +1068,7 @@ function PlanningDocumentsPanelContent({
     void cache.lists.load(workspaceId, async () => {
       const result = await client.listWorkspacePlanningDocuments(workspaceId);
       if (result.workspaceId !== workspaceId) {
-        throw new Error("WTS returned planning files for another workspace.");
+        throw new Error("Received planning files for another workspace.");
       }
       const nextDocuments = sortedDocuments(result.documents);
       for (const previous of cache.lists.get(workspaceId) ?? []) {
@@ -1118,7 +1118,7 @@ function PlanningDocumentsPanelContent({
     void cache.documents.load(key, async () => {
       const result = await client.readWorkspacePlanningDocument(workspaceId, selectedId);
       if (result.workspaceId !== workspaceId || result.documentId !== selectedId) {
-        throw new Error("WTS returned another planning file.");
+        throw new Error("Received another planning file.");
       }
       return result;
     }).then((result) => {
@@ -1144,7 +1144,7 @@ function PlanningDocumentsPanelContent({
     setFeedbackError("");
     void cache.threads.load(workspaceId, async () => {
       const result = await client.listWorkspaceReviewThreads(workspaceId);
-      if (result.workspaceId !== workspaceId) throw new Error("WTS returned feedback for another workspace.");
+      if (result.workspaceId !== workspaceId) throw new Error("Received feedback for another workspace.");
       return sortedThreads(result.threads);
     }).then((result) => {
       if (requestId !== feedbackRequestRef.current) return;
@@ -1352,7 +1352,7 @@ function PlanningDocumentsPanelContent({
         saved.workspaceId !== workspaceId ||
         saved.documentId !== document.documentId
       ) {
-        throw new Error("WTS returned another planning file.");
+        throw new Error("Received another planning file.");
       }
       cache.documents.set(planningDocumentCacheKey(workspaceId, saved.documentId), saved);
       const savedView = planningViewFor(client, workspaceId);
@@ -1445,7 +1445,7 @@ function PlanningDocumentsPanelContent({
         created.target.kind !== "planningDocument" ||
         created.target.documentId !== documentId
       ) {
-        throw new Error("WTS returned feedback for another planning file.");
+        throw new Error("Received feedback for another planning file.");
       }
       const nextThreads = sortedThreads([created, ...(cache.threads.get(workspaceId) ?? []).filter((thread) => thread.threadId !== created.threadId)]);
       cache.threads.set(workspaceId, nextThreads);
@@ -1494,7 +1494,7 @@ function PlanningDocumentsPanelContent({
           resolved.workspaceId !== workspaceId ||
           resolved.threadId !== thread.threadId
         ) {
-          throw new Error("WTS returned another feedback thread.");
+          throw new Error("Received another feedback thread.");
         }
         const nextThreads = sortedThreads((cache.threads.get(workspaceId) ?? []).map((item) => item.threadId === resolved.threadId ? resolved : item));
         cache.threads.set(workspaceId, nextThreads);
@@ -1561,7 +1561,7 @@ function PlanningDocumentsPanelContent({
       >
         <span className={styles.spinner} aria-hidden="true" />
         <strong>Loading planning files…</strong>
-        <p>WTS is reading the trusted files for {workspaceKey}.</p>
+        <p>Reading the trusted files for {workspaceKey}.</p>
       </section>
     );
   }
@@ -1912,19 +1912,19 @@ function PlanningDocumentsPanelContent({
 
         {listError && listState === "ready" && (
           <div className={styles.notice} role="alert">
-            <span>{listError} WTS shows the last loaded files.</span>
+            <span>{listError} Showing the last loaded files.</span>
             <Button onPress={() => setListRevision((revision) => revision + 1)}>Retry file list</Button>
           </div>
         )}
         {documentError && documentState === "ready" && (
           <div className={styles.notice} role="alert">
-            <span>{documentError} WTS shows the last loaded content.</span>
+            <span>{documentError} Showing the last loaded content.</span>
             {documentRecovery}
           </div>
         )}
         {feedbackError && feedbackState === "ready" && (
           <div className={styles.notice} role="alert">
-            <span>{feedbackError} WTS shows the last loaded feedback.</span>
+            <span>{feedbackError} Showing the last loaded feedback.</span>
             <Button onPress={reloadFeedback}>Retry feedback</Button>
           </div>
         )}
@@ -2155,7 +2155,7 @@ function PlanningDocumentsPanelContent({
                 {feedbackState === "loading" && (
                   <div className={styles.feedbackState} role="status">
                     <span className={styles.spinner} aria-hidden="true" />
-                    <span>WTS loads the feedback.</span>
+                    <span>Loading the feedback…</span>
                   </div>
                 )}
 

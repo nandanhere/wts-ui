@@ -457,9 +457,9 @@ impl LocalWtsService {
 
 fn adapter_failure_text(failure: crate::AdapterFailure) -> &'static str {
     match failure {
-        crate::AdapterFailure::Unavailable => "WTS could not find the agent CLI.",
+        crate::AdapterFailure::Unavailable => "Could not find the agent CLI.",
         crate::AdapterFailure::SpawnFailed => "The agent did not start.",
-        crate::AdapterFailure::TimedOut => "The agent did not finish in 15 minutes. WTS stopped it.",
+        crate::AdapterFailure::TimedOut => "The agent did not finish in 15 minutes. It was stopped.",
         crate::AdapterFailure::OutputTooLarge => "The agent output was too large for WTS.",
         crate::AdapterFailure::GraphFailed => "The agent stopped with an error.",
         crate::AdapterFailure::Cancelled => "The review was stopped.",

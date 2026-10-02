@@ -105,7 +105,7 @@ describe("agent feedback navigation", () => {
     await waitFor(() => expect(fake.listWorkspaces).toHaveBeenCalled());
     act(() => window.dispatchEvent(new CustomEvent("wts:open-agent-workspace", { detail: { workspaceId: "different", repositoryId: "repo" } })));
     await waitFor(() => expect(fake.getWorkspace).toHaveBeenCalledWith("different"));
-    expect(await screen.findByText("WTS could not open the agent workspace. Select View local changes to try again.")).toBeVisible();
+    expect(await screen.findByText("Could not open the agent workspace. Select View local changes to try again.")).toBeVisible();
     expect(screen.queryByRole("tab", { name: "Changes" })).not.toBeInTheDocument();
   });
   it("keeps the user's newer navigation when a workspace lookup finishes late", async () => {

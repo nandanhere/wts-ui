@@ -495,7 +495,7 @@ impl LocalWtsService {
             return Ok(result);
         };
         let Ok((revision, checks)) = eligible_checks(self, &target) else {
-            result.detail = "WTS could not read the saved verification plan. Open workspace verification to inspect the plan.".to_owned();
+            result.detail = "Could not read the saved verification plan. Open workspace verification to inspect the plan.".to_owned();
             return Ok(result);
         };
         result.checks = checks
@@ -516,7 +516,7 @@ impl LocalWtsService {
             result.detail = "No saved host-approved check targets this repository. Open workspace verification to inspect or add a supported check.".to_owned();
         } else {
             result.state = AgentTurnChecksState::Ready;
-            result.detail = "Run a saved check against the task's recorded file state. WTS compares the files and Git state before and after the check.".to_owned();
+            result.detail = "Run a saved check against the task's recorded file state. Files and Git state are compared before and after the check.".to_owned();
         }
         Ok(result)
     }
@@ -644,7 +644,7 @@ impl LocalWtsService {
                     exit_code: None,
                     output: String::new(),
                     output_truncated: false,
-                    detail: "WTS prepares the saved check.".to_owned(),
+                    detail: "Preparing the saved check…".to_owned(),
                 },
             };
             save_run(store, &receipt, &record)?;

@@ -1821,7 +1821,7 @@ where
                 cached,
                 fetched_at,
                 Some(code),
-                "GitLab is unavailable. WTS shows the last verified review list.",
+                "GitLab is unavailable. Showing the last verified review list.",
             )
         } else {
             review_inbox(state, Vec::new(), None, Some(code), detail)
@@ -1907,7 +1907,7 @@ where
                 cached,
                 fetched_at,
                 Some(code),
-                "GitLab is unavailable. WTS shows the last verified merge request status.",
+                "GitLab is unavailable. Showing the last verified merge request status.",
             )
         } else {
             inbox(state, Vec::new(), None, Some(code), detail)

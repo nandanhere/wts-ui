@@ -36,6 +36,7 @@ pub enum CommitCandidateKind {
     Dockerfile,
     EnvironmentExample,
     ComposeManifest,
+    UwsgiConfig,
 }
 
 struct TreeEntry {
@@ -152,6 +153,18 @@ fn parse_tree_entries(bytes: &[u8]) -> Result<Vec<TreeEntry>, GitError> {
 
 fn classify_path(path: &str) -> Option<CommitCandidateKind> {
     let name = path.rsplit('/').next()?;
+    let lower = name.to_ascii_lowercase();
+    // Many repositories name Dockerfiles in lowercase or with a suffix, such
+    // as `dockerfile` or `dockerfile-api`.
+    if lower == "dockerfile"
+        || (lower.starts_with("dockerfile") && matches!(lower.as_bytes().get(10), Some(b'.' | b'-' | b'_')) && lower.len() > 11)
+        || (lower.ends_with(".dockerfile") && lower.len() > ".dockerfile".len())
+    {
+        return Some(CommitCandidateKind::Dockerfile);
+    }
+    if lower.ends_with(".ini") && lower.contains("uwsgi") {
+        return Some(CommitCandidateKind::UwsgiConfig);
+    }
     match name {
         "wts-stack.json" => Some(CommitCandidateKind::StackManifest),
         "package.json" => Some(CommitCandidateKind::PackageManifest),
@@ -195,6 +208,20 @@ mod tests {
             classify_path("Dockerfile.dev"),
             Some(CommitCandidateKind::Dockerfile)
         );
+        assert_eq!(
+            classify_path("api/dockerfile"),
+            Some(CommitCandidateKind::Dockerfile)
+        );
+        assert_eq!(
+            classify_path("dockerfile-api"),
+            Some(CommitCandidateKind::Dockerfile)
+        );
+        assert_eq!(
+            classify_path("api/uwsgiconfig.ini"),
+            Some(CommitCandidateKind::UwsgiConfig)
+        );
+        assert_eq!(classify_path("dockerfiles"), None);
+        assert_eq!(classify_path("settings.ini"), None);
         assert_eq!(classify_path(".env"), None);
         assert_eq!(classify_path("secrets.env.example.bak"), None);
     }

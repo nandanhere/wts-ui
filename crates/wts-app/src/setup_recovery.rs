@@ -384,7 +384,7 @@ impl LocalWtsService {
                 effect_digest: format!("sha256:{}", hex::encode(Sha256::digest(view.workspace_id.as_bytes()))),
                 ready: false,
                 paths: vec![view.workspace_display_path.clone(), self.inner.setup_attempts.path(view.workspace_id).display().to_string()],
-                blockers: vec!["WTS cannot read the saved setup record. Preserve the workspace files and inspect the recovery record.".to_owned()],
+                blockers: vec!["Cannot read the saved setup record. Preserve the workspace files and inspect the recovery record.".to_owned()],
             }),
         }
     }
@@ -422,14 +422,14 @@ impl LocalWtsService {
             if self.read_materialization_receipt(view.workspace_id).is_ok() {
                 return Ok(None);
             }
-            blockers.push("The workspace has a success receipt that WTS cannot verify. Preserve its files and inspect that receipt.".to_owned());
+            blockers.push("The workspace success receipt cannot be verified. Preserve its files and inspect that receipt.".to_owned());
         }
         let root_exists = match root.symlink_metadata() {
             Ok(_) => true,
             Err(error) if error.kind() == io::ErrorKind::NotFound => false,
             Err(_) => {
                 blockers.push(
-                    "WTS cannot inspect the workspace root. Check access to that path.".to_owned(),
+                    "Cannot inspect the workspace root. Check access to that path.".to_owned(),
                 );
                 true
             }
@@ -440,7 +440,7 @@ impl LocalWtsService {
                 .as_ref()
                 .is_none_or(|identity| !identity.matches(root))
         {
-            blockers.push("WTS cannot confirm the workspace root from this setup attempt. Move its files to a safe path before retry.".to_owned());
+            blockers.push("Cannot confirm the workspace root from this setup attempt. Move the files in the workspace root to a safe path before retry.".to_owned());
         }
         let catalog = self.repository_catalog()?;
         let mut known = BTreeSet::new();
@@ -487,7 +487,7 @@ impl LocalWtsService {
             if !attempt.confirmed.contains(&planned.repository_id)
                 || attempt.unconfirmed.as_deref() == Some(&planned.repository_id)
             {
-                blockers.push(format!("Setup stopped before WTS confirmed {}. Preserve this worktree and branch before retry.", target.display()));
+                blockers.push(format!("Setup stopped before {} was confirmed. Preserve this worktree and branch before retry.", target.display()));
                 continue;
             }
             let request = WorktreeRemovalRequest::new(
@@ -554,7 +554,7 @@ impl LocalWtsService {
                                 blockers.push(format!("{} changed or has no confirmed setup receipt. Move it to a safe path before cleanup.", root.join(&path).display()));
                             }
                         }
-                        Err(_) => blockers.push("WTS cannot verify the generated files. Preserve the workspace files before retry.".to_owned()),
+                        Err(_) => blockers.push("Cannot verify the generated files. Preserve the workspace files before retry.".to_owned()),
                     }
                 }
             }
@@ -565,7 +565,7 @@ impl LocalWtsService {
                     Ok(entries) => entries,
                     Err(_) => {
                         blockers.push(format!(
-                            "WTS cannot inspect {}. Check access to this path.",
+                            "Cannot inspect {}. Check access to this path.",
                             directory.display()
                         ));
                         break;
@@ -583,7 +583,7 @@ impl LocalWtsService {
                     paths.insert(path.clone());
                     if !known.contains(&path) {
                         blockers.push(format!(
-                            "WTS does not own {}. Move it to a safe path before cleanup.",
+                            "{} was not created by WTS. Move it to a safe path before cleanup.",
                             path.display()
                         ));
                         continue;
@@ -988,7 +988,7 @@ mod completion_boundary_tests {
             review
                 .blockers
                 .iter()
-                .any(|message| message.contains("before WTS confirmed"))
+                .any(|message| message.contains("was confirmed. Preserve"))
         );
         assert!(
             fixture

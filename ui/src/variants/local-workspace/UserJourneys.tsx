@@ -494,7 +494,7 @@ export function UserJourneys({
       {state === "loading" && !latest && (
         <div className={styles.loading} role="status">
           <i />
-          WTS reads local journey evidence…
+          Reading local journey evidence…
         </div>
       )}
 

@@ -272,7 +272,7 @@ export function useWorkspaceGitlabDiscussions({ client, workspaceId, materializa
               const snapshot = await client.getGitlabDiscussions(target.repositoryId, target.iid, target.workspaceId);
               if (!valid()) return;
               if ((replyRevisionsRef.current.get(target.key) ?? 0) !== replyRevision) continue;
-              if (snapshot.repositoryId !== target.repositoryId || snapshot.iid !== target.iid) throw new Error("WTS returned conversations for a different merge request.");
+              if (snapshot.repositoryId !== target.repositoryId || snapshot.iid !== target.iid) throw new Error("Received conversations for a different merge request.");
               updateEntries(entriesRef.current.map((entry) => entry.target.key !== target.key ? entry : {
                 target, snapshot, state: "ready", error: "", unreadCommentIds: unreadIds(snapshot, markersRef.current!),
               }));
@@ -280,7 +280,7 @@ export function useWorkspaceGitlabDiscussions({ client, workspaceId, materializa
               if (!valid()) return;
               if ((replyRevisionsRef.current.get(target.key) ?? 0) !== replyRevision) continue;
               updateEntries(entriesRef.current.map((entry) => entry.target.key !== target.key ? entry : {
-                ...entry, state: "error", error: cause instanceof Error ? cause.message : "WTS could not load GitLab conversations.",
+                ...entry, state: "error", error: cause instanceof Error ? cause.message : "Could not load GitLab conversations.",
                 ...(entry.snapshot ? { snapshot: { ...entry.snapshot, fromCache: true } } : {}),
               }));
             }
@@ -289,7 +289,7 @@ export function useWorkspaceGitlabDiscussions({ client, workspaceId, materializa
         await Promise.all(Array.from({ length: Math.min(4, targets.length) }, worker));
       } catch (cause) {
         if (valid()) {
-          const message = cause instanceof Error ? cause.message : "WTS could not find the workspace merge requests.";
+          const message = cause instanceof Error ? cause.message : "Could not find the workspace merge requests.";
           setError(message);
           updateEntries(entriesRef.current.map((entry) => ({
             ...entry, state: "error", error: message,

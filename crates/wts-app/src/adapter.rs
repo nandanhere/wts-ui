@@ -292,6 +292,8 @@ fn codex_extension_binary_path() -> &'static Path {
     Path::new("bin/codex")
 }
 
+const COPILOT_STANDALONE_EXECUTABLES: [&str; 2] = ["/opt/homebrew/bin/copilot", "/usr/local/bin/copilot"];
+
 fn resolve_copilot_executable(configured: &OsStr) -> OsString {
     let configured_str = configured.to_string_lossy();
     if configured_str != "copilot" {
@@ -407,12 +409,22 @@ impl ProcessWorkspaceAdapter {
             return None;
         }
         let executable = self.installed_executable(provider)?;
-        let args = args.iter().map(OsString::from).collect::<Vec<_>>();
-        let directory = std::env::temp_dir();
-        let output = run_bounded(executable, &args, &directory, MODEL_LISTING_TIMEOUT).ok()?;
-        output
-            .success
-            .then(|| String::from_utf8_lossy(&output.stdout).into_owned())
+        let path = std::env::var_os("PATH");
+        let output = run_listing_command(&executable, args, path.clone());
+        if provider != AgentProvider::Copilot || output.as_deref().is_some_and(lists_copilot_models) {
+            return output;
+        }
+        // The VS Code Copilot wrapper prints an install prompt and exits with
+        // success when the standalone CLI is not beside it. Ask a standalone
+        // Copilot CLI for the model list instead.
+        COPILOT_STANDALONE_EXECUTABLES
+            .iter()
+            .map(Path::new)
+            .filter(|candidate| *candidate != executable && candidate.exists())
+            .find_map(|candidate| {
+                run_listing_command(candidate, args, path.clone()).filter(|text| lists_copilot_models(text))
+            })
+            .or(output)
     }
 
     pub fn with_graphify_executable(mut self, executable: impl Into<OsString>) -> Self {
@@ -877,6 +889,53 @@ fn finish_collaboration_reader(
         }
     });
     Ok(())
+}
+
+/// Runs a model listing command. A version manager shim (asdf, mise) can find
+/// no runtime outside a project folder, so a Node CLI such as Copilot fails
+/// before it prints its models. WTS then runs the command again with the shim
+/// folders removed from PATH.
+fn run_listing_command(executable: &Path, args: &[&str], path: Option<OsString>) -> Option<String> {
+    let args = args.iter().map(OsString::from).collect::<Vec<_>>();
+    let directory = std::env::temp_dir();
+    let run_with_path = |path: &OsStr| {
+        let mut path_assignment = OsString::from("PATH=");
+        path_assignment.push(path);
+        let mut env_args = vec![path_assignment, executable.as_os_str().to_owned()];
+        env_args.extend(args.iter().cloned());
+        run_bounded("/usr/bin/env", &env_args, &directory, MODEL_LISTING_TIMEOUT).ok()
+    };
+    let output = match path.as_deref() {
+        Some(path) => run_with_path(path)?,
+        None => run_bounded(executable, &args, &directory, MODEL_LISTING_TIMEOUT).ok()?,
+    };
+    if output.success {
+        return Some(String::from_utf8_lossy(&output.stdout).into_owned());
+    }
+    let without_shims = path_without_version_manager_shims(&path?)?;
+    let output = run_with_path(&without_shims)?;
+    output
+        .success
+        .then(|| String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+/// Returns PATH without version manager shim folders, or None when PATH has none.
+fn lists_copilot_models(output: &str) -> bool {
+    !crate::agent_models::parse_copilot_help_models(output).is_empty()
+}
+
+/// Returns PATH without version manager shim folders, or None when PATH has none.
+pub(crate) fn path_without_version_manager_shims(path: &OsStr) -> Option<OsString> {
+    let entries = std::env::split_paths(path).collect::<Vec<_>>();
+    let kept = entries
+        .iter()
+        .filter(|entry| !entry.ends_with("shims"))
+        .cloned()
+        .collect::<Vec<_>>();
+    if kept.len() == entries.len() {
+        return None;
+    }
+    std::env::join_paths(kept).ok()
 }
 
 fn run_bounded(
@@ -1417,6 +1476,41 @@ mod tests {
             resolve_codex_executable_from_home(configured, None),
             configured,
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn model_listing_retries_without_version_manager_shims() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = tempdir().expect("temporary directory");
+        let shims = directory.path().join("asdf/shims");
+        let tools = directory.path().join("bin");
+        fs::create_dir_all(&shims).expect("shims");
+        fs::create_dir_all(&tools).expect("tools");
+        // The fake CLI fails like an asdf shim with no runtime version when
+        // the shim folder is on PATH, and prints its model list otherwise.
+        let executable = tools.join("copilot");
+        fs::write(
+            &executable,
+            format!(
+                "#!/bin/sh\ncase \":$PATH:\" in *\":{}:\"*) echo 'No version is set for command node' >&2; exit 126;; esac\nprintf '  `model`: AI model\\n    - \"claude-sonnet-5\"\\n'\n",
+                shims.display()
+            ),
+        )
+        .expect("fake CLI");
+        fs::set_permissions(&executable, fs::Permissions::from_mode(0o755)).expect("permissions");
+        let path = std::env::join_paths([shims.as_path(), tools.as_path(), Path::new("/usr/bin"), Path::new("/bin")])
+            .expect("PATH");
+
+        let output = run_listing_command(&executable, &["help", "config"], Some(path.clone()))
+            .expect("model list after retry");
+        assert_eq!(
+            crate::agent_models::parse_copilot_help_models(&output),
+            vec!["claude-sonnet-5"],
+        );
+        let unshimmed = std::env::join_paths([tools.as_path(), Path::new("/usr/bin")]).expect("PATH");
+        assert_eq!(path_without_version_manager_shims(&unshimmed), None);
     }
 
     #[cfg(unix)]

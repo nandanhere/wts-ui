@@ -861,7 +861,7 @@ describe("HTTP workspace client", () => {
   it("waits for a busy local host before it shows a read failure", async () => {
     vi.useFakeTimers();
     try {
-      const busy = () => new Response(JSON.stringify({ error: { code: "operation_capacity_exhausted", message: "WTS is already running the maximum number of local operations. Retry shortly." } }), {
+      const busy = () => new Response(JSON.stringify({ error: { code: "operation_capacity_exhausted", message: "Too many local operations are running. Retry shortly." } }), {
         status: 429,
         headers: { "Content-Type": "application/json", "Retry-After": "1" },
       });
@@ -1463,7 +1463,7 @@ describe("HTTP workspace client", () => {
       await expect(client.listWorkspaces()).rejects.toMatchObject({
         code: "invalid_response",
         message:
-          "WTS returned an invalid workspace payload at workspaceList.workspaces[0].repositories[0].repositoryId",
+          "Received an invalid workspace payload at workspaceList.workspaces[0].repositories[0].repositoryId",
       });
     },
   );
@@ -1632,7 +1632,7 @@ describe("HTTP workspace client", () => {
     await expect(client.listRepositories()).rejects.toMatchObject({
       code: "invalid_response",
       message:
-        "WTS returned an invalid workspace payload at repositoryCatalog.repositories[0].checkoutLeaf",
+        "Received an invalid workspace payload at repositoryCatalog.repositories[0].checkoutLeaf",
     });
   });
 
@@ -1823,7 +1823,7 @@ describe("HTTP workspace client", () => {
     ).rejects.toMatchObject({
       code: "invalid_response",
       message:
-        "WTS returned an invalid workspace payload at workspaceRemovalPreflight",
+        "Received an invalid workspace payload at workspaceRemovalPreflight",
     });
   });
 
@@ -2095,7 +2095,7 @@ describe("HTTP workspace client", () => {
     ).rejects.toMatchObject({
       code: "invalid_response",
       message:
-        "WTS returned an invalid workspace payload at runtimeAnalysis.services[0].executablePath",
+        "Received an invalid workspace payload at runtimeAnalysis.services[0].executablePath",
     });
   });
 
@@ -2232,7 +2232,7 @@ describe("HTTP workspace client", () => {
       ).rejects.toMatchObject({
         code: "invalid_response",
         message:
-          "WTS returned an invalid workspace payload at codeWorkspaceFileImport.folders[0].rawPath",
+          "Received an invalid workspace payload at codeWorkspaceFileImport.folders[0].rawPath",
       });
     },
   );
@@ -2267,7 +2267,7 @@ describe("HTTP workspace client", () => {
       ).rejects.toMatchObject({
         code: "invalid_response",
         message:
-          "WTS returned an invalid workspace payload at codeWorkspaceFileImport.repositories[0].repositoryId",
+          "Received an invalid workspace payload at codeWorkspaceFileImport.repositories[0].repositoryId",
       });
     },
   );
@@ -2351,7 +2351,7 @@ describe("HTTP workspace client", () => {
     ).rejects.toMatchObject({
       code: "invalid_response",
       message:
-        "WTS returned an invalid workspace payload at codeWorkspaceFileImport.folders[0].status",
+        "Received an invalid workspace payload at codeWorkspaceFileImport.folders[0].status",
     });
   });
 
@@ -2385,7 +2385,7 @@ describe("HTTP workspace client", () => {
       ).rejects.toMatchObject({
         code: "invalid_response",
         message:
-          "WTS returned an invalid workspace payload at codeWorkspaceFileImport.folders[0].repositoryId",
+          "Received an invalid workspace payload at codeWorkspaceFileImport.folders[0].repositoryId",
       });
     },
   );
@@ -2421,7 +2421,7 @@ describe("HTTP workspace client", () => {
     ).rejects.toMatchObject({
       code: "invalid_response",
       message:
-        "WTS returned an invalid workspace payload at codeWorkspaceFileImport.diagnostics.folders[0].reason",
+        "Received an invalid workspace payload at codeWorkspaceFileImport.diagnostics.folders[0].reason",
     });
   });
 
@@ -2579,7 +2579,7 @@ describe("HTTP workspace client", () => {
     ).rejects.toMatchObject({
       code: "invalid_response",
       message:
-        "WTS returned an invalid workspace payload at workspaceCliLaunchResult.sessionId",
+        "Received an invalid workspace payload at workspaceCliLaunchResult.sessionId",
     });
   });
 
@@ -2676,7 +2676,7 @@ describe("HTTP workspace client", () => {
     ).rejects.toMatchObject({
       code: "invalid_response",
       message:
-        "WTS returned an invalid workspace payload at openRepositoryBaseResult.identity",
+        "Received an invalid workspace payload at openRepositoryBaseResult.identity",
     });
   });
 
@@ -2773,7 +2773,7 @@ describe("HTTP workspace client", () => {
         client.openRepositoryBase("repo_checkout", "main"),
       ).rejects.toMatchObject({
         code: "invalid_response",
-        message: `WTS returned an invalid workspace payload at openRepositoryBaseResult.${field}`,
+        message: `Received an invalid workspace payload at openRepositoryBaseResult.${field}`,
       });
     },
   );
@@ -2798,7 +2798,7 @@ describe("HTTP workspace client", () => {
     ).rejects.toMatchObject({
       code: "invalid_response",
       message:
-        "WTS returned an invalid workspace payload at openRepositoryBaseResult.commitOid",
+        "Received an invalid workspace payload at openRepositoryBaseResult.commitOid",
     });
   });
 
@@ -2845,7 +2845,7 @@ describe("HTTP workspace client", () => {
     await expect(client.verifyOpenProject()).rejects.toMatchObject({
       code: "invalid_response",
       message:
-        "WTS returned an invalid workspace payload at openProjectVerification.accessToken",
+        "Received an invalid workspace payload at openProjectVerification.accessToken",
     });
   });
 
@@ -2879,7 +2879,7 @@ describe("HTTP workspace client", () => {
     await expect(client.importJiraIssue("PLATFORM-42")).rejects.toMatchObject({
       code: "invalid_response",
       message:
-        "WTS returned an invalid workspace payload at jiraIssueImport.repositoryRecommendations[0]",
+        "Received an invalid workspace payload at jiraIssueImport.repositoryRecommendations[0]",
     });
   });
 
@@ -3246,7 +3246,7 @@ describe("HTTP workspace client", () => {
     ).rejects.toMatchObject({
       code: "invalid_response",
       message:
-        "WTS returned an invalid workspace payload at workspaceTestRuns.runs[0]",
+        "Received an invalid workspace payload at workspaceTestRuns.runs[0]",
     });
   });
 
@@ -3273,7 +3273,7 @@ describe("HTTP workspace client", () => {
     ).rejects.toMatchObject({
       code: "invalid_response",
       message:
-        "WTS returned an invalid workspace payload at workspaceTestRunDetail.identity",
+        "Received an invalid workspace payload at workspaceTestRunDetail.identity",
     });
   });
 
@@ -3318,7 +3318,7 @@ describe("HTTP workspace client", () => {
     await expect(client.listWorkspaces()).rejects.toMatchObject({
       code: "invalid_response",
       message:
-        "WTS returned an invalid workspace payload at workspaceList.workspaceRootId",
+        "Received an invalid workspace payload at workspaceList.workspaceRootId",
     });
   });
 
@@ -3348,7 +3348,7 @@ describe("HTTP workspace client", () => {
     await expect(client.listWorkspaces()).rejects.toMatchObject({
       code: "invalid_response",
       message:
-        "WTS returned an invalid workspace payload at workspaceList.workspaces[0].lifecycle",
+        "Received an invalid workspace payload at workspaceList.workspaces[0].lifecycle",
     });
   });
 
@@ -3374,7 +3374,7 @@ describe("HTTP workspace client", () => {
     await expect(client.getSetupSnapshot()).rejects.toMatchObject({
       code: "invalid_response",
       message:
-        "WTS returned an invalid workspace payload at setupSnapshot.integrations[0].verificationKind",
+        "Received an invalid workspace payload at setupSnapshot.integrations[0].verificationKind",
     });
   });
 

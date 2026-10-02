@@ -66,7 +66,7 @@ describe("Workspace setup failure recovery", () => {
     const user = userEvent.setup();
     const workspace = workspaceFixture();
     const path = `${workspace.workspaceDisplayPath}/WTS.md`;
-    const message = `WTS cannot create its files at \`${path}\`. Preserve the existing contents and move this path outside the workspace. Select Check again.`;
+    const message = `Cannot create workspace files at \`${path}\`. Preserve the existing contents and move this path outside the workspace. Select Check again.`;
     const preflight: WorkspacePreflight = { workspaceId: workspace.workspaceId, workspaceDisplayPath: workspace.workspaceDisplayPath, codeWorkspaceDisplayPath: `${workspace.workspaceDisplayPath}/wts.code-workspace`, branchName: "wts/setup", ready: false, effectDigest: "sha256:blocked", repositories: [], blockers: [{ code: "targetConflict", message, ...(repositoryScoped ? { repositoryId: "repo_checkout", repositoryLabel: "checkout-api" } : {}) }], warnings: [], graph: { status: "notStarted", detail: "Not started." } };
     const fake = fakeWorkspaceClient({ list: workspaceListFixture([workspace]), preflight,
       removalPreflight: { workspaceId: workspace.workspaceId, workspaceDisplayPath: workspace.workspaceDisplayPath, kind: "savedPlan", ready: false, effectDigest: "sha256:removal", worktrees: [], generatedPaths: [], protectedPaths: [], retainedBranches: [], warnings: [], blockers: [{ code: "unexpectedPath", message: "A preserved path needs inspection.", displayPath: path }] },
@@ -142,7 +142,7 @@ describe("Reviewed setup cleanup", () => {
     const setup = await openSetup(user, fake.client);
     await user.click(setup.getByText("Review 1 setup path"));
     expect(setup.getByText(path)).toBeVisible();
-    expect(setup.getByText(/WTS keeps your saved plan/)).toBeVisible();
+    expect(setup.getByText(/Your saved plan is kept/)).toBeVisible();
     expect(fake.recoverWorkspaceSetup).not.toHaveBeenCalled();
     expect(setup.queryByRole("button", { name: "Create workspace" })).not.toBeInTheDocument();
     await user.dblClick(setup.getByRole("button", { name: "Clean setup files" }));

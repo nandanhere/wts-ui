@@ -86,6 +86,13 @@ type CreateStep =
 
 type SourceMode = "issue" | "workspace" | "codeWorkspace" | "set";
 
+/** Name a repository workspace after its repositories, such as "senzu + jellyfish". */
+export function defaultRepositorySetName(repositoryNames: string[]): string {
+  if (repositoryNames.length === 0) return "New workspace";
+  if (repositoryNames.length <= 2) return repositoryNames.join(" + ");
+  return `${repositoryNames[0]} + ${repositoryNames.length - 1} more`;
+}
+
 type IssueProvider = "jira" | "openProject";
 
 type CodeWorkspaceRepositoryAddMode = "existing" | "clone";
@@ -262,10 +269,10 @@ function CodeWorkspaceDiagnosticsPanel({
 
       <div className={styles.importDiagnosticsBody}>
         <p className={styles.importDiagnosticsBoundary}>
-          WTS searches a bounded set of nested folders under the configured
+          Searches a bounded set of nested folders under the configured
           trusted source roots. Absolute paths can match exactly. Because the
           browser does not reveal the selected file’s parent directory, relative
-          paths remain non-authoritative lookup hints: WTS first compares their
+          paths remain non-authoritative lookup hints. The search first compares their
           safe path suffix inside the trusted catalog, then tries the final
           folder name and optional VS Code name. A workspace file never grants
           filesystem authority outside those roots.
@@ -513,6 +520,7 @@ export function NewWorkspaceDialog({
   const [codeWorkspaceImportMessage, setCodeWorkspaceImportMessage] =
     useState("");
   const [codeWorkspaceTitle, setCodeWorkspaceTitle] = useState("");
+  const [repositorySetName, setRepositorySetName] = useState("");
   const [codeWorkspaceAddedRepositoryIds, setCodeWorkspaceAddedRepositoryIds] =
     useState<string[]>([]);
   const [codeWorkspaceRepositoryToAdd, setCodeWorkspaceRepositoryToAdd] =
@@ -639,6 +647,7 @@ export function NewWorkspaceDialog({
       setCodeWorkspaceImportState("idle");
       setCodeWorkspaceImportMessage("");
       setCodeWorkspaceTitle("");
+      setRepositorySetName("");
       setCodeWorkspaceAddedRepositoryIds([]);
       setCodeWorkspaceRepositoryToAdd("");
       setCodeWorkspaceRepositoryAddMode("existing");
@@ -1235,7 +1244,7 @@ export function NewWorkspaceDialog({
         ? (codeWorkspaceImport?.suggestedRepositorySetLabel ?? "")
         : initialReviewWorkspace
           ? `Review ${initialReviewWorkspace.preparation.repository.label} !${initialReviewWorkspace.review.number}`
-          : `Local repositories · ${enteredRepositoryNames[0] ?? "workspace"}`;
+          : repositorySetName.trim() || defaultRepositorySetName(enteredRepositoryNames);
   const draftTitle = isIssueSource
     ? issueProvider === "jira"
       ? (jiraImport?.summary ?? `Work on ${draftKey || "Jira issue"}`)
@@ -1249,9 +1258,7 @@ export function NewWorkspaceDialog({
         ? codeWorkspaceTitle.trim()
       : initialReviewWorkspace
         ? `Review ${initialReviewWorkspace.review.repository} !${initialReviewWorkspace.review.number}`
-        : `Repositories: ${
-            enteredRepositoryNames.slice(0, 2).join(" + ") || "local work"
-          }`;
+        : repositorySetName.trim() || defaultRepositorySetName(enteredRepositoryNames);
   const importedIssue =
     issueProvider === "jira" && jiraImport
       ? {
@@ -1402,7 +1409,7 @@ export function NewWorkspaceDialog({
       }
       if (issueKeyFrom(imported.issueKey) !== jiraKey) {
         throw new Error(
-          `Jira returned ${imported.issueKey} while WTS was importing ${jiraKey}. Try the import again.`,
+          `Jira returned ${imported.issueKey} during the import of ${jiraKey}. Try the import again.`,
         );
       }
       const repositoriesWereEdited =
@@ -1475,7 +1482,7 @@ export function NewWorkspaceDialog({
       }
       if (!openProjectImportMatchesReference(imported, openProjectReference)) {
         throw new Error(
-          `OpenProject returned ${imported.displayId} while WTS was importing ${openProjectReference}. Try the import again.`,
+          `OpenProject returned ${imported.displayId} during the import of ${openProjectReference}. Try the import again.`,
         );
       }
       const repositoriesWereEdited =
@@ -1521,6 +1528,7 @@ export function NewWorkspaceDialog({
     setCodeWorkspaceImport(null);
     codeWorkspaceImportIdRef.current = null;
     setCodeWorkspaceTitle("");
+      setRepositorySetName("");
     setCodeWorkspaceAddedRepositoryIds([]);
     setCodeWorkspaceRepositoryToAdd("");
     repositoryCloneGenerationRef.current += 1;
@@ -1594,7 +1602,7 @@ export function NewWorkspaceDialog({
       }
       if (imported.fileName !== file.name) {
         throw new Error(
-          `WTS returned ${imported.fileName} while importing ${file.name}. Choose the file again.`,
+          `Received ${imported.fileName} while importing ${file.name}. Choose the file again.`,
         );
       }
 
@@ -1994,7 +2002,7 @@ export function NewWorkspaceDialog({
         result.host !== target.host ||
         !result.accepted
       ) {
-        throw new Error("WTS returned a mismatched repository base handoff.");
+        throw new Error("Received a mismatched repository base handoff.");
       }
       setRepositoryBaseNotice({
         kind: "success",
@@ -2088,7 +2096,7 @@ export function NewWorkspaceDialog({
       setRuntimeAnalysis(null);
       setRuntimeServiceDrafts(new Map());
       setRuntimeAnalysisError(
-        `WTS needs one trusted local repository match for ${
+        `One trusted local repository match is required for ${
           runtimeAnalysisPreparation.unresolvedLabels.length === 1
             ? runtimeAnalysisPreparation.unresolvedLabels[0]
             : runtimeAnalysisPreparation.unresolvedLabels.join(", ")
@@ -2160,7 +2168,7 @@ export function NewWorkspaceDialog({
           ? `${error.message} (${error.code})`
           : error instanceof Error
             ? error.message
-            : "WTS could not analyze the selected repository bases.",
+            : "Could not analyze the selected repository bases.",
       );
       setRuntimeAnalysisState("error");
     }
@@ -2343,7 +2351,7 @@ export function NewWorkspaceDialog({
           !workspaceIntentMatches(result.workspace.intent, request.intent))
       ) {
         throw new Error(
-          "WTS did not return a separate revised workspace. The original plan remains unchanged; review the request and retry.",
+          "No separate revised workspace was returned. The original plan remains unchanged; review the request and retry.",
         );
       }
       activeSaveRef.current = false;
@@ -2372,7 +2380,7 @@ export function NewWorkspaceDialog({
     activeSaveRef.current = false;
     setSaveError("");
     setSaveWarning(
-      "WTS stopped waiting, but the original save may still complete. Retry from this dialog to reconcile it with the same request identity.",
+      "Stopped waiting. The original save may still complete. Retry from this dialog to reconcile it with the same request identity.",
     );
     setStep("manifest");
   };
@@ -2422,7 +2430,7 @@ export function NewWorkspaceDialog({
               : "Review the durable plan. No Git or process effects happen yet."
             : step === "saving"
               ? saveError
-                ? "WTS could not confirm the registry write. Retry safely with the same request identity, or go back and review the plan."
+                ? "Could not confirm the registry write. Retry safely with the same request identity, or go back and review the plan."
                 : isRevisionMode
                   ? "Saving a separate revised plan to your local workspace registry."
                   : "Saving the plan to your local workspace registry."
@@ -2610,6 +2618,7 @@ export function NewWorkspaceDialog({
                       setCodeWorkspaceImportState("idle");
                       setCodeWorkspaceImportMessage("");
                       setCodeWorkspaceTitle("");
+      setRepositorySetName("");
                       setCodeWorkspaceAddedRepositoryIds([]);
                       setCodeWorkspaceClonedBaseRefs({});
                       setCodeWorkspaceRepositoryToAdd("");
@@ -2790,7 +2799,7 @@ export function NewWorkspaceDialog({
                     </small>
                     {!isRevisionMode && !workspaces.length && (
                       <p className={styles.templateEmpty}>
-                        No saved WTS plans yet. Start from an issue, a
+                        No saved plans yet. Start from an issue,
                         repositories, or a VS Code workspace file first.
                       </p>
                     )}
@@ -2847,7 +2856,7 @@ export function NewWorkspaceDialog({
                           <span>
                             {isRevisionMode && <b>Original retained</b>}
                             {isRevisionMode
-                              ? `${templateWorkspace.key} and its existing worktrees, branches, changes, and sessions remain untouched. WTS will save a separate plan with its own path.`
+                              ? `${templateWorkspace.key} and its existing worktrees, branches, changes, and sessions remain untouched. Saves a separate plan with its own path.`
                               : "This copies the plan—not branches, uncommitted changes, agent history, or running processes."}
                           </span>
                         </p>
@@ -2886,7 +2895,7 @@ export function NewWorkspaceDialog({
                                 Add repositories
                               </h4>
                               <small>
-                                Extend this copied plan before WTS saves it.
+                                Extend this copied plan before you save it.
                               </small>
                             </div>
                             <b>
@@ -3039,7 +3048,7 @@ export function NewWorkspaceDialog({
                                   </span>
                                   <small>
                                     Git uses your credential helper or SSH agent.
-                                    WTS does not store credentials.
+                                    Credentials are not stored.
                                   </small>
                                 </div>
                                 {codeWorkspaceCloneMessage && (
@@ -3103,7 +3112,7 @@ export function NewWorkspaceDialog({
                       <span>
                         <b>Bring in an existing VS Code workspace</b>
                         <small>
-                          WTS finds local Git sources under your trusted
+                          Finds local Git sources under your trusted
                           repository roots, including nested checkouts.
                         </small>
                       </span>
@@ -3127,7 +3136,7 @@ export function NewWorkspaceDialog({
                       id="code-workspace-file-help"
                     >
                       Choose one <code>.code-workspace</code> file, up to 48
-                      KiB. WTS reads it once and treats its folder paths as
+                      KiB. The file is read one time, and its folder paths are
                       lookup hints for a bounded search under your trusted
                       repository roots. The file and existing checkouts are
                       never changed.
@@ -3455,7 +3464,7 @@ export function NewWorkspaceDialog({
                                   </span>
                                   <small>
                                     Uses your Git credential helper or SSH
-                                    agent. WTS does not store credentials.
+                                    agent. Credentials are not stored.
                                   </small>
                                 </div>
                                 {codeWorkspaceCloneMessage && (
@@ -3687,7 +3696,7 @@ export function NewWorkspaceDialog({
                           </div>
                           <div className={styles.repositoryCloneHelp}>
                             <span>
-                              WTS lists only repositories discovered under your
+                              Lists only repositories discovered under your
                               trusted repository roots.
                             </span>
                             <small>
@@ -3806,6 +3815,21 @@ export function NewWorkspaceDialog({
                         ))}
                       </div>
                     )}
+                    <div className={styles.fileTitleField}>
+                      <Label htmlFor="repository-set-name">Workspace name</Label>
+                      <div className={styles.inputWithIcon}>
+                        <Glyph name="file" size={17} />
+                        <Input
+                          aria-label="Workspace name"
+                          id="repository-set-name"
+                          maxLength={120}
+                          onChange={(event) => setRepositorySetName(event.target.value)}
+                          placeholder={defaultRepositorySetName(enteredRepositoryNames)}
+                          value={repositorySetName}
+                        />
+                      </div>
+                      <small>Leave empty to use the repository names.</small>
+                    </div>
                     <footer>
                       <span>
                         <b>Branch selection comes next</b>
@@ -4586,7 +4610,7 @@ export function NewWorkspaceDialog({
                   <span>
                     {isCodeWorkspaceSource
                       ? `Read-only preflight verifies each trusted source, base commit, branch conflict, and target path. Creating the workspace later adds separate managed worktrees under ${workspaceRootDisplayPath}; preflight does not fetch or edit the source checkouts.`
-                      : "WTS resolves these labels against the local catalog and verifies base commits, branch conflicts, and safe target paths during the read-only preflight."}
+                      : "The read-only preflight resolves these labels against the local catalog and verifies base commits, branch conflicts, and safe target paths."}
                   </span>
                 </p>
               </div>
@@ -4611,7 +4635,7 @@ export function NewWorkspaceDialog({
                     </h3>
                     <p>
                       {runtimeAnalysisState === "ready" && runtimeAnalysis?.services.length === 0
-                        ? "WTS found no services at the selected commits. Select Review plan to continue without services."
+                        ? "No services found at the selected commits. Select Review plan to continue without services."
                         : "Select the services that this task needs. You can also continue without services."}
                     </p>
                   </div>
@@ -4645,7 +4669,7 @@ export function NewWorkspaceDialog({
                         {runtimeAnalysisElapsedSeconds}s
                       </b>
                       <small>
-                        WTS checks the selected files for service commands and ports.
+                        Checks the selected files for service commands and ports.
                       </small>
                     </div>
                   </div>
@@ -4998,7 +5022,7 @@ export function NewWorkspaceDialog({
                     {runtimeAnalysis.services.length > 0 && <p className={styles.runtimeAssignmentNote}>
                       <Glyph name="check" size={14} />
                       <span>
-                        This plan stores preferred ports. WTS assigns the actual
+                        This plan stores preferred ports. The actual
                         local ports when you start the runtime.
                       </span>
                     </p>}
@@ -5160,7 +5184,7 @@ export function NewWorkspaceDialog({
                           </SelectMenu>
                         </label>
                         <p>
-                          WTS creates these files once. They remain editable
+                          These files are created one time. They remain editable
                           user content and are never silently removed.
                         </p>
                       </div>
@@ -5187,7 +5211,7 @@ export function NewWorkspaceDialog({
                         <dt>Root</dt>
                         <dd>
                           <code>{workspaceRootDisplayPath}</code>
-                          <small>WTS assigns the final folder on save</small>
+                          <small>The final folder is assigned on save</small>
                         </dd>
                       </div>
                       <div>
@@ -5350,7 +5374,7 @@ export function NewWorkspaceDialog({
                   </p>
                   {saveError && (
                     <small>
-                      Retrying uses the same request identity so WTS can safely
+                      Retrying uses the same request identity to safely
                       reconcile an uncertain result.
                     </small>
                   )}

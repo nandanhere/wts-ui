@@ -989,7 +989,7 @@ impl EvidenceStore {
             proposed_checks: document.proposed_checks,
             validation_flows: document.validation_flows,
             detail: if reported {
-                "Agent-authored notes loaded. WTS has not independently verified them.".to_owned()
+                "Agent-authored notes loaded. They are not independently verified.".to_owned()
             } else {
                 "No agent report has been published.".to_owned()
             },

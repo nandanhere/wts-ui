@@ -195,7 +195,7 @@ export function OpenWorkspaceLauncher({
         result.terminal !== requestedTerminal ||
         result.workspaceDisplayPath !== materialization.workspaceDisplayPath
       ) {
-        throw new Error("WTS returned a mismatched CLI launch handoff.");
+        throw new Error("Received a mismatched CLI launch handoff.");
       }
       setState("accepted");
       setMessage(

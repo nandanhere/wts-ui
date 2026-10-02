@@ -13,6 +13,7 @@ use std::{
     io::{BufRead, BufReader, Read, Seek, SeekFrom},
     path::{Component, Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
+    sync::{Mutex, OnceLock},
 };
 use uuid::Uuid;
 
@@ -20,11 +21,13 @@ pub const AGENT_OBSERVATION_SCHEMA_VERSION: u32 = 1;
 const MAX_CANDIDATE_FILES: usize = 128;
 const MAX_DIRECTORY_DEPTH: usize = 4;
 const MAX_METADATA_LINE_BYTES: u64 = 2 * 1024 * 1024;
-const MAX_EVENT_TAIL_BYTES: u64 = 8 * 1024 * 1024;
+const MAX_EVENT_LINE_BYTES: u64 = 2 * 1024 * 1024;
 const STALE_AFTER_MS: i64 = 5 * 60 * 1_000;
 const RECENT_EVENT_GRACE_MS: i64 = 30 * 1_000;
 const MAX_AGENT_UPDATE_CHARS: usize = 800;
 const MAX_AGENT_UPDATE_LINES: usize = 4;
+/// WTS keeps at most this many recent agent work periods per session.
+const MAX_WORK_PERIODS: usize = 200;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -155,6 +158,20 @@ pub struct ObservedAgentSession {
     pub mr_link_proposals: Vec<AgentMrLinkProposal>,
     pub started_at_unix_ms: i64,
     pub last_event_at_unix_ms: i64,
+    /// Periods in which the agent worked on a turn, oldest first. Time between
+    /// turns, when the agent waits for the user, is not included.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub work_periods: Vec<AgentWorkPeriod>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AgentWorkPeriod {
+    pub started_at_unix_ms: i64,
+    pub ended_at_unix_ms: i64,
+    /// True while the turn has not finished. The end is then the last file change.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub ongoing: bool,
 }
 
 #[derive(Clone)]
@@ -304,6 +321,7 @@ fn observe_candidate(
     let workspace_id = matching_workspace_id(cwd, workspaces)?;
     let session_id = Uuid::parse_str(metadata.id.as_deref()?).ok()?;
     let event_state = read_event_state(&candidate.path)?;
+    let work_periods = event_state.work_periods(candidate.modified_at);
     let age = now.saturating_sub(candidate.modified_at);
     let status = if !event_state.active_turns.is_empty() {
         if age > STALE_AFTER_MS {
@@ -329,7 +347,7 @@ fn observe_candidate(
         source: AgentObservationSource::CodexVscodeRollout,
         status,
         activity: event_state.activity,
-        model: None,
+        model: event_state.model,
         latest_update: event_state.latest_update,
         update_kind: event_state.update_kind,
         needs_input: event_state.pending_input.values().next().cloned(),
@@ -337,6 +355,7 @@ fn observe_candidate(
         mr_link_proposals: event_state.mr_link_proposals,
         started_at_unix_ms: candidate.created_at,
         last_event_at_unix_ms: candidate.modified_at,
+        work_periods,
     })
 }
 
@@ -367,6 +386,7 @@ pub(crate) fn matching_workspace_id(cwd: &Path, workspaces: &[&(Uuid, PathBuf)])
 struct RolloutRecord {
     #[serde(rename = "type")]
     record_type: Option<String>,
+    timestamp: Option<String>,
     payload: Option<RolloutPayload>,
     #[serde(flatten)]
     _ignored: std::collections::BTreeMap<String, IgnoredAny>,
@@ -387,8 +407,12 @@ struct RolloutPayload {
     input: Option<String>,
     role: Option<String>,
     phase: Option<String>,
+    model: Option<String>,
     content: Option<Vec<RolloutContent>>,
     last_agent_message: Option<String>,
+    started_at: Option<i64>,
+    completed_at: Option<i64>,
+    duration_ms: Option<i64>,
     #[serde(flatten)]
     _ignored: std::collections::BTreeMap<String, IgnoredAny>,
 }
@@ -438,7 +462,7 @@ enum TerminalEvent {
     Interrupted,
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct EventState {
     active_turns: BTreeSet<String>,
     last_terminal: Option<TerminalEvent>,
@@ -449,37 +473,113 @@ struct EventState {
     pending_input: BTreeMap<String, AgentNeedsInput>,
     change_request_proposals: Vec<AgentChangeRequestProposal>,
     mr_link_proposals: Vec<AgentMrLinkProposal>,
+    turn_starts: BTreeMap<String, i64>,
+    finished_periods: Vec<AgentWorkPeriod>,
+    last_agent_signal: Option<i64>,
+    split_turns: BTreeSet<String>,
+    model: Option<String>,
+}
+
+impl EventState {
+    fn work_periods(&self, last_change_unix_ms: i64) -> Vec<AgentWorkPeriod> {
+        let mut periods = self.finished_periods.clone();
+        for (turn_id, started) in &self.turn_starts {
+            if self.active_turns.contains(turn_id) {
+                periods.push(AgentWorkPeriod {
+                    started_at_unix_ms: *started,
+                    ended_at_unix_ms: last_change_unix_ms.max(*started),
+                    ongoing: true,
+                });
+            }
+        }
+        periods.sort_by_key(|period| period.started_at_unix_ms);
+        let excess = periods.len().saturating_sub(MAX_WORK_PERIODS);
+        periods.drain(..excess);
+        periods
+    }
+}
+
+struct CachedEventState {
+    identity: (u64, u64),
+    modified: Option<SystemTime>,
+    length: u64,
+    offset: u64,
+    state: EventState,
 }
 
 fn read_event_state(path: &Path) -> Option<EventState> {
-    let mut file = File::open(path).ok()?;
-    let length = file.metadata().ok()?.len();
-    let start = length.saturating_sub(MAX_EVENT_TAIL_BYTES);
-    file.seek(SeekFrom::Start(start)).ok()?;
-    let mut bytes = Vec::with_capacity(length.saturating_sub(start) as usize);
-    file.read_to_end(&mut bytes).ok()?;
-    if start > 0 {
-        let newline = bytes.iter().position(|byte| *byte == b'\n')?;
-        bytes.drain(..=newline);
-    }
-
-    let mut state = EventState::default();
-    for line in bytes
-        .split(|byte| *byte == b'\n')
-        .filter(|line| !line.is_empty())
-    {
-        let Ok(record) = serde_json::from_slice::<RolloutRecord>(line) else {
+    static CACHE: OnceLock<Mutex<BTreeMap<PathBuf, CachedEventState>>> = OnceLock::new();
+    let file = File::open(path).ok()?;
+    let metadata = file.metadata().ok()?;
+    #[cfg(unix)]
+    let identity = {
+        use std::os::unix::fs::MetadataExt;
+        (metadata.dev(), metadata.ino())
+    };
+    #[cfg(not(unix))]
+    let identity = (0, metadata.created().ok().and_then(system_time_unix_ms).unwrap_or(0) as u64);
+    let length = metadata.len();
+    let modified = metadata.modified().ok();
+    let mut cache = CACHE.get_or_init(Default::default).lock().ok()?;
+    let cached = cache.remove(path).filter(|entry| {
+        entry.identity == identity && entry.length <= length
+            && (entry.length != length || entry.modified == modified)
+    });
+    let (mut offset, mut state) = cached.map(|entry| (entry.offset, entry.state)).unwrap_or_default();
+    let mut reader = BufReader::new(file);
+    reader.seek(SeekFrom::Start(offset)).ok()?;
+    let mut line = Vec::new();
+    loop {
+        line.clear();
+        let count = reader.by_ref().take(MAX_EVENT_LINE_BYTES + 1).read_until(b'\n', &mut line).ok()?;
+        if count == 0 { break; }
+        if line.last() != Some(&b'\n') {
+            if count as u64 <= MAX_EVENT_LINE_BYTES { break; }
+            // Skip large tool payloads without retaining them in memory.
+            if reader.skip_until(b'\n').ok()? == 0 { break; }
+            offset = reader.stream_position().ok()?;
+            continue;
+        }
+        offset = reader.stream_position().ok()?;
+        let Ok(record) = serde_json::from_slice::<RolloutRecord>(&line) else {
             continue;
         };
         let Some(payload) = record.payload else {
             continue;
         };
+        let was_waiting = !state.pending_input.is_empty();
+        let timestamp = record.timestamp.as_deref().and_then(rfc3339_to_unix_ms);
+        let agent_signal = record.record_type.as_deref() == Some("response_item")
+            && (payload.role.as_deref() == Some("assistant")
+                || matches!(payload.payload_type.as_deref(), Some("reasoning" | "function_call" | "custom_tool_call" | "function_call_output" | "custom_tool_call_output")));
         match (
             record.record_type.as_deref(),
             payload.payload_type.as_deref(),
         ) {
+            (Some("turn_context"), _) => {
+                if let Some(model) = payload.model.filter(|model| !model.is_empty() && model.len() <= 200 && !model.chars().any(char::is_control)) {
+                    state.model = Some(model);
+                }
+            }
             (Some("event_msg"), Some("task_started")) => {
                 if let Some(turn_id) = payload.turn_id {
+                    // A new turn supersedes an interrupted turn without a terminal event.
+                    if !state.active_turns.contains(&turn_id) {
+                        for (old_id, start) in std::mem::take(&mut state.turn_starts) {
+                            if state.active_turns.contains(&old_id)
+                                && let Some(end) = state.last_agent_signal
+                                && end >= start
+                            {
+                                state.finished_periods.push(AgentWorkPeriod {
+                                    started_at_unix_ms: start, ended_at_unix_ms: end, ongoing: false,
+                                });
+                            }
+                        }
+                        state.active_turns.clear();
+                    }
+                    if let Some(started) = payload.started_at.and_then(seconds_to_unix_ms).or_else(|| record.timestamp.as_deref().and_then(rfc3339_to_unix_ms)) {
+                        state.turn_starts.insert(turn_id.clone(), started);
+                    }
                     state.active_turns.insert(turn_id);
                 }
                 state.last_terminal = None;
@@ -492,8 +592,25 @@ fn read_event_state(path: &Path) -> Option<EventState> {
                 state.mr_link_proposals.clear();
             }
             (Some("event_msg"), Some("task_complete")) => {
-                if let Some(turn_id) = payload.turn_id {
-                    state.active_turns.remove(&turn_id);
+                if let Some(turn_id) = payload.turn_id.as_deref() {
+                    state.active_turns.remove(turn_id);
+                    let split = state.split_turns.remove(turn_id);
+                    let started = state.turn_starts.get(turn_id).copied().or_else(|| {
+                        if split { None } else { payload.started_at.and_then(seconds_to_unix_ms) }
+                    });
+                    let ended = payload.completed_at.and_then(seconds_to_unix_ms).or(timestamp).or_else(|| {
+                        started.zip(payload.duration_ms).map(|(start, duration)| start.saturating_add(duration))
+                    });
+                    if let (Some(start), Some(end)) = (started, ended)
+                        && end >= start
+                    {
+                        state.finished_periods.push(AgentWorkPeriod {
+                            started_at_unix_ms: start,
+                            ended_at_unix_ms: end,
+                            ongoing: false,
+                        });
+                    }
+                    state.turn_starts.remove(turn_id);
                 }
                 state.last_terminal = Some(TerminalEvent::Completed);
                 state.activity = None;
@@ -517,8 +634,20 @@ fn read_event_state(path: &Path) -> Option<EventState> {
             (Some("event_msg"), Some("turn_aborted")) => {
                 if let Some(turn_id) = payload.turn_id {
                     state.active_turns.remove(&turn_id);
+                    if let (Some(start), Some(end)) = (
+                        state.turn_starts.remove(&turn_id),
+                        record.timestamp.as_deref().and_then(rfc3339_to_unix_ms),
+                    ) && end >= start
+                    {
+                        state.finished_periods.push(AgentWorkPeriod {
+                            started_at_unix_ms: start,
+                            ended_at_unix_ms: end,
+                            ongoing: false,
+                        });
+                    }
                 } else {
                     state.active_turns.clear();
+                    state.turn_starts.clear();
                 }
                 state.last_terminal = Some(TerminalEvent::Interrupted);
                 state.activity = None;
@@ -621,7 +750,35 @@ fn read_event_state(path: &Path) -> Option<EventState> {
             }
             _ => {}
         }
+        let waiting = !state.pending_input.is_empty();
+        if !was_waiting && waiting {
+            if let Some(end) = timestamp {
+                for (turn_id, start) in std::mem::take(&mut state.turn_starts) {
+                    state.split_turns.insert(turn_id);
+                    if end >= start {
+                        state.finished_periods.push(AgentWorkPeriod {
+                            started_at_unix_ms: start, ended_at_unix_ms: end, ongoing: false,
+                        });
+                    }
+                }
+            }
+        } else if was_waiting && !waiting {
+            if let Some(start) = timestamp {
+                for turn_id in &state.active_turns {
+                    state.turn_starts.entry(turn_id.clone()).or_insert(start);
+                }
+            }
+        }
+        if agent_signal { state.last_agent_signal = timestamp.or(state.last_agent_signal); }
+        let excess = state.finished_periods.len().saturating_sub(MAX_WORK_PERIODS);
+        state.finished_periods.drain(..excess);
     }
+    while cache.len() >= MAX_CANDIDATE_FILES {
+        cache.pop_first();
+    }
+    cache.insert(path.to_owned(), CachedEventState {
+        identity, modified, length, offset, state: state.clone(),
+    });
     Some(state)
 }
 
@@ -709,6 +866,33 @@ fn system_time_unix_ms(time: SystemTime) -> Option<i64> {
     i64::try_from(duration.as_millis()).ok()
 }
 
+/// Codex writes turn times in whole Unix seconds.
+fn seconds_to_unix_ms(seconds: i64) -> Option<i64> {
+    (seconds > 0).then(|| seconds.checked_mul(1_000)).flatten()
+}
+
+/// Parses the UTC "2026-09-24T05:57:02.677Z" form that Codex writes.
+fn rfc3339_to_unix_ms(value: &str) -> Option<i64> {
+    let (date, time) = value.strip_suffix('Z')?.split_once('T')?;
+    let mut date_parts = date.splitn(3, '-').map(str::parse::<i64>);
+    let (year, month, day) = (date_parts.next()?.ok()?, date_parts.next()?.ok()?, date_parts.next()?.ok()?);
+    let (clock, fraction) = time.split_once('.').unwrap_or((time, "0"));
+    let mut clock_parts = clock.splitn(3, ':').map(str::parse::<i64>);
+    let (hour, minute, second) = (clock_parts.next()?.ok()?, clock_parts.next()?.ok()?, clock_parts.next()?.ok()?);
+    if !(1..=12).contains(&month) || !(1..=31).contains(&day) || hour > 23 || minute > 59 || second > 60 {
+        return None;
+    }
+    let millis = format!("{fraction:0<3}").get(..3)?.parse::<i64>().ok()?;
+    // Days from the civil date (Howard Hinnant's algorithm).
+    let (y, m) = if month <= 2 { (year - 1, month + 9) } else { (year, month - 3) };
+    let era = y.div_euclid(400);
+    let year_of_era = y - era * 400;
+    let day_of_year = (153 * m + 2) / 5 + day - 1;
+    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+    let days = era * 146_097 + day_of_era - 719_468;
+    Some(((days * 86_400 + hour * 3_600 + minute * 60 + second) * 1_000) + millis)
+}
+
 fn now_unix_ms() -> i64 {
     system_time_unix_ms(SystemTime::now()).unwrap_or(0)
 }
@@ -742,6 +926,68 @@ mod tests {
     }
 
     #[test]
+    fn excludes_time_waiting_for_an_answer_inside_a_turn() {
+        let fixture = TempDir::new().unwrap();
+        let records = [
+            serde_json::json!({"type":"event_msg","payload":{"type":"task_started","turn_id":"t","started_at":1000}}),
+            serde_json::json!({"timestamp":"1970-01-01T00:18:20Z","type":"event_msg","payload":{"type":"request_user_input","call_id":"q"}}),
+            serde_json::json!({"timestamp":"1970-01-01T00:28:20Z","type":"event_msg","payload":{"type":"user_input_response","call_id":"q"}}),
+            serde_json::json!({"type":"event_msg","payload":{"type":"task_complete","turn_id":"t","started_at":1000,"completed_at":1800}}),
+        ];
+        let path = write_rollout(fixture.path(), &(records.iter().map(ToString::to_string).collect::<Vec<_>>().join("\n") + "\n"));
+        let periods = read_event_state(&path).unwrap().work_periods(1_800_000);
+        assert_eq!(periods.len(), 2);
+        assert_eq!(periods.iter().map(|p| p.ended_at_unix_ms - p.started_at_unix_ms).sum::<i64>(), 200_000);
+        assert!(periods.iter().all(|p| !p.ongoing));
+    }
+
+    #[test]
+    fn ends_an_orphaned_turn_at_its_last_activity_before_a_new_turn() {
+        let fixture = TempDir::new().unwrap();
+        let path = write_rollout(fixture.path(), &([
+            serde_json::json!({"type":"event_msg","payload":{"type":"task_started","turn_id":"old","started_at":1000}}).to_string(),
+            serde_json::json!({"timestamp":"1970-01-01T00:18:20Z","type":"response_item","payload":{"type":"reasoning"}}).to_string(),
+            serde_json::json!({"type":"event_msg","payload":{"type":"task_started","turn_id":"new","started_at":10000}}).to_string(),
+        ].join("\n") + "\n"));
+        let periods = read_event_state(&path).unwrap().work_periods(10_100_000);
+        assert_eq!(periods.len(), 2);
+        assert_eq!(periods[0].ended_at_unix_ms, 1_100_000);
+        assert!(!periods[0].ongoing);
+        assert_eq!(periods[1].started_at_unix_ms, 10_000_000);
+        assert!(periods[1].ongoing);
+    }
+
+    #[test]
+    fn retains_work_across_large_logs_appends_and_replacement() {
+        use std::io::Write;
+        let fixture = TempDir::new().unwrap();
+        let start = "{\"type\":\"event_msg\",\"payload\":{\"type\":\"task_started\",\"turn_id\":\"t1\",\"started_at\":1000}}\n";
+        let path = write_rollout(fixture.path(), start);
+        let mut file = fs::OpenOptions::new().append(true).open(&path).unwrap();
+        // A large response must not hide the turn start or allocate its full body.
+        file.write_all(&vec![b'x'; 9 * 1024 * 1024]).unwrap();
+        file.write_all(b"\n").unwrap();
+        let state = read_event_state(&path).unwrap();
+        assert_eq!(state.work_periods(1_100_000)[0].started_at_unix_ms, 1_000_000);
+        assert!(state.work_periods(1_100_000)[0].ongoing);
+        // A partially written record must be retried on the next read.
+        file.write_all(b"{\"type\":\"event_msg\",\"payload\":").unwrap();
+        assert!(read_event_state(&path).unwrap().work_periods(1_100_000)[0].ongoing);
+        file.write_all(b"{\"type\":\"task_complete\",\"turn_id\":\"t1\",\"completed_at\":1100}}\n").unwrap();
+        let periods = read_event_state(&path).unwrap().work_periods(1_200_000);
+        assert_eq!(periods.len(), 1);
+        assert_eq!(periods[0].ended_at_unix_ms, 1_100_000);
+        assert!(!periods[0].ongoing);
+        assert_eq!(read_event_state(&path).unwrap().work_periods(1_200_000), periods);
+        fs::write(&path, start.replace("1000", "2000")).unwrap();
+        assert_eq!(read_event_state(&path).unwrap().work_periods(2_100_000)[0].started_at_unix_ms, 2_000_000);
+        let replacement = fixture.path().join("replacement");
+        fs::write(&replacement, start.replace("1000", "3000")).unwrap();
+        fs::rename(replacement, &path).unwrap();
+        assert_eq!(read_event_state(&path).unwrap().work_periods(3_100_000)[0].started_at_unix_ms, 3_000_000);
+    }
+
+    #[test]
     fn observes_an_active_vscode_turn_without_exposing_private_fields() {
         let fixture = TempDir::new().expect("fixture");
         let workspace = fixture.path().join("workspace");
@@ -749,6 +995,7 @@ mod tests {
         let session_id = Uuid::new_v4();
         let lines = [
             session_meta(session_id, &workspace),
+            serde_json::json!({"type":"turn_context","payload":{"model":"test-model"}}).to_string(),
             serde_json::json!({
                 "type": "event_msg",
                 "payload": {"type": "task_started", "turn_id": "turn-1"}
@@ -786,6 +1033,7 @@ mod tests {
 
         assert_eq!(observed.len(), 1);
         assert_eq!(observed[0].session_id, session_id);
+        assert_eq!(observed[0].model.as_deref(), Some("test-model"));
         assert_eq!(observed[0].status, AgentObservationStatus::Working);
         assert_eq!(
             observed[0].activity,
@@ -802,6 +1050,50 @@ mod tests {
         let serialized = serde_json::to_string(&observed).expect("serialized observation");
         assert!(!serialized.contains("private instructions"));
         assert!(!serialized.contains("secret command"));
+    }
+
+    #[test]
+    fn reports_agent_work_periods_from_turn_times_and_excludes_waiting_time() {
+        let fixture = TempDir::new().expect("fixture");
+        let workspace = fixture.path().join("workspace");
+        fs::create_dir(&workspace).expect("workspace");
+        let session_id = Uuid::new_v4();
+        let event = |payload: serde_json::Value, timestamp: &str| {
+            serde_json::json!({"timestamp": timestamp, "type": "event_msg", "payload": payload}).to_string()
+        };
+        let lines = [
+            session_meta(session_id, &workspace),
+            // Turn 1 runs 15 minutes, then the agent waits for the user for an hour.
+            event(serde_json::json!({"type": "task_started", "turn_id": "t1", "started_at": 1_790_229_422}), "2026-09-24T05:57:02.677Z"),
+            event(serde_json::json!({"type": "task_complete", "turn_id": "t1", "started_at": 1_790_229_422, "completed_at": 1_790_230_322, "duration_ms": 899_705}), "2026-09-24T06:12:02.275Z"),
+            // Turn 2 is stopped by the user after 2 minutes.
+            event(serde_json::json!({"type": "task_started", "turn_id": "t2", "started_at": 1_790_233_922}), "2026-09-24T07:12:02.000Z"),
+            event(serde_json::json!({"type": "turn_aborted", "turn_id": "t2"}), "2026-09-24T07:14:02.000Z"),
+            // Turn 3 still runs.
+            event(serde_json::json!({"type": "task_started", "turn_id": "t3", "started_at": 1_790_237_522}), "2026-09-24T08:12:02.000Z"),
+        ]
+        .join("\n")
+            + "\n";
+        write_rollout(fixture.path(), &lines);
+
+        let observer = CodexSessionObserver::new(fixture.path().to_owned());
+        let observed = observer.observe_at(Uuid::new_v4(), &workspace, now_unix_ms());
+        let periods = &observed[0].work_periods;
+
+        assert_eq!(periods.len(), 3);
+        assert_eq!(
+            periods[0],
+            AgentWorkPeriod { started_at_unix_ms: 1_790_229_422_000, ended_at_unix_ms: 1_790_230_322_000, ongoing: false }
+        );
+        assert_eq!(
+            periods[1],
+            AgentWorkPeriod { started_at_unix_ms: 1_790_233_922_000, ended_at_unix_ms: 1_790_234_042_000, ongoing: false }
+        );
+        assert_eq!(periods[2].started_at_unix_ms, 1_790_237_522_000);
+        assert!(periods[2].ongoing);
+        assert_eq!(rfc3339_to_unix_ms("2026-09-24T05:57:02.677Z"), Some(1_790_229_422_677));
+        let wire = serde_json::to_value(&observed[0]).expect("serialized");
+        assert_eq!(wire["workPeriods"][0]["startedAtUnixMs"], 1_790_229_422_000_i64);
     }
 
     #[test]

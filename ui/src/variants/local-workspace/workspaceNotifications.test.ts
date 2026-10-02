@@ -34,7 +34,7 @@ describe("workspace notifications", () => {
     expect(
       notificationForWorkspaceAgent("Payments", {
         state: "working",
-        activity: "Edits files",
+        activity: "Editing files…",
         lastEventAtUnixMs: 102,
       }),
     ).toBeNull();

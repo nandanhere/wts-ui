@@ -57,7 +57,7 @@ describe("task review decisions", () => {
   it("never writes without durable request storage", async () => {
     const state = setup(); render(<AgentResultDecision {...state.props} />); await prepare();
     const write = vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => { throw new Error("Full"); });
-    try { fireEvent.click(screen.getByRole("button", { name: "Save decision" })); await screen.findByText(/could not save the decision draft/); expect(state.post).not.toHaveBeenCalled(); } finally { write.mockRestore(); }
+    try { fireEvent.click(screen.getByRole("button", { name: "Save decision" })); await screen.findByText(/Could not save the decision draft/); expect(state.post).not.toHaveBeenCalled(); } finally { write.mockRestore(); }
   });
   it("blocks duplicate clicks while a save is pending", async () => {
     const state = setup(); const pending = deferred<ReturnType<typeof agentTurnDecisionsFixture>>(); state.post.mockReturnValue(pending.promise);

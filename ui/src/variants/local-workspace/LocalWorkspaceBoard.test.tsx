@@ -23,7 +23,7 @@ import {
   workspaceListFixture,
 } from "../../test/workspaceClientFake";
 import { LocalWorkspace } from "./LocalWorkspace";
-import { loadActivityWatchReviewSnapshot } from "./activityWatchReviewCache";
+import { loadActivityWatchReviewSnapshot, loadActivityWatchReviewHistory } from "./activityWatchReviewCache";
 import { saveTimeReviewSchedule } from "./timeReviewSchedule";
 import { selectWorkspaceView, deferred, assistantMaterialization } from "./localWorkspaceTestHelpers";
 
@@ -122,7 +122,7 @@ describe("personal local workspace registry", () => {
     ).toBeVisible();
     expect(screen.getByLabelText("Local workspace board")).toBeVisible();
     expect(
-      screen.queryByRole("heading", { name: "Work activity" }),
+      screen.queryByRole("heading", { name: "My time", level: 2 }),
     ).not.toBeInTheDocument();
     await waitFor(() => {
       expect(fake.getActivityWatchDailyReview).toHaveBeenCalledTimes(1);
@@ -131,7 +131,8 @@ describe("personal local workspace registry", () => {
       lastSuccessfulAtUnixMs,
       expect.any(Number),
     );
-    expect(loadActivityWatchReviewSnapshot()).not.toBeNull();
+    expect(loadActivityWatchReviewSnapshot()).toBeNull();
+    expect(loadActivityWatchReviewHistory()).toHaveLength(1);
     localStorage.clear();
   });
 
@@ -176,7 +177,7 @@ describe("personal local workspace registry", () => {
         await Promise.resolve();
       });
       expect(
-        screen.getByRole("heading", { name: "Work activity" }),
+        screen.getByRole("heading", { name: "My time", level: 2 }),
       ).toBeVisible();
       expect(fake.listAgentSessions).toHaveBeenCalledTimes(1);
 
@@ -617,13 +618,13 @@ describe("personal local workspace registry", () => {
       },
       {
         button: screen.getByRole("button", { name: "Open How to use WTS" }),
-        tooltip: "How to use WTS",
+        tooltip: "Guide and keyboard shortcuts",
       },
       {
         button: screen.getByRole("button", {
           name: "Open Environment and integrations",
         }),
-        tooltip: "Environment & integrations (⌘,)",
+        tooltip: "Settings and integrations (⌘,)",
       },
     ];
 
@@ -1811,7 +1812,7 @@ describe("personal local workspace registry", () => {
     });
     const activeCardSurface = activeCard.closest("article") as HTMLElement;
     expect(
-      within(activeCardSurface).getByText("Runs a command"),
+      within(activeCardSurface).getByText("Running a command…"),
     ).toBeVisible();
     expect(
       within(activeCardSurface).getByText(
@@ -1959,7 +1960,7 @@ describe("personal local workspace registry", () => {
 
     render(<LocalWorkspace client={fake.client} />);
 
-    const toolbar = (await screen.findByText("My time")).closest(
+    const toolbar = (await screen.findByRole("button", { name: "New workspace" })).closest(
       '[data-ui="spaces.toolbar"]',
     );
     expect(toolbar).toContainElement(
@@ -2614,10 +2615,10 @@ describe("personal local workspace registry", () => {
 
     expect(await screen.findByText("Codex is working")).toBeVisible();
     expect(fake.transitionWorkspaceWorkflow).not.toHaveBeenCalled();
-    await user.click(screen.getByRole("button", { name: "Move Pinned work" }));
-    await user.click(
-      await screen.findByRole("menuitem", { name: "Follow agent activity" }),
-    );
+    const pinToggle = screen.getByRole("button", { name: "Pin Pinned work" });
+    expect(pinToggle).toHaveAttribute("aria-pressed", "true");
+    expect(screen.queryByText("Pinned")).not.toBeInTheDocument();
+    await user.click(pinToggle);
 
     await waitFor(() => {
       expect(fake.followWorkspaceAgent).toHaveBeenCalledWith(
@@ -2640,7 +2641,54 @@ describe("personal local workspace registry", () => {
       }),
     ).toBeVisible();
     expect(screen.getByText("Pinned work now follows agent activity.")).toBeVisible();
+    expect(
+      screen.getByRole("button", { name: "Pin Pinned work" }),
+    ).toHaveAttribute("aria-pressed", "false");
     localStorage.removeItem("wts.workspace-workflow-signals.v1");
+  });
+
+  it("pins a workspace in place from the card toggle", async () => {
+    const user = userEvent.setup();
+    const first = workspaceFixture({
+      workspaceId: "ws-pin-first",
+      intent: { type: "repositorySet", label: "First work" },
+      title: "First",
+      workflow: { state: "review", revision: 2, updatedAtUnixMs: 2_000, placement: { mode: "automatic", rank: 0 } },
+      updatedAtUnixMs: 2_000,
+    });
+    const second = workspaceFixture({
+      workspaceId: "ws-pin-second",
+      intent: { type: "repositorySet", label: "Second work" },
+      title: "Second",
+      workflow: { state: "review", revision: 3, updatedAtUnixMs: 1_000, placement: { mode: "automatic", rank: 1 } },
+      updatedAtUnixMs: 1_000,
+    });
+    const fake = fakeWorkspaceClient({ list: workspaceListFixture([first, second]) });
+    fake.placeWorkspaceOnBoard.mockResolvedValue({
+      state: "review",
+      revision: 4,
+      updatedAtUnixMs: 3_000,
+      placement: { mode: "pinned", rank: 1 },
+    });
+
+    render(<LocalWorkspace client={fake.client} />);
+
+    const toggle = await screen.findByRole("button", { name: "Pin Second work" });
+    expect(toggle).toHaveAttribute("aria-pressed", "false");
+    await user.click(toggle);
+
+    await waitFor(() =>
+      expect(fake.placeWorkspaceOnBoard).toHaveBeenCalledWith("ws-pin-second", {
+        state: "review",
+        expectedRevision: 3,
+        afterWorkspaceId: "ws-pin-first",
+      }),
+    );
+    expect(fake.transitionWorkspaceWorkflow).not.toHaveBeenCalled();
+    expect(
+      await screen.findByRole("button", { name: "Pin Second work", pressed: true }),
+    ).toBeVisible();
+    expect(screen.getByText("Second work is pinned. It stays in place.")).toBeVisible();
   });
 
   it("runs trusted verification after recent agent work completes", async () => {
@@ -2766,7 +2814,7 @@ describe("personal local workspace registry", () => {
     expect(within(guide).getByText("The working loop")).toBeVisible();
     expect(within(guide).getByText("Retries are safe")).toBeVisible();
     expect(
-      within(guide).getByText(/After a restart, WTS reloads the manifest/i),
+      within(guide).getByText(/After a restart, the manifest reloads/i),
     ).toBeVisible();
 
     await user.click(
