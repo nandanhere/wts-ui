@@ -14,10 +14,10 @@ describe("orderBaseBranches", () => {
       "main",
       "develop",
       "automation/x",
-      "release/9",
-      "release/10",
       "DEVTOOLS-5920",
       "DEVTOOLS-6409",
+      "release/9",
+      "release/10",
       "Zeta",
     ]);
   });
