@@ -1,7 +1,9 @@
 .card {
   display: grid;
-  gap: 14px;
-  padding: 16px 18px;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 20px;
+  min-width: 0;
+  padding: 20px 24px 24px;
   background: var(--wts-surface);
   border: 1px solid var(--wts-line);
   border-radius: var(--wts-radius-md, 8px);
@@ -115,8 +117,8 @@
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 10px 14px;
-  padding-top: 12px;
+  gap: 12px 20px;
+  padding-top: 16px;
   border-top: 1px solid var(--wts-line);
 }
 
@@ -154,7 +156,7 @@
 .field {
   display: inline-flex;
   align-items: center;
-  gap: 7px;
+  gap: 8px;
   font-size: 12px;
   color: var(--wts-muted);
 }
@@ -228,7 +230,28 @@
 
 .result {
   display: grid;
+  gap: 24px;
+  padding-top: 20px;
+  border-top: 1px solid var(--wts-line);
+}
+
+/* Three sections: what the change does, what the review found, what to do next. */
+.overview,
+.findingsGroup,
+.followUp {
+  display: grid;
   gap: 12px;
+  min-width: 0;
+}
+
+.findingsGroup:empty {
+  display: none;
+}
+
+.followUp {
+  gap: 20px;
+  padding-top: 20px;
+  border-top: 1px solid var(--wts-line);
 }
 
 .reviewMeta {
@@ -250,30 +273,32 @@
 }
 
 .intent {
-  display: flex;
-  gap: 8px;
+  display: grid;
+  grid-template-columns: 56px minmax(0, 1fr);
+  gap: 12px;
   margin: 0;
-  font-size: 12px;
+  font-size: 13px;
+  line-height: 1.55;
   color: var(--wts-muted);
 }
 
-.intent span {
-  flex: none;
+.intent span:first-child {
   font-weight: 600;
   color: var(--wts-ink);
 }
 
 .summary {
+  max-width: 110ch;
   margin: 0;
-  font-size: 13px;
-  line-height: 1.5;
+  font-size: 14px;
+  line-height: 1.6;
   color: var(--wts-text);
 }
 
 .counts {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: 8px;
 }
 
 .labelChip {
@@ -323,6 +348,35 @@
   border-color: var(--wts-green-line, transparent);
 }
 
+.labelFilter {
+  height: 24px;
+  padding: 0 9px;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: filter var(--wts-motion-fast, 120ms) var(--wts-ease-out, ease-out), box-shadow var(--wts-motion-fast, 120ms);
+}
+
+.labelFilter:hover {
+  filter: brightness(1.15);
+}
+
+.labelFilter:focus-visible {
+  outline: none;
+  box-shadow: var(--wts-focus-ring, 0 0 0 2px var(--wts-blue));
+}
+
+.labelFilter[aria-pressed="true"] {
+  border-color: currentColor;
+  box-shadow: 0 0 0 1px currentColor inset;
+}
+
+.shownFindings {
+  display: grid;
+  gap: 8px;
+}
+
 .diffHint {
   margin: 0;
   font-size: 12px;
@@ -331,7 +385,7 @@
 
 .findingsList {
   display: grid;
-  gap: 8px;
+  gap: 12px;
   margin: 0;
   padding: 0;
   list-style: none;
@@ -339,8 +393,8 @@
 
 .findingCard {
   display: grid;
-  gap: 8px;
-  padding: 12px;
+  gap: 12px;
+  padding: 16px 18px;
   border: 1px solid var(--wts-line);
   border-left-width: 3px;
   border-radius: var(--wts-radius-sm, 6px);
@@ -365,12 +419,12 @@
 
 .findingHeader {
   display: flex;
-  align-items: flex-start;
-  gap: 8px;
+  align-items: center;
+  gap: 10px;
 }
 
 .findingTitle {
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 600;
   line-height: 1.4;
   color: var(--wts-ink);
@@ -396,17 +450,18 @@
 }
 
 .findingExplanation {
+  max-width: 110ch;
   margin: 0;
-  font-size: 12px;
-  line-height: 1.5;
+  font-size: 13px;
+  line-height: 1.6;
   color: var(--wts-text);
   white-space: pre-wrap;
 }
 
 .suggestedComment {
   display: grid;
-  gap: 6px;
-  padding: 8px 10px;
+  gap: 10px;
+  padding: 12px 14px;
   border-radius: var(--wts-radius-sm, 6px);
   background: var(--wts-surface-subtle);
   border: 1px solid var(--wts-line);
@@ -424,8 +479,8 @@
 
 .suggestedComment p {
   margin: 0;
-  font-size: 12px;
-  line-height: 1.5;
+  font-size: 13px;
+  line-height: 1.6;
   color: var(--wts-ink);
   white-space: pre-wrap;
 }
@@ -464,10 +519,10 @@
 
 .precedent {
   display: grid;
-  gap: 4px;
-  padding-left: 10px;
+  gap: 6px;
+  padding: 2px 0 2px 14px;
   border-left: 2px solid var(--wts-line-strong, var(--wts-line));
-  font-size: 11px;
+  font-size: 12px;
   color: var(--wts-muted);
 }
 
@@ -478,7 +533,7 @@
 .precedent q {
   color: var(--wts-text);
   font-style: italic;
-  line-height: 1.45;
+  line-height: 1.55;
 }
 
 .precedent a {
@@ -504,8 +559,8 @@
 
 .listBlock {
   display: grid;
-  gap: 4px;
-  font-size: 12px;
+  gap: 10px;
+  font-size: 13px;
   color: var(--wts-text);
 }
 
@@ -522,8 +577,8 @@
   margin: 0;
   padding-left: 18px;
   display: grid;
-  gap: 3px;
-  line-height: 1.45;
+  gap: 6px;
+  line-height: 1.55;
 }
 
 .notChecked {
@@ -644,7 +699,9 @@
 
 .trace {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 8px;
+  min-width: 0;
   padding: 12px;
   border-radius: var(--wts-radius-sm, 6px);
   background: var(--wts-surface-subtle);
@@ -710,7 +767,7 @@
   display: grid;
   align-content: start;
   gap: 1px;
-  max-height: 280px;
+  max-height: 168px;
   margin: 0;
   padding: 0;
   overflow: auto;
@@ -773,8 +830,13 @@
 }
 
 .traceBody small {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
   font-size: 11px;
   color: var(--wts-muted);
+  overflow-wrap: anywhere;
   white-space: pre-wrap;
 }
 
@@ -861,8 +923,8 @@
 
 .questions {
   display: grid;
-  gap: 8px;
-  padding: 10px 12px;
+  gap: 12px;
+  padding: 14px 16px;
   border: 1px solid color-mix(in srgb, var(--wts-blue) 30%, var(--wts-line));
   border-radius: var(--wts-radius-sm, 6px);
   background: color-mix(in srgb, var(--wts-blue) 6%, var(--wts-surface));
@@ -892,4 +954,117 @@
 
 .header[data-compact] .titleRow h3 {
   font-size: 13px;
+}
+
+.headerActions {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+}
+
+.settingsToggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: var(--wts-control-height, 32px);
+  padding: 0 12px;
+  border: 1px solid var(--wts-line);
+  border-radius: var(--wts-radius-sm, 6px);
+  background: transparent;
+  color: var(--wts-text);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.settingsToggle:hover {
+  border-color: var(--wts-line-strong, var(--wts-line));
+  color: var(--wts-ink);
+}
+
+.settingsToggle:focus-visible {
+  outline: none;
+  box-shadow: var(--wts-focus-ring, 0 0 0 2px var(--wts-blue));
+}
+
+.countsRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 16px;
+}
+
+
+.copyButton.copyAllPrompt {
+  height: 26px;
+  padding: 0 10px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--wts-ink);
+}
+
+/* A ready prompt that the user gives to a coding agent to fix one finding. */
+.fixPrompt {
+  border: 1px solid var(--wts-line);
+  border-radius: var(--wts-radius-sm, 6px);
+  background: var(--wts-surface-subtle);
+}
+
+.fixPrompt > summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  padding: 4px 8px 4px 12px;
+  list-style: none;
+  cursor: pointer;
+  color: var(--wts-text);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.fixPrompt > summary::-webkit-details-marker {
+  display: none;
+}
+
+.fixPrompt > summary::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-right: 1.5px solid var(--wts-muted);
+  border-bottom: 1.5px solid var(--wts-muted);
+  transform: rotate(-45deg);
+  transition: transform var(--wts-motion-fast, 120ms) var(--wts-ease-out, ease-out);
+}
+
+.fixPrompt[open] > summary::before {
+  transform: rotate(45deg);
+}
+
+.fixPrompt > summary svg {
+  color: var(--wts-blue);
+}
+
+.fixPrompt > summary > span {
+  flex: 1;
+}
+
+.fixPrompt > summary:focus-visible {
+  outline: none;
+  box-shadow: var(--wts-focus-ring, 0 0 0 2px var(--wts-blue));
+  border-radius: var(--wts-radius-sm, 6px);
+}
+
+.fixPrompt pre {
+  margin: 0;
+  padding: 10px 12px 12px;
+  border-top: 1px solid var(--wts-line);
+  font-family: var(--wts-font-mono);
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--wts-text);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }

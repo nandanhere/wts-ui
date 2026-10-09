@@ -23,7 +23,7 @@ function setup() {
   return { ...fake, read, update };
 }
 const panel = (client: ReturnType<typeof setup>["client"]) => <PlanningDocumentsPanel client={client} workspaceId={workspaceId} workspaceKey="NESTED" />;
-beforeEach(() => localStorage.clear());
+beforeEach(() => { localStorage.clear(); localStorage.setItem("wts.planning-edit-mode.v1", "source"); });
 
 describe("nested planning files", () => {
   it("keeps local document actions from exposing an app-relative browser route", async () => {

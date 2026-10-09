@@ -5,6 +5,7 @@ export type GlyphName =
   | "branch"
   | "check"
   | "chevron"
+  | "clock"
   | "close"
   | "code"
   | "comment"
@@ -24,6 +25,7 @@ export type GlyphName =
   | "plug"
   | "plus"
   | "refresh"
+  | "review"
   | "search"
   | "settings"
   | "moon"
@@ -54,6 +56,12 @@ export const Glyph = memo(function Glyph({
     ),
     check: <path d="m5 12 4 4L19 6" />,
     chevron: <path d="m8 10 4 4 4-4" />,
+    clock: (
+      <>
+        <circle cx="12" cy="12" r="8.5" />
+        <path d="M12 7.5V12l3 2" />
+      </>
+    ),
     close: <path d="m6 6 12 12M18 6 6 18" />,
     code: (
       <>
@@ -144,6 +152,15 @@ export const Glyph = memo(function Glyph({
         <path d="M20 7v5h-5" />
         <path d="M4 17v-5h5" />
         <path d="M6.1 8.1A7 7 0 0 1 18.7 10M17.9 15.9A7 7 0 0 1 5.3 14" />
+      </>
+    ),
+    review: (
+      <>
+        <circle cx="6" cy="6" r="2" />
+        <circle cx="6" cy="18" r="2" />
+        <circle cx="18" cy="18" r="2" />
+        <path d="M6 8v8M18 16V9a3 3 0 0 0-3-3h-4" />
+        <path d="m13 4-2 2 2 2" />
       </>
     ),
     search: (

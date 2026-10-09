@@ -383,6 +383,74 @@ export function loadActivityWatchReviewHistory(
   }
 }
 
+const DAY_CACHE_KEY_PREFIX = "wts.activity-watch-day.v1";
+const MAX_CACHED_DAYS = 14;
+
+interface ActivityWatchDayCacheEntry {
+  schemaVersion: 1;
+  builtAtUnixMs: number;
+  review: ActivityWatchDailyReview;
+}
+
+/**
+ * Reads a finished day. A day is final once a review was built after the day ended,
+ * so the cached review never needs to be read from ActivityWatch again.
+ */
+export function loadFinishedDayReview(
+  startedAtUnixMs: number,
+  endedAtUnixMs: number,
+  storage: Pick<Storage, "getItem" | "removeItem"> | undefined = globalThis.localStorage,
+): ActivityWatchDailyReview | null {
+  if (!storage) return null;
+  const key = `${DAY_CACHE_KEY_PREFIX}:${startedAtUnixMs}`;
+  try {
+    const serialized = storage.getItem(key);
+    if (!serialized) return null;
+    const value = record(JSON.parse(serialized));
+    if (
+      !value ||
+      value.schemaVersion !== 1 ||
+      !finiteNumber(value.builtAtUnixMs) ||
+      value.builtAtUnixMs < endedAtUnixMs ||
+      !validReview(value.review) ||
+      value.review.startedAtUnixMs !== startedAtUnixMs ||
+      value.review.endedAtUnixMs !== endedAtUnixMs
+    ) {
+      storage.removeItem(key);
+      return null;
+    }
+    return value.review;
+  } catch {
+    return null;
+  }
+}
+
+/** Saves a review only when its day has ended. Keeps the most recent days only. */
+export function saveFinishedDayReview(
+  review: ActivityWatchDailyReview,
+  builtAtUnixMs = Date.now(),
+  storage: Storage | undefined = globalThis.localStorage,
+) {
+  if (!storage || builtAtUnixMs < review.endedAtUnixMs || !validReview(review)) return false;
+  try {
+    storage.setItem(
+      `${DAY_CACHE_KEY_PREFIX}:${review.startedAtUnixMs}`,
+      JSON.stringify({ schemaVersion: 1, builtAtUnixMs, review } satisfies ActivityWatchDayCacheEntry),
+    );
+    const days: number[] = [];
+    for (let index = 0; index < storage.length; index++) {
+      const key = storage.key(index);
+      if (key?.startsWith(DAY_CACHE_KEY_PREFIX + ":")) days.push(Number(key.slice(DAY_CACHE_KEY_PREFIX.length + 1)));
+    }
+    days.sort((left, right) => right - left).slice(MAX_CACHED_DAYS).forEach((day) => {
+      storage.removeItem(`${DAY_CACHE_KEY_PREFIX}:${day}`);
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function saveActivityWatchReviewHistorySnapshot(
   snapshot: ActivityWatchReviewIntervalSnapshot,
   storage: Pick<Storage, "getItem" | "removeItem" | "setItem"> | undefined =

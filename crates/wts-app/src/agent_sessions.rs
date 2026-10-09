@@ -18,6 +18,23 @@ const STALE_HEARTBEAT_AFTER_MS: i64 = 5 * 60 * 1_000;
 pub(crate) const CHANGE_REQUEST_PROPOSAL_PREFIX: &str = "WTS_CHANGE_REQUEST_PROPOSAL:";
 pub(crate) const MR_LINK_PROPOSAL_PREFIX: &str = "WTS_MR_LINK_PROPOSAL:";
 
+/// Returns the JSON after `prefix` on one response line. Agents may wrap the line in an
+/// HTML comment, `<!-- PREFIX {...} -->`, so that chat views hide it from the user.
+pub(crate) fn proposal_payload<'a>(line: &'a str, prefix: &str) -> Option<&'a str> {
+    let line = line.trim();
+    let line = match line.strip_prefix("<!--") {
+        Some(inner) => inner.strip_suffix("-->")?.trim(),
+        None => line,
+    };
+    line.strip_prefix(prefix).map(str::trim)
+}
+
+/// True when a response line carries a WTS proposal for the host and not for the user.
+pub(crate) fn is_proposal_line(line: &str) -> bool {
+    proposal_payload(line, CHANGE_REQUEST_PROPOSAL_PREFIX).is_some()
+        || proposal_payload(line, MR_LINK_PROPOSAL_PREFIX).is_some()
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AgentMrLinkProposal {
@@ -29,9 +46,9 @@ pub struct AgentMrLinkProposal {
 pub(crate) fn parse_agent_mr_link_proposals(value: &str) -> Vec<AgentMrLinkProposal> {
     value
         .lines()
-        .filter_map(|line| line.trim().strip_prefix(MR_LINK_PROPOSAL_PREFIX))
+        .filter_map(|line| proposal_payload(line, MR_LINK_PROPOSAL_PREFIX))
         .filter(|json| json.len() <= 512)
-        .filter_map(|json| serde_json::from_str::<AgentMrLinkProposal>(json.trim()).ok())
+        .filter_map(|json| serde_json::from_str::<AgentMrLinkProposal>(json).ok())
         .filter(valid_mr_link_proposal)
         .take(16)
         .collect()
@@ -141,6 +158,10 @@ pub struct AgentSessionList {
     pub sessions: Vec<AgentSession>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub observed_sessions: Vec<ObservedAgentSession>,
+    /// Agent work in chats that no saved workspace shows. Only for the
+    /// list of all workspaces.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unassigned_work: Vec<crate::UnassignedAgentWork>,
 }
 
 #[derive(Debug, Error)]
@@ -185,6 +206,7 @@ impl AgentSessionStore {
                 schema_version: AGENT_SESSION_SCHEMA_VERSION,
                 sessions: Vec::new(),
                 observed_sessions: Vec::new(),
+                unassigned_work: Vec::new(),
             })?;
         } else {
             let mut list = store.read_locked()?;
@@ -596,6 +618,7 @@ impl AgentSessionStore {
             return Err(AgentSessionStoreError::Invalid);
         }
         list.observed_sessions.clear();
+        list.unassigned_work.clear();
         Ok(list)
     }
 
@@ -696,6 +719,20 @@ mod mr_link_tests {
         assert_eq!(parsed[0].repository_id, "repo_beacon");
         assert_eq!(parsed[0].iid, 43);
     }
+
+    #[test]
+    fn reads_proposals_hidden_in_an_html_comment() {
+        let text = "Pushed the fix.\n\
+             <!-- WTS_MR_LINK_PROPOSAL: {\"schemaVersion\":1,\"repositoryId\":\"repo_beacon\",\"iid\":43} -->\n\
+             <!-- WTS_CHANGE_REQUEST_PROPOSAL: {\"schemaVersion\":1,\"repositoryId\":\"repo_beacon\",\"sourceHeadCommitOid\":\"0123456789abcdef0123456789abcdef01234567\",\"title\":\"TASK-42: Validate admission\",\"body\":\"Validate admission.\",\"issueKeys\":[\"TASK-42\"]} -->";
+        assert_eq!(parse_agent_mr_link_proposals(text)[0].iid, 43);
+        assert_eq!(parse_agent_change_request_proposals(text)[0].title, "TASK-42: Validate admission");
+        assert!(!is_proposal_line("Pushed the fix."));
+        assert!(is_proposal_line("<!-- WTS_MR_LINK_PROPOSAL: {} -->"));
+        assert!(is_proposal_line("WTS_MR_LINK_PROPOSAL: {}"));
+        // An unclosed comment is not a proposal.
+        assert!(parse_agent_mr_link_proposals("<!-- WTS_MR_LINK_PROPOSAL: {\"schemaVersion\":1,\"repositoryId\":\"repo_beacon\",\"iid\":43}").is_empty());
+    }
 }
 
 pub(crate) fn valid_proposal(proposal: &AgentChangeRequestProposal) -> bool {
@@ -744,8 +781,8 @@ pub(crate) fn valid_proposal(proposal: &AgentChangeRequestProposal) -> bool {
 pub(crate) fn parse_agent_change_request_proposals(value: &str) -> Vec<AgentChangeRequestProposal> {
     value
         .lines()
-        .filter_map(|line| line.trim().strip_prefix(CHANGE_REQUEST_PROPOSAL_PREFIX))
-        .filter_map(|json| serde_json::from_str::<AgentChangeRequestProposal>(json.trim()).ok())
+        .filter_map(|line| proposal_payload(line, CHANGE_REQUEST_PROPOSAL_PREFIX))
+        .filter_map(|json| serde_json::from_str::<AgentChangeRequestProposal>(json).ok())
         .filter(valid_proposal)
         .take(16)
         .collect()

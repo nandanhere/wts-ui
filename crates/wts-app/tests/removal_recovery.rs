@@ -294,16 +294,33 @@ fn unknown_root_entry_reports_its_path_and_preserves_all_files() {
             .iter()
             .any(|step| step.as_str().unwrap().contains("outside"))
     );
+    // Non-destructive removal must be blocked and preserve files
     assert!(matches!(
         fixture.service.remove_workspace(
             fixture.workspace_id,
             &preflight.effect_digest,
             &Uuid::new_v4().to_string(),
-            true
+            false
         ),
         Err(LocalWtsError::RemovalBlocked { .. })
     ));
-    assert_eq!(fs::read_to_string(unknown).unwrap(), "Keep these notes.\n");
+    assert_eq!(fs::read_to_string(&unknown).unwrap(), "Keep these notes.\n");
+
+    // Destructive removal with backup removes workspace and copies to backup folder
+    let backup_dir = tempfile::tempdir().unwrap();
+    let result = fixture
+        .service
+        .remove_workspace_with_backup(
+            fixture.workspace_id,
+            &preflight.effect_digest,
+            &Uuid::new_v4().to_string(),
+            true,
+            Some(backup_dir.path()),
+        )
+        .unwrap();
+    assert!(result.backup_path.is_some());
+    assert!(!unknown.exists());
+    assert!(!fixture.workspace.exists());
 }
 
 #[cfg(unix)]

@@ -1,5 +1,6 @@
 import {
   Children,
+  type CSSProperties,
   isValidElement,
   type ReactNode,
   useCallback,
@@ -18,6 +19,9 @@ import {
   SelectValue,
 } from "react-aria-components";
 import styles from "./SelectMenu.module.css";
+
+/** The popover offset (8px) plus a 12px margin, the same as React Aria uses at the window edge. */
+const MENU_GAP_AND_MARGIN = 20;
 
 interface SelectOption {
   disabled: boolean;
@@ -74,14 +78,27 @@ export function SelectMenu({
 }) {
   const options = optionsFromChildren(children);
   const triggerRef = useRef<HTMLButtonElement>(null);
+  const anchorRef = useRef<HTMLElement | null>(null);
   const [dialogPortal, setDialogPortal] = useState<Element | null>(null);
   const setComboBoxRef = useCallback((node: HTMLDivElement | null) => {
+    anchorRef.current = node;
     setDialogPortal(node?.closest('[role="dialog"]') ?? null);
   }, []);
   const setSelectTriggerRef = useCallback((node: HTMLButtonElement | null) => {
     triggerRef.current = node;
+    anchorRef.current = node;
     setDialogPortal(node?.closest('[role="dialog"]') ?? null);
   }, []);
+  // The menu is portaled into its dialog, and the dialog clips it. React Aria sizes the menu to the window and
+  // writes max-height on the node itself, so pass the room in the dialog as a variable that limits the list.
+  const menuStyle = ({ placement }: { placement: string | null }): CSSProperties | undefined => {
+    const anchor = anchorRef.current;
+    if (!dialogPortal || !anchor || !placement) return undefined;
+    const dialog = dialogPortal.getBoundingClientRect();
+    const trigger = anchor.getBoundingClientRect();
+    const room = placement === "top" ? trigger.top - dialog.top : dialog.bottom - trigger.bottom;
+    return { "--select-menu-room": `${Math.max(0, room - MENU_GAP_AND_MARGIN)}px` } as CSSProperties;
+  };
 
   useLayoutEffect(() => {
     const trigger = triggerRef.current;
@@ -125,6 +142,7 @@ export function SelectMenu({
           UNSTABLE_portalContainer={dialogPortal ?? undefined}
           className={styles.popover}
           placement="bottom start"
+          style={menuStyle}
         >
           <ListBox className={styles.listBox} items={options}>
             {(option) => (
@@ -175,6 +193,7 @@ export function SelectMenu({
         UNSTABLE_portalContainer={dialogPortal ?? undefined}
         className={styles.popover}
         placement="bottom start"
+        style={menuStyle}
       >
         <ListBox className={styles.listBox} items={options}>
           {(option) => (

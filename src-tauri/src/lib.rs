@@ -1,5 +1,6 @@
 mod ui_capture;
 mod work_item_preview;
+mod notifications;
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeSet, env, path::PathBuf, process::Command};
 use tauri::Manager;
@@ -261,13 +262,29 @@ async fn send_desktop_notification(
     title: String,
     body: String,
     tag: String,
+    path: Option<String>,
 ) -> Result<(), WorkspaceCommandError> {
     let title = normalized_notification_text(&title, MAX_NOTIFICATION_TITLE_CHARS)?;
     let body = normalized_notification_text(&body, MAX_NOTIFICATION_BODY_CHARS)?;
-    let _tag = normalized_notification_text(&tag, MAX_NOTIFICATION_TAG_CHARS)?;
+    let tag = normalized_notification_text(&tag, MAX_NOTIFICATION_TAG_CHARS)?;
+    let path = path.as_deref().and_then(notifications::notification_open_path);
+    #[cfg(target_os = "macos")]
+    if notifications::native_available() {
+        // The banner shows the WTS icon, and a click opens the named screen.
+        // A repeated tag replaces the earlier banner.
+        return notifications::send(&tag, &title, &body, path.as_deref()).map_err(|_| {
+            WorkspaceCommandError {
+                code: "notification_failed",
+                message: "Could not send the desktop notification.".to_owned(),
+                retryable: true,
+            }
+        });
+    }
+    let _ = (&tag, &path);
     run_blocking_command(move || {
         #[cfg(target_os = "macos")]
         {
+            // Fallback for an unbundled development binary only.
             let status = Command::new("/usr/bin/osascript")
                 .arg("-e")
                 .arg(desktop_notification_script(&title, &body))
@@ -1705,6 +1722,7 @@ async fn remove_workspace(
     effect_digest: String,
     idempotency_key: String,
     delete_protected_paths: bool,
+    backup_folder: Option<String>,
     state: tauri::State<'_, LocalWtsService>,
 ) -> Result<RemoveWorkspaceResult, WorkspaceCommandError> {
     if effect_digest.trim().is_empty() {
@@ -1717,13 +1735,18 @@ async fn remove_workspace(
     let workspace_id = parse_workspace_id(&workspace_id)?;
     let effect_digest = effect_digest.trim().to_owned();
     let service = state.inner().clone();
+    let backup_path = backup_folder
+        .map(|s| s.trim().to_owned())
+        .filter(|s| !s.is_empty())
+        .map(std::path::PathBuf::from);
     run_blocking_command(move || {
         service
-            .remove_workspace(
+            .remove_workspace_with_backup(
                 workspace_id,
                 &effect_digest,
                 &idempotency_key,
                 delete_protected_paths,
+                backup_path.as_deref(),
             )
             .map_err(local_wts_command_error)
     })
@@ -3407,12 +3430,34 @@ pub fn run() {
                 .build(),
         )
         .setup(|app| {
+            // The main window is built here so links that ask for a new window
+            // open in the system browser. WebKit ignores them otherwise.
+            let main_window = app
+                .config()
+                .app
+                .windows
+                .iter()
+                .find(|window| window.label == "main")
+                .cloned()
+                .ok_or_else(|| std::io::Error::other("the main window configuration is missing"))?;
+            tauri::WebviewWindowBuilder::from_config(app.handle(), &main_window)?
+                .on_new_window(|url, _features| {
+                    if let Some(target) = external_link_target(&url) {
+                        open_external_link(&target);
+                    }
+                    tauri::webview::NewWindowResponse::Deny
+                })
+                .build()?;
             let service = local_wts_service(app.handle())
                 .map_err(|error| std::io::Error::other(error.to_string()))?;
             app.manage(service);
             app.manage(updater::AppUpdateState::new(
                 app.package_info().version.to_string(),
             ));
+            #[cfg(target_os = "macos")]
+            if notifications::native_available() {
+                notifications::initialize(app.handle());
+            }
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -3581,9 +3626,61 @@ fn restore_main_window(app: &tauri::AppHandle) {
     let _ = window.set_focus();
 }
 
+/// Returns the URL to open in the system browser, or None to drop the link.
+/// Only plain https and http links without credentials leave the app.
+fn external_link_target(url: &url::Url) -> Option<String> {
+    if !matches!(url.scheme(), "https" | "http")
+        || url.host_str().is_none()
+        || !url.username().is_empty()
+        || url.password().is_some()
+    {
+        return None;
+    }
+    Some(url.to_string())
+}
+
+fn open_external_link(target: &str) {
+    #[cfg(target_os = "macos")]
+    {
+        let _ = Command::new("/usr/bin/open")
+            .arg(target)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn();
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = target;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn main_window_sends_new_window_links_to_the_system_browser() {
+        let config: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        // setup() builds the main window with the link handler, so the config must not build a second one.
+        assert_eq!(config["app"]["windows"][0]["label"], "main");
+        assert_eq!(config["app"]["windows"][0]["create"], false);
+        let source = include_str!("lib.rs");
+        assert!(source.contains(".on_new_window(|url, _features|"));
+
+        let note = url::Url::parse(
+            "https://gitlab.example.test/devtools/net-dhcp/-/merge_requests/24#note_8090603",
+        )
+        .unwrap();
+        assert_eq!(external_link_target(&note).as_deref(), Some(note.as_str()));
+        for blocked in [
+            "file:///etc/passwd",
+            "javascript:alert(1)",
+            "tauri://localhost/x",
+            "https://user:secret@gitlab.example/x",
+        ] {
+            assert_eq!(external_link_target(&url::Url::parse(blocked).unwrap()), None, "{blocked}");
+        }
+    }
 
     #[test]
     fn native_merge_request_link_command_checks_workspace_and_exposes_permission() {

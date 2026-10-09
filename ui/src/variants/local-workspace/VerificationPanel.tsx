@@ -1407,6 +1407,7 @@ export function VerificationPanel({
           notification.title,
           notification.body,
           `wts-verification-${workspaceId}`,
+          { path: `/sessions/${encodeURIComponent(workspaceId)}/verification` },
         );
       }
     } catch (reason) {

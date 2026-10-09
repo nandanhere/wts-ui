@@ -1315,6 +1315,7 @@ export interface RemoveWorkspaceResult {
   removedWorktreeCount: number;
   retainedBranches: string[];
   removedGeneratedPaths: string[];
+  backupPath?: string;
 }
 
 export interface AgentRunResult {
@@ -2333,6 +2334,19 @@ export interface AgentSessionList {
   schemaVersion: 1;
   sessions: AgentSession[];
   observedSessions?: ObservedAgentSession[];
+  /** Agent work in chats that no saved workspace shows, such as the Codex app or CLI. */
+  unassignedWork?: UnassignedAgentWork[];
+}
+
+export interface UnassignedAgentWork {
+  sessionId: string;
+  provider: "codex" | "copilot";
+  client: "codexApp" | "codexCli" | "codexVscode" | "other";
+  folderName?: string;
+  working?: boolean;
+  startedAtUnixMs: number;
+  lastEventAtUnixMs: number;
+  workPeriods: AgentWorkPeriod[];
 }
 
 export type AgentSessionEventKind =
@@ -2717,6 +2731,7 @@ export interface WorkspaceClient {
     effectDigest: string,
     idempotencyKey: string,
     deleteProtectedPaths?: boolean,
+    backupFolder?: string,
   ): Promise<RemoveWorkspaceResult>;
   runWorkspaceAgent(
     workspaceId: string,
@@ -4962,6 +4977,7 @@ function normalizeAgentSessionList(value: unknown): AgentSessionList {
     "schemaVersion",
     "sessions",
     "observedSessions",
+    "unassignedWork",
   ]);
   if (
     integerField(raw.schemaVersion, "agentSessionList.schemaVersion") !== 1 ||
@@ -4978,6 +4994,13 @@ function normalizeAgentSessionList(value: unknown): AgentSessionList {
     sessions: raw.sessions.map((session, index) =>
       normalizeAgentSession(session, `agentSessionList.sessions[${index}]`),
     ),
+    ...(raw.unassignedWork === undefined
+      ? {}
+      : {
+          unassignedWork: arrayField(raw.unassignedWork, "agentSessionList.unassignedWork").map(
+            (item, index) => normalizeUnassignedAgentWork(item, `agentSessionList.unassignedWork[${index}]`),
+          ),
+        }),
     ...(observedSessions === undefined
       ? {}
       : {
@@ -4988,6 +5011,35 @@ function normalizeAgentSessionList(value: unknown): AgentSessionList {
             ),
           ),
         }),
+  };
+}
+
+function normalizeAgentWorkPeriods(value: unknown, path: string): AgentWorkPeriod[] {
+  return arrayField(value, path).map((item, index) => {
+    const periodPath = `${path}[${index}]`;
+    const period = exactRecord(item, periodPath, ["startedAtUnixMs", "endedAtUnixMs", "ongoing"]);
+    const startedAtUnixMs = integerField(period.startedAtUnixMs, `${periodPath}.startedAtUnixMs`);
+    const endedAtUnixMs = integerField(period.endedAtUnixMs, `${periodPath}.endedAtUnixMs`);
+    if (endedAtUnixMs < startedAtUnixMs) return invalidPayload(`${periodPath}.endedAtUnixMs`);
+    return { startedAtUnixMs, endedAtUnixMs, ...(period.ongoing === true ? { ongoing: true } : {}) };
+  });
+}
+
+function normalizeUnassignedAgentWork(value: unknown, path: string): UnassignedAgentWork {
+  const raw = exactRecord(value, path, [
+    "sessionId", "provider", "client", "folderName", "working",
+    "startedAtUnixMs", "lastEventAtUnixMs", "workPeriods",
+  ]);
+  const folderName = optionalStringField(raw.folderName, `${path}.folderName`);
+  return {
+    sessionId: uuidField(raw.sessionId, `${path}.sessionId`),
+    provider: enumField(raw.provider, ["codex", "copilot"] as const, `${path}.provider`),
+    client: enumField(raw.client, ["codexApp", "codexCli", "codexVscode", "other"] as const, `${path}.client`),
+    ...(folderName === undefined ? {} : { folderName: folderName.slice(0, 80) }),
+    ...(raw.working === true ? { working: true } : {}),
+    startedAtUnixMs: integerField(raw.startedAtUnixMs, `${path}.startedAtUnixMs`),
+    lastEventAtUnixMs: integerField(raw.lastEventAtUnixMs, `${path}.lastEventAtUnixMs`),
+    workPeriods: normalizeAgentWorkPeriods(raw.workPeriods, `${path}.workPeriods`),
   };
 }
 
@@ -7341,6 +7393,10 @@ function normalizeRemoveWorkspaceResult(
       raw.removedGeneratedPaths,
       "removeWorkspaceResult.removedGeneratedPaths",
     ),
+    backupPath:
+      typeof raw.backupPath === "string" && raw.backupPath.trim().length > 0
+        ? raw.backupPath.trim()
+        : undefined,
   };
 }
 
@@ -10773,6 +10829,7 @@ class HttpWorkspaceClient implements WorkspaceClient {
     effectDigest: string,
     idempotencyKey: string,
     deleteProtectedPaths = false,
+    backupFolder?: string,
   ): Promise<RemoveWorkspaceResult> {
     const workspace = requiredWorkspaceId(workspaceId);
     if (!effectDigest.trim() || !idempotencyKey.trim()) {
@@ -10793,6 +10850,7 @@ class HttpWorkspaceClient implements WorkspaceClient {
           body: JSON.stringify({
             effectDigest: effectDigest.trim(),
             deleteProtectedPaths,
+            backupFolder: backupFolder?.trim() || undefined,
           }),
         },
       ),
@@ -12211,6 +12269,7 @@ class TauriWorkspaceClient implements WorkspaceClient {
     effectDigest: string,
     idempotencyKey: string,
     deleteProtectedPaths = false,
+    backupFolder?: string,
   ): Promise<RemoveWorkspaceResult> {
     const workspace = requiredWorkspaceId(workspaceId);
     if (!effectDigest.trim() || !idempotencyKey.trim()) {
@@ -12225,6 +12284,7 @@ class TauriWorkspaceClient implements WorkspaceClient {
         effectDigest: effectDigest.trim(),
         idempotencyKey,
         deleteProtectedPaths,
+        backupFolder: backupFolder?.trim() || null,
       }),
     );
   }

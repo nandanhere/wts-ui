@@ -31,9 +31,8 @@ describe("Workspace setup failure recovery", () => {
       if (automatic) {
         await user.click(await screen.findByRole("button", { name: "Start review" }));
       } else {
+        // WTS reviews and creates a saved plan when it opens. There is no click.
         await user.click(await screen.findByRole("button", { name: /^Open TASK-42.* details$/i }));
-        await user.click(await screen.findByRole("button", { name: "Review setup" }));
-        await user.click(within(document.querySelector('[data-ui="workspace-overview.setup"]') as HTMLElement).getByRole("button", { name: "Create workspace" }));
       }
       await waitFor(() => expect(fake.materializeWorkspace).toHaveBeenCalledTimes(1));
       const setup = document.querySelector('[data-ui="workspace-overview.setup"]') as HTMLElement;
@@ -73,7 +72,6 @@ describe("Workspace setup failure recovery", () => {
     });
     render(<LocalWorkspace client={fake.client} />);
     await user.click(await screen.findByRole("button", { name: /^Open TASK-42.* details$/i }));
-    await user.click(await screen.findByRole("button", { name: "Review setup" }));
     const setup = document.querySelector('[data-ui="workspace-overview.setup"]') as HTMLElement;
     await within(setup).findByText(message);
     if (repositoryScoped) {
@@ -113,7 +111,6 @@ describe("Reviewed setup cleanup", () => {
   async function openSetup(user: ReturnType<typeof userEvent.setup>, client: ReturnType<typeof fakeWorkspaceClient>["client"]) {
     render(<LocalWorkspace client={client} />);
     await user.click(await screen.findByRole("button", { name: /^Open TASK-42.* details$/i }));
-    await user.click(await screen.findByRole("button", { name: "Review setup" }));
     const setup = within(document.querySelector('[data-ui="workspace-overview.setup"]') as HTMLElement);
     await setup.findByRole("button", { name: "Clean setup files" });
     return setup;

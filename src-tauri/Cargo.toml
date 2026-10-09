@@ -37,7 +37,8 @@ base64 = "0.22.1"
 block2 = "0.6.2"
 objc2 = "0.6.4"
 objc2-app-kit = { version = "0.3.2", default-features = false, features = ["NSImage", "NSImageRep", "NSBitmapImageRep", "NSView"] }
-objc2-foundation = { version = "0.3.2", default-features = false, features = ["NSData", "NSDictionary", "NSError", "NSValue", "NSGeometry"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["NSBundle", "NSData", "NSDictionary", "NSError", "NSValue", "NSGeometry", "NSString", "NSObject"] }
+objc2-user-notifications = { version = "0.3.2", default-features = false, features = ["UNUserNotificationCenter", "UNNotificationContent", "UNNotificationRequest", "UNNotificationResponse", "UNNotification", "UNNotificationSound", "UNNotificationTrigger", "block2", "bitflags"] }
 objc2-web-kit = { version = "0.3.2", default-features = false, features = ["WKWebView", "WKSnapshotConfiguration", "objc2-app-kit", "objc2-core-foundation", "block2"] }
 
 [dev-dependencies]

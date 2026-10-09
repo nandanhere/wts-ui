@@ -161,6 +161,22 @@ describe("RepositoryReviewScreen repository selection", () => {
     slot.remove();
   });
 
+  it("opens the MR in GitLab from its title", async () => {
+    const user = userEvent.setup();
+    const workspaceId = "ws_mr_title_link";
+    const fake = fakeWorkspaceClient();
+    const controller = unreadController(workspaceId);
+    controller.entries = [controller.entries[1]!];
+    fake.client.getWorkspaceGitlabComparison = vi.fn().mockRejectedValue(new Error("The comparison is not in this test."));
+    fake.openGitlabMergeRequest.mockResolvedValue({ repositoryId: "provider_stratus", iid: 16, accepted: true });
+    const onNotice = vi.fn();
+    render(<RepositoryReviewScreen client={fake.client} gitlabConversations={controller} initialRepositoryId="stratus-api" materialization={materialization(workspaceId, [worktree("stratus-api")])} onNotice={onNotice} onRepositoryChange={vi.fn()} workspaceId={workspaceId} workspaceKey="MR-16" />);
+    const identity = screen.getByTestId("repository-review-toolbar");
+    await user.click(within(identity).getByRole("link", { name: "Merge request !16" }));
+    expect(fake.openGitlabMergeRequest).toHaveBeenCalledWith("provider_stratus", 16);
+    await waitFor(() => expect(onNotice).toHaveBeenCalledWith("team/stratus-api !16 · GitLab opened"));
+  });
+
   it("omits the single MR selector while keeping repository choice and the exact unread conversation reachable", async () => {
     const workspaceId = "ws_single_mr_controls";
     const fake = fakeWorkspaceClient();

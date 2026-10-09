@@ -1,5 +1,7 @@
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { WorkspaceCodeReviewCard } from "./WorkspaceCodeReviewCard";
 import { fakeWorkspaceClient } from "../../test/workspaceClientFake";
@@ -91,7 +93,7 @@ describe("WorkspaceCodeReviewCard", () => {
     ));
   });
 
-  it("shows Raptik findings with labels, the MR comment, and the earlier comment of Pratik", async () => {
+  it("shows Raptik findings with labels, a fix prompt, and the earlier comment of Pratik", async () => {
     const user = userEvent.setup();
     const fake = fakeWorkspaceClient({});
     fake.runWorkspaceCodeReview.mockResolvedValue(raptikReview);
@@ -102,7 +104,11 @@ describe("WorkspaceCodeReviewCard", () => {
     const findings = await screen.findByRole("list", { name: "Code review findings" });
     expect(within(findings).getByText("Blocking")).toBeInTheDocument();
     expect(within(findings).getByText("Hardcoded secret")).toBeInTheDocument();
-    expect(within(findings).getByText("Blocking: move the secret to the environment.")).toBeInTheDocument();
+    // Own code has no MR. The finding offers a prompt for a coding agent, not an MR comment.
+    expect(within(findings).queryByText("Blocking: move the secret to the environment.")).toBeNull();
+    const prompt = within(findings).getByText(/Verify each finding against the current code/, { selector: "pre" });
+    expect(prompt.textContent).toContain("In `src/auth.ts` around line 23: Hardcoded secret");
+    expect(prompt.textContent).toContain("JWT secret is hardcoded in source.");
     expect(within(findings).getByRole("link", { name: /Open the earlier comment/ })).toHaveAttribute("href", "https://gitlab.example/ops/mr/4#note_1");
     await user.click(within(findings).getByRole("button", { name: "Show src/auth.ts line 23 in the diff" }));
     expect(within(findings).getByText("Pratik said this before")).toBeInTheDocument();
@@ -111,6 +117,45 @@ describe("WorkspaceCodeReviewCard", () => {
     expect(reveal).toHaveBeenCalledWith(expect.objectContaining({ findingId: "f-1" }));
     expect(screen.getByText("Move secret to environment variable.")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Review again" })).toBeEnabled();
+  });
+
+  it("copies one prompt that fixes every finding that asks for a change", async () => {
+    const user = userEvent.setup();
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
+    const fake = fakeWorkspaceClient({});
+    fake.getWorkspaceCodeReview.mockResolvedValue({
+      ...raptikReview,
+      suggestedTests: ["Load the secret from the environment in a unit test."],
+      findings: [
+        raptikReview.findings[0]!,
+        { findingId: "n-1", severity: "suggestion", label: "nit", filePath: "src/auth.ts", line: 30, side: "additions", anchored: true, title: "Rename tok", explanation: "Use token.", suggestedPatch: "-const tok = 1;\n+const token = 1;" },
+        { findingId: "q-1", severity: "suggestion", label: "question", filePath: "src/retry.ts", line: 9, anchored: true, title: "Is the retry bounded?", explanation: "No limit." },
+        { findingId: "p-1", severity: "suggestion", label: "praise", filePath: "src/auth.ts", title: "Good test", explanation: "Clear." },
+      ],
+    });
+    render(<WorkspaceCodeReviewCard client={fake.client} workspaceId="ws_test" workspaceKey="TEST-1" />);
+    await user.click(await screen.findByRole("button", { name: "Copy a fix prompt for 2 findings" }));
+    const prompt = writeText.mock.calls[0]![0] as string;
+    expect(prompt).toContain("1. [Blocking] In `src/auth.ts` around line 23: Hardcoded secret");
+    expect(prompt).toContain("2. [Nit] In `src/auth.ts` around line 30: Rename tok");
+    expect(prompt).toContain("```diff\n-const tok = 1;\n+const token = 1;\n```");
+    expect(prompt).toContain("- Load the secret from the environment in a unit test.");
+    expect(prompt).not.toContain("Is the retry bounded?");
+    expect(prompt).not.toContain("Good test");
+  });
+
+  it("hides the review settings after a review until the user opens them", async () => {
+    const user = userEvent.setup();
+    const fake = fakeWorkspaceClient({});
+    fake.getWorkspaceCodeReview.mockResolvedValue(raptikReview);
+    render(<WorkspaceCodeReviewCard client={fake.client} workspaceId="ws_test" workspaceKey="TEST-1" />);
+    expect(await screen.findByText("Hardcoded secret")).toBeInTheDocument();
+    expect(screen.queryByRole("combobox", { name: "Code review provider" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Settings" }));
+    expect(screen.getByRole("combobox", { name: "Code review provider" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Hide settings" }));
+    expect(screen.queryByRole("combobox", { name: "Code review provider" })).toBeNull();
   });
 
   it("loads the saved review and marks it old when the patch on screen changed", async () => {
@@ -179,11 +224,15 @@ describe("WorkspaceCodeReviewCard", () => {
     expect(within(steps).getByText("Codex reads the review request.")).toBeInTheDocument();
     expect(await within(steps).findByText("rg -n cfg src")).toBeInTheDocument();
     expect(screen.getByText("Codex reviews the changes")).toBeInTheDocument();
+    expect(document.querySelector("[data-ui='verification.code-review-controls']")).toBeNull();
     expect(fake.getWorkspaceCodeReviewTrace).toHaveBeenCalledWith("ws_test", undefined);
     await waitFor(() => expect(fake.getWorkspaceCodeReviewTrace).toHaveBeenCalledWith("ws_test", 1), { timeout: 3_000 });
 
     finish(raptikReview);
     expect(await screen.findByText("Hardcoded secret")).toBeInTheDocument();
+    expect(document.querySelector("[data-ui='verification.code-review-controls']")).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Settings" }));
+    expect(document.querySelector("[data-ui='verification.code-review-controls']")).not.toBeNull();
     await user.click(await screen.findByText(/Show agent activity/));
     expect(screen.getByRole("list", { name: "Agent steps" })).toBeVisible();
   });
@@ -219,7 +268,8 @@ describe("WorkspaceCodeReviewCard", () => {
     await user.click(screen.getByRole("button", { name: "Review code" }));
     await waitFor(() => expect(fake.runWorkspaceCodeReview).toHaveBeenLastCalledWith("ws_test", "codex", "recentChanges", undefined, { skill: "team-review" }));
 
-    await user.click(skill);
+    await user.click(await screen.findByRole("button", { name: "Settings" }));
+    await user.click(await screen.findByRole("combobox", { name: "Code review skill" }));
     await user.click(screen.getByRole("option", { name: "No skill · general rules" }));
     expect(screen.getByText("General rules")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Review again" }));
@@ -263,11 +313,45 @@ describe("WorkspaceCodeReviewCard", () => {
     await waitFor(() => expect(fake.publishGitlabReviewComment).toHaveBeenLastCalledWith("provider_orders", 16, { body: "Question: can we drop this flag?" }));
   });
 
+  it("shows the findings of a label when the user selects its count", async () => {
+    const user = userEvent.setup();
+    const fake = fakeWorkspaceClient({});
+    fake.getWorkspaceCodeReview.mockResolvedValue({
+      ...raptikReview,
+      findings: [
+        raptikReview.findings[0]!,
+        { findingId: "n-1", severity: "suggestion", label: "nit", repositoryId: "repo_orders", filePath: "src/auth.ts", line: 30, side: "additions", anchored: true, title: "Rename the token helper", explanation: "The name hides the purpose." },
+      ],
+    });
+    render(<WorkspaceCodeReviewCard client={fake.client} findingsInDiff workspaceId="ws_test" workspaceKey="TEST-1" />);
+    const nit = await screen.findByRole("button", { name: "1 Nit" });
+    expect(screen.queryByText("Rename the token helper")).toBeNull();
+    await user.click(nit);
+    expect(nit).toHaveAttribute("aria-pressed", "true");
+    const list = screen.getByRole("list", { name: "Nit findings" });
+    expect(within(list).getByText("Rename the token helper")).toBeVisible();
+    expect(within(list).queryByText("Hardcoded secret")).toBeNull();
+    await user.click(screen.getByRole("button", { name: "1 Blocking" }));
+    expect(within(screen.getByRole("list", { name: "Blocking findings" })).getByText("Hardcoded secret")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "1 Blocking" }));
+    expect(screen.queryByRole("list", { name: "Blocking findings" })).toBeNull();
+  });
+
   it("keeps the post button off until WTS checks the MR with GitLab", async () => {
     const fake = fakeWorkspaceClient({});
     fake.getWorkspaceCodeReview.mockResolvedValue({ ...raptikReview, repositories: [{ ...raptikReview.repositories![0]!, mergeRequest: { iid: 16, baseCommitOid: "a".repeat(40), startCommitOid: "a".repeat(40), headCommitOid: "b".repeat(40) } }] });
     render(<WorkspaceCodeReviewCard client={fake.client} mergeRequest={{ worktreeRepositoryId: "repo_orders", providerRepositoryId: "provider_orders", iid: 16, canPost: false }} workspaceId="ws_test" workspaceKey="TEST-1" />);
     expect(await screen.findByRole("button", { name: "Post to GitLab on line 23" })).toBeDisabled();
     expect(fake.publishGitlabReviewComment).not.toHaveBeenCalled();
+  });
+
+  it("keeps long agent output inside the card width and a short step list", () => {
+    const css = readFileSync(resolve("src/variants/local-workspace/WorkspaceCodeReviewCard.module.css"), "utf8");
+    const block = (selector: string) => css.match(new RegExp(`(?:^|\\n)${selector.replace(".", "\\.")} \\{([^}]*)\\}`))?.[1] ?? "";
+    expect(block(".card")).toContain("grid-template-columns: minmax(0, 1fr)");
+    expect(block(".card")).toContain("min-width: 0");
+    expect(block(".trace")).toContain("grid-template-columns: minmax(0, 1fr)");
+    expect(block(".traceList")).toContain("max-height: 168px");
+    expect(block(".traceBody small")).toContain("-webkit-line-clamp: 3");
   });
 });

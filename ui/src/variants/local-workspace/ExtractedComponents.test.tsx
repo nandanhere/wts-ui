@@ -71,13 +71,41 @@ describe("Extracted presentational components in isolation", () => {
     expect(screen.getByText("Workspace updated successfully")).toBeTruthy();
   });
 
+  it("shows the assigned review MR on a review card, with the status and title of the workspace screen", async () => {
+    const user = userEvent.setup();
+    const openReview = vi.fn();
+    const review = { id: "r", repositoryId: "repo", repository: "devtools/netboot-verify", number: 24, title: "[DEVTOOLS-7510] fix: parse single-neighbor LLDP JSON", authorLogin: "a", sourceBranch: "fix/lldp-single-neighbor", targetBranch: "master", updatedAt: "2026-09-01T00:00:00Z", draft: false, reviewState: "requested" as const, status: "open" as const };
+    render(<WorkspaceCard workspace={{ ...sampleWorkspace, summary: "Last known · 1 worktree created" }} gitlabReview={review} onOpen={vi.fn()} onOpenGitlabReview={openReview} />);
+    const card = screen.getByRole("article");
+    expect(within(card).getByText("Review requested")).toBeVisible();
+    expect(within(card).getByText(review.title)).toBeVisible();
+    expect(within(card).getByText("fix/lldp-single-neighbor")).toBeVisible();
+    expect(within(card).queryByText("Last known · 1 worktree created")).toBeNull();
+    await user.click(within(card).getByRole("link", { name: "Open merge request !24 in GitLab" }));
+    expect(openReview).toHaveBeenCalledWith(review);
+  });
+
+  it("shows the review MR on the card while GitLab status is unavailable", async () => {
+    const user = userEvent.setup();
+    const openReview = vi.fn();
+    const target = { repositoryId: "repo", repository: "devtools/netboot-verify", number: 24 };
+    render(<WorkspaceCard workspace={{ ...sampleWorkspace, summary: "Last known · 1 worktree created" }} reviewTarget={target} onOpen={vi.fn()} onOpenGitlabReview={openReview} />);
+    const card = screen.getByRole("article");
+    expect(within(card).getByText("devtools/netboot-verify")).toBeVisible();
+    expect(within(card).queryByText("Last known · 1 worktree created")).toBeNull();
+    await user.click(within(card).getByRole("link", { name: "Open merge request !24 in GitLab" }));
+    expect(openReview).toHaveBeenCalledWith(target);
+  });
+
   it("renders WorkspaceCard in isolation", () => {
     render(<WorkspaceCard workspace={sampleWorkspace} onOpen={vi.fn()} />);
     expect(
-      screen.getByRole("button", {
-        name: "Open WS-1: Test Workspace Title",
+      within(screen.getByRole("group", { name: "WS-1 actions" })).getByRole("button", {
+        name: "Open workspace for WS-1",
       }),
-    ).toBeTruthy();
+    ).toHaveTextContent("Open workspace");
+    // The card surface and the footer action must not share one accessible name.
+    expect(screen.getAllByRole("button", { name: "Open WS-1: Test Workspace Title" })).toHaveLength(1);
     expect(screen.getByText("Test Workspace Title")).toBeTruthy();
   });
 
@@ -90,11 +118,14 @@ describe("Extracted presentational components in isolation", () => {
     rerender(<WorkspaceCard workspace={sampleWorkspace} agent={{ ...agent, state: "idle" }} gitlabReview={review} onOpen={vi.fn()} />);
     expect(screen.getByText("Review the MR")).toBeVisible();
     rerender(<WorkspaceCard workspace={sampleWorkspace} agent={{ ...agent, state: "working" }} onOpen={vi.fn()} />);
-    expect(screen.getByText("Agent works")).toBeVisible();
+    expect(screen.getByText("View progress")).toBeVisible();
     rerender(<WorkspaceCard workspace={sampleWorkspace} agent={{ ...agent, state: "idle", updateKind: "completion" }} onOpen={vi.fn()} />);
     expect(screen.getByText("Check the agent result")).toBeVisible();
+    rerender(<WorkspaceCard workspace={{ ...sampleWorkspace, lane: "planned" }} onOpen={vi.fn()} />);
+    expect(within(screen.getByRole("group", { name: "WS-1 actions" })).getByRole("button", { name: "Start work for WS-1" })).toHaveTextContent("Start work");
+    expect(screen.queryByText("Start the work")).not.toBeInTheDocument();
     rerender(<WorkspaceCard workspace={sampleWorkspace} onOpen={vi.fn()} />);
-    expect(screen.queryByText(/Answer the agent|Review the MR|Agent works|Check the agent result/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Answer the agent|Review the MR|View progress|Check the agent result|Start work/)).not.toBeInTheDocument();
   });
 
   it("keeps only distinct workspace actions in one keyboard-accessible row", async () => {
@@ -123,24 +154,18 @@ describe("Extracted presentational components in isolation", () => {
     expect(
       within(actions).queryByRole("button", { name: "Open Jira issue" }),
     ).toBeNull();
-    expect(screen.queryByText("Open Jira")).toBeNull();
-    expect(within(actions).queryByText("Open in VS Code")).toBeNull();
-
-    await user.click(
-      within(actions).getByRole("button", { name: "Open WS-1 in VS Code" }),
-    );
-    expect(openWorkspaceInVscode).toHaveBeenCalledOnce();
-    expect(openWorkspace).not.toHaveBeenCalled();
+    expect(within(actions).getAllByRole("button")).toHaveLength(2);
 
     await user.click(issueLink);
     expect(openJira).toHaveBeenCalledOnce();
 
-    await user.click(
-      within(actions).getByRole("button", { name: "Move WS-1" }),
-    );
-    await user.click(
-      await screen.findByRole("menuitem", { name: "Move to Parked" }),
-    );
+    await user.click(within(actions).getByRole("button", { name: "More actions for WS-1" }));
+    await user.click(await screen.findByRole("menuitem", { name: "Open in VS Code" }));
+    expect(openWorkspaceInVscode).toHaveBeenCalledOnce();
+    expect(openWorkspace).not.toHaveBeenCalled();
+
+    await user.click(within(actions).getByRole("button", { name: "More actions for WS-1" }));
+    await user.click(await screen.findByRole("menuitem", { name: "Move to Parked" }));
     expect(moveToParked).toHaveBeenCalledOnce();
 
   });
@@ -355,5 +380,33 @@ describe("Extracted presentational components in isolation", () => {
       screen.getByLabelText("Search workspaces and commands"),
     ).toBeTruthy();
     expect(screen.getByText("Test Command")).toBeTruthy();
+  });
+
+  it("selects the first visible group first, so Enter opens a workspace before an agent session", async () => {
+    const user = userEvent.setup();
+    const openSession = vi.fn();
+    const openWorkspace = vi.fn();
+    render(
+      <CommandPalette
+        open
+        onOpenChange={vi.fn()}
+        commandQuery="wts"
+        onCommandQueryChange={vi.fn()}
+        activeCommandIndex={0}
+        onActiveCommandIndexChange={vi.fn()}
+        inputRef={{ current: null }}
+        matchingCommandItems={[
+          { id: "session-1", label: "Codex · wts-ui", description: "Idle", group: "Agent sessions", icon: "terminal", run: openSession },
+          { id: "ws-1", label: "wts-ui", description: "Open in VS Code", group: "Workspaces", icon: "folder", run: openWorkspace },
+        ]}
+        commandGroups={["Workspaces", "Agent sessions"]}
+      />,
+    );
+    const headings = screen.getAllByRole("heading", { level: 3 }).map((heading) => heading.textContent);
+    expect(headings).toEqual(["Workspaces", "Agent sessions"]);
+    expect(document.getElementById("command-ws-1")).toHaveAttribute("data-active", "true");
+    await user.type(screen.getByLabelText("Search workspaces and commands"), "{Enter}");
+    expect(openWorkspace).toHaveBeenCalledOnce();
+    expect(openSession).not.toHaveBeenCalled();
   });
 });

@@ -408,14 +408,16 @@ fn commit_oid_from_snapshot(
 }
 
 fn available_branches(snapshot: &RefSnapshot) -> Vec<AvailableBranch> {
-    let mut branches = BTreeMap::<String, AvailableBranch>::new();
+    // Key by name, then local before origin. A local branch and its origin
+    // branch can point at different commits, so list both.
+    let mut branches = BTreeMap::<(String, bool), AvailableBranch>::new();
     for (full_ref, commit_oid) in &snapshot.refs {
         let Some(commit_oid) = commit_oid.as_ref() else {
             continue;
         };
         if let Some(name) = full_ref.strip_prefix("refs/heads/") {
             branches.insert(
-                name.to_owned(),
+                (name.to_owned(), false),
                 AvailableBranch {
                     name: name.to_owned(),
                     full_ref: full_ref.clone(),
@@ -428,11 +430,11 @@ fn available_branches(snapshot: &RefSnapshot) -> Vec<AvailableBranch> {
         let Some(name) = full_ref.strip_prefix("refs/remotes/origin/") else {
             continue;
         };
-        if name == "HEAD" || branches.contains_key(name) {
+        if name == "HEAD" {
             continue;
         }
         branches.insert(
-            name.to_owned(),
+            (name.to_owned(), true),
             AvailableBranch {
                 name: name.to_owned(),
                 full_ref: full_ref.clone(),
@@ -1093,6 +1095,52 @@ mod tests {
                 "ext repository label leaked {sentinel}"
             );
         }
+    }
+
+    #[test]
+    fn lists_an_origin_branch_that_has_a_local_branch_with_the_same_name() {
+        let directory = tempfile::tempdir().expect("temporary repository");
+        let source = directory.path().join("source-api");
+        fs::create_dir(&source).expect("source repository directory");
+        run(None, ["init", source.to_str().expect("utf8 path")]);
+        run(Some(&source), ["config", "user.name", "WTS Test"]);
+        run(
+            Some(&source),
+            ["config", "user.email", "wts@example.invalid"],
+        );
+        run(Some(&source), ["config", "commit.gpgSign", "false"]);
+        fs::write(source.join("README.md"), "# source api\n").expect("fixture file");
+        run(Some(&source), ["add", "README.md"]);
+        run(Some(&source), ["commit", "-m", "initial"]);
+        run(Some(&source), ["branch", "-M", "main"]);
+        run(Some(&source), ["branch", "develop"]);
+
+        let target = directory.path().join("cloned-api");
+        clone_repository(
+            source.to_str().expect("utf8 source path"),
+            &target,
+            &RepositoryCloneOptions::default(),
+        )
+        .expect("clone repository");
+        run(Some(&target), ["branch", "develop", "origin/develop"]);
+
+        let inspection = inspect_repository(&target).expect("repository inspection");
+        let develop: Vec<_> = inspection
+            .available_branches
+            .iter()
+            .filter(|branch| branch.name == "develop")
+            .map(|branch| (branch.full_ref.as_str(), branch.remote))
+            .collect();
+        assert_eq!(
+            develop,
+            [
+                ("refs/heads/develop", false),
+                ("refs/remotes/origin/develop", true)
+            ]
+        );
+        let origin_base =
+            super::resolve_base(&inspection, Some("origin/develop")).expect("origin base");
+        assert_eq!(origin_base.full_ref, "refs/remotes/origin/develop");
     }
 
     #[test]

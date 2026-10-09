@@ -523,6 +523,7 @@ struct PreparedRemoval {
     worktrees: Vec<WorktreeRemovalRequest>,
     generated_paths: Vec<PathBuf>,
     protected_paths: Vec<PathBuf>,
+    unmanaged_paths: Vec<PathBuf>,
 }
 
 enum VerificationSelection {
@@ -1338,7 +1339,9 @@ impl LocalWtsService {
                     )
                 })
                 .collect::<Vec<_>>();
-            list.observed_sessions = self.inner.agent_observer.observe_workspaces(&workspaces);
+            let observation = self.inner.agent_observer.observe_all(&workspaces);
+            list.observed_sessions = observation.observed;
+            list.unassigned_work = observation.unassigned_work;
             list.observed_sessions
                 .extend(self.inner.copilot_observer.observe_workspaces(&workspaces));
             list.observed_sessions.sort_by(|left, right| {
@@ -5716,18 +5719,35 @@ impl LocalWtsService {
         })
     }
 
-    /// Remove a saved plan or a reviewed materialized workspace after repeating
-    /// the full read-only preflight under the materialization lock.
-    ///
-    /// Materialized branches are always retained. The append-only registry
-    /// tombstone is written only after every verified filesystem effect has
-    /// completed.
     pub fn remove_workspace(
         &self,
         workspace_id: Uuid,
         expected_effect_digest: &str,
         idempotency_key: &str,
         delete_protected_paths: bool,
+    ) -> Result<RemoveWorkspaceResult, LocalWtsError> {
+        self.remove_workspace_with_backup(
+            workspace_id,
+            expected_effect_digest,
+            idempotency_key,
+            delete_protected_paths,
+            None,
+        )
+    }
+
+    /// Remove a saved plan or a reviewed materialized workspace after repeating
+    /// the full read-only preflight under the materialization lock.
+    ///
+    /// Materialized branches are always retained. The append-only registry
+    /// tombstone is written only after every verified filesystem effect has
+    /// completed.
+    pub fn remove_workspace_with_backup(
+        &self,
+        workspace_id: Uuid,
+        expected_effect_digest: &str,
+        idempotency_key: &str,
+        delete_protected_paths: bool,
+        backup_folder: Option<&Path>,
     ) -> Result<RemoveWorkspaceResult, LocalWtsError> {
         if let Some(replay) =
             self.removal_replay(workspace_id, expected_effect_digest, idempotency_key)?
@@ -5767,7 +5787,9 @@ impl LocalWtsService {
                     RemovalBlockerCode::PlanningDocumentsPresent
                         | RemovalBlockerCode::WorktreeChanges
                         | RemovalBlockerCode::IgnoredFiles
-                )
+                ) || (blocker.code == RemovalBlockerCode::UnexpectedPath
+                    && blocker.message
+                        == "The workspace root contains a path that is not managed by WTS.")
             });
         if !prepared.public.ready && !asserted_destructive_removal {
             return Err(LocalWtsError::RemovalBlocked {
@@ -5782,6 +5804,49 @@ impl LocalWtsService {
                 validate_known_generated_tree(path).map_err(|_| LocalWtsError::RemovalFailed)?;
                 prepared.generated_paths.push(path.clone());
                 prepared.public.generated_paths.push(display_path(path)?);
+            }
+            for path in &prepared.unmanaged_paths {
+                prepared.generated_paths.push(path.clone());
+                prepared.public.generated_paths.push(display_path(path)?);
+            }
+        }
+
+        let mut backup_path = None;
+        if let Some(backup_root) = backup_folder {
+            if !backup_root.as_os_str().is_empty() {
+                let resolved_backup = resolve_backup_path(backup_root);
+                let workspace_leaf = Path::new(&prepared.public.workspace_display_path)
+                    .file_name()
+                    .and_then(OsStr::to_str)
+                    .unwrap_or("workspace");
+                let timestamp = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0);
+                let backup_dest =
+                    resolved_backup.join(format!("{}-{}", workspace_leaf, timestamp));
+                if fs::create_dir_all(&backup_dest).is_ok() {
+                    let mut copied_any = false;
+                    for path in prepared
+                        .protected_paths
+                        .iter()
+                        .chain(prepared.unmanaged_paths.iter())
+                    {
+                        if let Some(name) = path.file_name() {
+                            let target = backup_dest.join(name);
+                            if copy_tree_recursive(path, &target).is_ok() {
+                                copied_any = true;
+                            }
+                        }
+                    }
+                    if copied_any {
+                        if let Ok(display) = display_path(&backup_dest) {
+                            backup_path = Some(display);
+                        }
+                    } else {
+                        let _ = fs::remove_dir(&backup_dest);
+                    }
+                }
             }
         }
 
@@ -5799,6 +5864,7 @@ impl LocalWtsService {
             removed_worktree_count,
             retained_branches: prepared.public.retained_branches.clone(),
             removed_generated_paths: prepared.public.generated_paths.clone(),
+            backup_path,
         };
 
         if prepared.public.kind == WorkspaceRemovalKind::MaterializedWorkspace {
@@ -5817,6 +5883,11 @@ impl LocalWtsService {
             }
             for path in &prepared.generated_paths {
                 remove_known_generated_path(path)?;
+            }
+            if asserted_destructive_removal {
+                remove_workspace_root_contents(Path::new(
+                    &prepared.public.workspace_display_path,
+                ))?;
             }
             remove_empty_workspace_root(Path::new(&prepared.public.workspace_display_path))?;
         }
@@ -6804,6 +6875,7 @@ impl LocalWtsService {
         let mut protected_paths = Vec::new();
         let mut protected_summaries = Vec::new();
         let mut retained_branches = Vec::new();
+        let mut unmanaged_paths = Vec::new();
 
         if kind == WorkspaceRemovalKind::SavedPlan {
             if root_exists {
@@ -7166,6 +7238,7 @@ impl LocalWtsService {
                                 break;
                             };
                             if !allowed_paths.contains(&entry.path()) {
+                                unmanaged_paths.push(entry.path());
                                 blockers.push(
                                     removal_blocker(
                                         RemovalBlockerCode::UnexpectedPath,
@@ -7224,6 +7297,7 @@ impl LocalWtsService {
             worktrees,
             generated_paths,
             protected_paths,
+            unmanaged_paths,
         })
     }
 
@@ -10384,6 +10458,60 @@ fn remove_empty_workspace_root(path: &Path) -> Result<(), LocalWtsError> {
     fs::remove_dir(path).map_err(|_| LocalWtsError::RemovalFailed)
 }
 
+fn resolve_backup_path(input: &Path) -> PathBuf {
+    if let Ok(stripped) = input.strip_prefix("~") {
+        if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
+            return home.join(stripped);
+        }
+    }
+    input.to_path_buf()
+}
+
+fn copy_tree_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
+    let metadata = src.symlink_metadata()?;
+    if metadata.file_type().is_symlink() {
+        return Ok(());
+    }
+    if metadata.is_dir() {
+        fs::create_dir_all(dst)?;
+        for entry in fs::read_dir(src)? {
+            let entry = entry?;
+            let child_src = entry.path();
+            let child_dst = dst.join(entry.file_name());
+            copy_tree_recursive(&child_src, &child_dst)?;
+        }
+    } else if metadata.is_file() {
+        if let Some(parent) = dst.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::copy(src, dst)?;
+    }
+    Ok(())
+}
+
+fn remove_workspace_root_contents(workspace_root: &Path) -> Result<(), LocalWtsError> {
+    if !workspace_root.is_dir() {
+        return Ok(());
+    }
+    let entries = match fs::read_dir(workspace_root) {
+        Ok(entries) => entries,
+        Err(_) => return Ok(()),
+    };
+    for entry in entries {
+        if let Ok(entry) = entry {
+            let path = entry.path();
+            if let Ok(metadata) = path.symlink_metadata() {
+                if metadata.file_type().is_symlink() || metadata.is_file() {
+                    let _ = fs::remove_file(&path);
+                } else if metadata.is_dir() {
+                    let _ = fs::remove_dir_all(&path);
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 fn planning_folder_leaf(folder: WorkspacePlanningFolder) -> &'static str {
     match folder {
         WorkspacePlanningFolder::Plans => "plans",
@@ -10932,11 +11060,12 @@ fn workspace_agent_guide(context: &WorkspaceEvidenceContext) -> String {
          - Treat proposed commands and validation flows as review-only until the user runs or approves them.\n\
          - Every evidence path must remain inside a listed repository worktree.\n\n\
          ## Change-request proposals\n\n\
+         Proposal lines are for WTS, not for the user. Put each proposal line inside an HTML comment on its own line, for example `<!-- WTS_MR_LINK_PROPOSAL: {...} -->`, so that chat views hide it. Before the comments, tell the user in one plain sentence that WTS can now open or link the MR. Do not show the JSON in a code block.\n\n\
          If an MR already exists, do not make another MR. Point WTS to it in your final response. \
-         Write one compact JSON line per repository: `WTS_MR_LINK_PROPOSAL: {\"schemaVersion\":1,\"repositoryId\":\"<ID from .wts/context.json>\",\"iid\":<MR number>}`. \
+         Write one compact JSON line per repository: `<!-- WTS_MR_LINK_PROPOSAL: {\"schemaVersion\":1,\"repositoryId\":\"<ID from .wts/context.json>\",\"iid\":<MR number>} -->`. \
          Use only the MR number, not its URL or a branch name. WTS checks the trusted GitLab project before it saves a link. \
          Do not switch branches or move local work to point to an MR.\n\n\
-         If you push a branch and it is ready for a change request, end your final response with one compact JSON object per repository on its own line. Prefix each line exactly with `WTS_CHANGE_REQUEST_PROPOSAL:`. Use this schema: `{\"schemaVersion\":1,\"repositoryId\":\"<ID from .wts/context.json>\",\"sourceHeadCommitOid\":\"<full HEAD>\",\"title\":\"<proposed title>\",\"body\":\"<complete proposed description>\",\"issueKeys\":[\"<only linked Jira keys this change serves>\"],\"verification\":{\"status\":\"passed|partial|failed|notReported\",\"summary\":\"<checks run and limitations>\"}}`. Read `.wts/work-items.json` for the linked Jira allowlist. Do not add every linked issue. Include only issues that this repository change directly serves. Describe the complete change and important behavior in the body. Report verification as `passed` only when all intended checks completed, `partial` when targeted checks passed but another check could not complete, and `failed` when a completed check failed. Do not emit a proposal when the branch is not pushed or is not ready.\n\n\
+         If you push a branch and it is ready for a change request, end your final response with one compact JSON object per repository on its own line. Write each line exactly as `<!-- WTS_CHANGE_REQUEST_PROPOSAL: <JSON> -->`. Use this schema: `{\"schemaVersion\":1,\"repositoryId\":\"<ID from .wts/context.json>\",\"sourceHeadCommitOid\":\"<full HEAD>\",\"title\":\"<proposed title>\",\"body\":\"<complete proposed description>\",\"issueKeys\":[\"<only linked Jira keys this change serves>\"],\"verification\":{\"status\":\"passed|partial|failed|notReported\",\"summary\":\"<checks run and limitations>\"}}`. Read `.wts/work-items.json` for the linked Jira allowlist. Do not add every linked issue. Include only issues that this repository change directly serves. Describe the complete change and important behavior in the body. Report verification as `passed` only when all intended checks completed, `partial` when targeted checks passed but another check could not complete, and `failed` when a completed check failed. Do not emit a proposal when the branch is not pushed or is not ready.\n\n\
          ## Status and result text\n\n\
          WTS can show your latest status and result in the workspace list. Use direct technical English for this text.\n\n\
          - Name the actor and use active voice.\n\

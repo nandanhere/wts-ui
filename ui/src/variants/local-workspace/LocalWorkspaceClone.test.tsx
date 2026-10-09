@@ -146,12 +146,6 @@ it("preserves repository choices and plan settings across a deferred clone", asy
   await reviewServices(editServices);
   await user.click(within(dialog).getByRole("button", { name: /OpenCode/ }));
   await user.click(within(dialog).getByRole("radio", { name: /Create a starter kit/i }));
-  fireEvent.change(within(dialog).getByRole("combobox", { name: "Planning folder" }), {
-    target: { value: "plans" },
-  });
-  fireEvent.change(within(dialog).getByRole("combobox", { name: "Planning starter" }), {
-    target: { value: "notes" },
-  });
   await user.click(within(dialog).getByRole("button", { name: "Source" }));
   await user.click(within(dialog).getByRole("button", { name: "Move to Kanban" }));
   await finishClone();
@@ -169,8 +163,7 @@ it("preserves repository choices and plan settings across a deferred clone", asy
   await user.click(within(resumed).getByRole("button", { name: /Review plan/i }));
   expect(within(resumed).getByRole("button", { name: /OpenCode/ })).toHaveAttribute("aria-pressed", "true");
   expect(within(resumed).getByRole("radio", { name: /Create a starter kit/i })).toBeChecked();
-  expect(within(resumed).getByRole("combobox", { name: "Planning folder" })).toHaveValue("plans");
-  expect(within(resumed).getByRole("combobox", { name: "Planning starter" })).toHaveValue("notes");
+  expect(within(resumed).getByText(/plans-and-kanban\/ · Kanban kit/i)).toBeVisible();
 });
 
 it("starts a blank workspace after a resumed clone is canceled", async () => {

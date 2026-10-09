@@ -1,4 +1,4 @@
-import { act, render, screen } from "@testing-library/react";
+import { act, render, screen, within } from "@testing-library/react";
 import { StrictMode } from "react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
@@ -84,6 +84,50 @@ describe("managed agent connection", () => {
     expect(
       screen.getByRole("textbox", { name: "Start a background task" }),
     ).toBeVisible();
+  });
+
+  it("shows only live sessions in full and folds idle sessions into a short list", async () => {
+    const user = userEvent.setup();
+    const fake = fakeWorkspaceClient();
+    const observed = (id: string, status: "working" | "idle", update: string) => ({
+      schemaVersion: 1 as const,
+      sessionId: id,
+      workspaceId: launchingSession.workspaceId,
+      provider: "codex" as const,
+      source: "codexVscodeRollout" as const,
+      status,
+      activity: null,
+      latestUpdate: update,
+      updateKind: "completion" as const,
+      startedAtUnixMs: 1_785_500_000_000,
+      lastEventAtUnixMs: 1_785_500_003_000,
+    });
+    fake.listAgentSessions.mockResolvedValue({
+      schemaVersion: 1,
+      sessions: [],
+      observedSessions: [
+        observed("live", "working", "Live work."),
+        observed("idle-1", "idle", "The **Beacon** row now shows the branch."),
+        observed("idle-2", "idle", "Committed the fix."),
+      ],
+    });
+
+    render(
+      <AgentStatePrototype client={fake.client} materialized workspaceId={launchingSession.workspaceId} />,
+    );
+
+    expect(await screen.findByText("Live work.")).toBeVisible();
+    expect(screen.getAllByRole("article")).toHaveLength(1);
+    const earlier = screen.getByText("Earlier sessions").closest("details") as HTMLElement;
+    expect(earlier).not.toHaveAttribute("open");
+    expect(within(earlier).getByText("2")).toBeInTheDocument();
+
+    await user.click(screen.getByText("Earlier sessions"));
+    const row = screen.getByText("The Beacon row now shows the branch.");
+    expect(screen.getAllByRole("article")).toHaveLength(1);
+    await user.click(row);
+    expect(screen.getAllByRole("article")).toHaveLength(2);
+    expect(screen.queryByText(/\*\*Beacon\*\*/)).not.toBeInTheDocument();
   });
 
   it("shows a fixed question signal without showing question content", async () => {

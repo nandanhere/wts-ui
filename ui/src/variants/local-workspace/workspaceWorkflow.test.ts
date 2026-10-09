@@ -9,6 +9,7 @@ import {
   suggestedWorkflowStateForMergeRequests,
   workspaceWorkflowSignalHandled,
   workflowStateForLane,
+  workspaceIdForGitlabReview,
 } from "./workspaceWorkflow";
 
 describe("workspace workflow projection", () => {
@@ -227,5 +228,23 @@ describe("workspace workflow projection", () => {
     expect(workspaceWorkflowSignalHandled("workspace-1", 101, storage)).toBe(
       false,
     );
+  });
+
+  it("finds the review workspace for a merge request by project path and number", () => {
+    const review = (id: string, title: string, label = title) => ({
+      id,
+      title,
+      intent: { type: "repositorySet" as const, label },
+      repositoryPlans: [{ label: "summit", baseRef: "main" }],
+    });
+    const workspaces = [
+      review("ws_other", "Review devtools/summit !41"),
+      review("ws_summit", "Review devtools/summit !40"),
+      review("ws_short", "Review webapp-classes !2"),
+    ];
+    expect(workspaceIdForGitlabReview(workspaces, { repository: "devtools/summit", number: 40 })).toBe("ws_summit");
+    expect(workspaceIdForGitlabReview(workspaces, { repository: "devtools/webapp-classes", number: 2 })).toBe("ws_short");
+    expect(workspaceIdForGitlabReview(workspaces, { repository: "other-group/summit", number: 40 })).toBeUndefined();
+    expect(workspaceIdForGitlabReview(workspaces, { repository: "devtools/summit", number: 99 })).toBeUndefined();
   });
 });

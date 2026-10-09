@@ -1052,7 +1052,7 @@
 /* Responsive */
 
 @media (max-width: 1100px) {
-  .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .kpis:not(.summaryCard .kpis) { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .columns { grid-template-columns: minmax(0, 1fr); }
 }
 
@@ -1065,4 +1065,191 @@
   .panel { width: calc(100% - 24px); }
   .kpis { grid-template-columns: minmax(0, 1fr); }
   .legend { display: none; }
+}
+
+/* Page structure: title and settings, then period and actions, then one summary card. */
+
+.settingsRow {
+  display: flex;
+  align-items: center;
+  gap: 4px 16px;
+  flex-wrap: wrap;
+  margin-top: 10px;
+  color: var(--mt-muted);
+  font-size: 12px;
+}
+
+.settingsRow .scheduleControl [data-select-trigger] {
+  height: 30px;
+  min-width: 132px;
+}
+
+.settingsLink {
+  padding: 4px 6px;
+  color: var(--mt-user);
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.settingsLink:hover:not(:disabled) { background: var(--mt-user-soft); }
+.settingsLink:disabled { color: var(--mt-muted); cursor: not-allowed; }
+.settingsLink:focus-visible { outline: none; box-shadow: var(--wts-focus-ring); }
+
+.panel { grid-template-columns: minmax(0, 1fr); }
+.toolbar { min-width: 0; }
+.toolbar .reviewHistory { flex: 1 1 320px; min-width: 0; }
+.toolbar .reviewHistoryList { min-width: 0; }
+
+/* Days come first. Saved 4-hour periods open below on request. */
+.periodPicker {
+  display: grid;
+  flex: 1 1 320px;
+  gap: 8px;
+  min-width: 0;
+}
+
+.periodPicker .reviewHistoryLabel { min-width: 44px; }
+.reviewHistoryList .dayChoice { min-width: 76px; padding: 6px 12px; }
+
+.summaryCard {
+  display: grid;
+  overflow: hidden;
+  background: var(--mt-surface);
+  border: 1px solid var(--mt-line);
+  border-radius: var(--mt-radius);
+}
+
+.summaryCard .kpis {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0;
+}
+
+.summaryCard .kpi {
+  padding: 20px 24px;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+}
+
+.summaryCard .kpi + .kpi { border-left: 1px solid var(--mt-line); }
+
+.kpiFooter {
+  display: grid;
+  gap: 10px;
+  padding: 14px 24px 18px;
+  color: var(--mt-muted);
+  border-top: 1px solid var(--mt-line);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.kpiFooter > span:last-child {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 16px;
+}
+
+.kpiFooter strong { color: var(--mt-ink); font-size: 14px; }
+.kpiFooter .kpiFormula { display: inline; margin: 0; color: var(--mt-muted); }
+
+.kpiBar {
+  display: block;
+  height: 6px;
+  background: linear-gradient(90deg, var(--mt-user) 0 var(--user-share), var(--mt-agent) var(--user-share) 100%);
+  border-radius: 99px;
+}
+
+@media (max-width: 760px) {
+  .summaryCard .kpis { grid-template-columns: minmax(0, 1fr); }
+  .summaryCard .kpi + .kpi { border-top: 1px solid var(--mt-line); border-left: 0; }
+}
+
+/* Suggested Jira groups */
+
+.jiraGroups {
+  display: grid;
+  gap: 12px;
+  margin: 12px 16px 0;
+  padding: 14px 16px;
+  background: var(--mt-user-soft);
+  border: 1px solid color-mix(in srgb, var(--mt-user) 35%, transparent);
+  border-radius: var(--mt-radius);
+}
+
+.jiraGroups > header { display: grid; gap: 2px; }
+.jiraGroups h4 { margin: 0; color: var(--mt-ink); font-size: 13px; font-weight: 650; }
+.jiraGroups > header span { color: var(--mt-muted); font-size: 12px; }
+.jiraGroups ul { display: grid; gap: 10px; margin: 0; padding: 0; list-style: none; }
+
+.jiraGroups li {
+  display: grid;
+  gap: 8px;
+  padding: 12px 14px;
+  background: var(--mt-surface);
+  border: 1px solid var(--mt-line);
+  border-radius: 8px;
+}
+
+.jiraGroupRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.jiraGroupText { display: grid; gap: 3px; min-width: 0; }
+.jiraGroupText strong { overflow: hidden; color: var(--mt-ink); font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
+.jiraGroupText span { color: var(--mt-muted); font-size: 12px; }
+.jiraGroupRow .inlineActions { flex: none; }
+
+.jiraGroupMembers > summary {
+  width: fit-content;
+  color: var(--mt-user);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.jiraGroupMembers ul {
+  display: grid;
+  gap: 0;
+  max-height: 240px;
+  margin: 8px 0 0;
+  overflow-y: auto;
+  border-top: 1px solid var(--mt-line);
+}
+
+.jiraGroups .jiraGroupMembers li {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 0;
+  background: none;
+  border: 0;
+  border-bottom: 1px solid var(--mt-line);
+  border-radius: 0;
+  font-size: 12px;
+}
+
+.jiraGroupMembers li span:first-child { overflow: hidden; color: var(--mt-ink); text-overflow: ellipsis; white-space: nowrap; }
+.jiraGroupMembers li span:last-child { flex: none; color: var(--mt-muted); }
+
+/* Separates the suggestion box from the full list, so no block looks like part of a group. */
+.reviewListHeading {
+  margin: 0;
+  padding: 20px 16px 8px;
+  color: var(--mt-muted);
+  border-bottom: 1px solid var(--mt-line);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+@media (max-width: 760px) {
+  .jiraGroupRow { flex-direction: column; align-items: stretch; }
 }

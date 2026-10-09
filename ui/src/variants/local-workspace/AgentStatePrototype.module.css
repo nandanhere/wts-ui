@@ -14,8 +14,8 @@
 }
 
 .heading {
-  min-height: 48px;
-  padding: 8px 14px;
+  min-height: 52px;
+  padding: 12px 16px;
   background: var(--wts-surface-subtle);
   border-bottom: 1px solid var(--wts-line);
 }
@@ -45,7 +45,7 @@
 .heading h2 {
   margin: 0;
   color: var(--wts-ink);
-  font-size: 13px;
+  font-size: 14px;
 }
 
 .body {
@@ -161,8 +161,8 @@
 
 .sessionList {
   display: grid;
-  gap: 8px;
-  padding: 12px 14px;
+  gap: 10px;
+  padding: 16px;
 }
 
 .sessionCard {
@@ -300,13 +300,15 @@
 }
 
 .visibilityNote {
-  padding: 0 14px 12px;
+  padding: 0 16px 16px;
 }
 
 .prompt {
   display: grid;
-  gap: 6px;
-  padding: 0 14px 12px;
+  gap: 10px;
+  margin: 0 16px 16px;
+  padding: 16px 0 0;
+  border-top: 1px solid var(--wts-line);
 }
 
 .prompt .actions {
@@ -356,9 +358,9 @@
 
 .prompt textarea {
   width: 100%;
-  min-height: 68px;
+  min-height: 72px;
   resize: vertical;
-  padding: 8px 10px;
+  padding: 10px 12px;
   color: var(--wts-ink);
   background: var(--wts-surface-subtle);
   border: 1px solid var(--wts-line);
@@ -414,4 +416,78 @@
     grid-column: 2;
     justify-self: start;
   }
+}
+
+.earlier {
+  border-top: 1px solid var(--wts-line);
+  padding-top: 6px;
+}
+
+.earlier > summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 36px;
+  color: var(--wts-muted);
+  font-size: 13px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.earlier > summary span {
+  padding: 0 7px;
+  background: var(--wts-surface-subtle);
+  border-radius: 99px;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.earlierList {
+  display: grid;
+  margin: 4px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.earlierList > li + li {
+  border-top: 1px solid var(--wts-line);
+}
+
+.earlierRow > summary {
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  min-height: 40px;
+  padding: 0 8px;
+  border-radius: var(--wts-radius-sm);
+  font-size: 12px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.earlierRow > summary::-webkit-details-marker {
+  display: none;
+}
+
+.earlierRow > summary:hover {
+  background: var(--wts-surface-subtle);
+}
+
+.earlierRow > summary strong {
+  color: var(--wts-ink);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.earlierPreview,
+.earlierRow > summary time {
+  overflow: hidden;
+  color: var(--wts-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.earlierRow[open] > article {
+  margin: 4px 0 12px;
 }

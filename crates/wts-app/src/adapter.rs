@@ -6,7 +6,6 @@ use crate::{
     AgentProvider, AgentRunResult, GraphIndexResult, GraphWorkspaceStatus,
     agent_session_details::{AgentProcessEvent, AgentProcessEventKind},
     agent_sessions::{
-        CHANGE_REQUEST_PROPOSAL_PREFIX, MR_LINK_PROPOSAL_PREFIX,
         parse_agent_change_request_proposals, parse_agent_mr_link_proposals,
     },
     collaboration::{
@@ -1378,9 +1377,7 @@ fn bounded_agent_message(value: &str) -> Option<String> {
         .lines()
         .map(str::trim)
         .filter(|line| {
-            !line.is_empty()
-                && !line.starts_with(CHANGE_REQUEST_PROPOSAL_PREFIX)
-                && !line.starts_with(MR_LINK_PROPOSAL_PREFIX)
+            !line.is_empty() && !crate::agent_sessions::is_proposal_line(line)
         })
         .take(4)
         .collect::<Vec<_>>()

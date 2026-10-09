@@ -18,6 +18,12 @@ This boundary can be a serialized contract, transport, filesystem effect, proces
 
 If an external application prevents automation, add the strongest deterministic contract test. Also document an optional integration check.
 
+# Desktop layout rule
+
+The macOS app uses WebKit. Chromium tests do not prove the desktop layout.
+
+After each UI layout change, run `npm --prefix ui run test:desktop-webkit`. Then build and install the app and check the changed screen in the app. See the desktop layout and scroll check in [the testing strategy](docs/testing-strategy.md).
+
 # Writing rule
 
 Follow [the project writing style](docs/writing-style.md) for all prose.

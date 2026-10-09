@@ -111,8 +111,9 @@ describe("TimeReviewScheduler", () => {
     expect(loadTimeReviewSchedule().lastSuccessfulAtUnixMs).toBe(reviewEnd);
     expect(notify).toHaveBeenCalledWith(
       "My time summary is ready",
-      "Found 1 work block.",
+      "5m active in 1 work block. Click to open My time.",
       "wts-time-review",
+      { path: "/time" },
     );
   });
 

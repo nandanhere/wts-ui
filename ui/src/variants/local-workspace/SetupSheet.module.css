@@ -1564,6 +1564,81 @@
   color: var(--wts-muted);
 }
 
+.backupFolderSection {
+  display: grid;
+  gap: 8px;
+  padding: 12px 14px 14px;
+}
+
+.backupFolderSection > label {
+  display: grid;
+  gap: 2px;
+}
+
+.backupFolderSection b {
+  color: var(--wts-text);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.backupFolderSection small {
+  color: var(--wts-muted);
+  font-size: 12px;
+}
+
+.backupFolderInputRow {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-top: 4px;
+}
+
+.backupFolderInput {
+  flex: 1;
+  box-sizing: border-box;
+  min-height: 36px;
+  padding: 8px 10px;
+  color: var(--wts-ink);
+  background: var(--wts-surface);
+  border: 1px solid var(--pref-line);
+  border-radius: 6px;
+  font-family: var(--wts-font-mono, monospace);
+  font-size: 12px;
+}
+
+.backupFolderInput:focus-visible {
+  border-color: var(--pref-blue);
+  outline: 2px solid var(--pref-blue);
+  outline-offset: 1px;
+}
+
+.backupFolderClearButton {
+  min-height: 34px;
+  padding: 0 12px;
+  color: var(--wts-muted);
+  background: var(--wts-surface);
+  border: 1px solid var(--pref-line);
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+    background 120ms ease-out,
+    border-color 120ms ease-out,
+    color 120ms ease-out;
+}
+
+.backupFolderClearButton:hover {
+  color: var(--wts-text);
+  background: var(--wts-surface-subtle);
+  border-color: var(--pref-line-strong);
+}
+
+.backupFolderClearButton:focus-visible {
+  outline: 2px solid var(--pref-blue);
+  outline-offset: 1px;
+}
+
 .errorNotice {
   display: grid;
   grid-template-columns: 18px minmax(0, 1fr) auto;

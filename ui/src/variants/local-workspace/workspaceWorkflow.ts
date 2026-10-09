@@ -197,6 +197,25 @@ function gitlabReviewReferenceForWorkspace(
 }
 
 /**
+ * Find the saved workspace that reviews one merge request.
+ * The match uses the project path and MR number in the workspace name, so it
+ * also works after the MR is approved or merged.
+ */
+export function workspaceIdForGitlabReview<T extends ReviewWorkspaceSignalSource & { id: string }>(
+  workspaces: readonly T[],
+  review: { repository: string; number: number },
+): string | undefined {
+  const repositoryLabel = review.repository.split("/").at(-1);
+  return workspaces.find((workspace) => {
+    const reference = gitlabReviewReferenceForWorkspace(workspace);
+    if (!reference || reference.number !== review.number) return false;
+    return reference.repository.includes("/")
+      ? reference.repository === review.repository
+      : reference.repository === repositoryLabel;
+  })?.id;
+}
+
+/**
  * Move a completed review workspace while GitLab remains the fresh authority.
  * Approval parks an open MR. Delivery and closure use the existing MR states.
  */

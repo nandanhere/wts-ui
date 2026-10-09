@@ -88,7 +88,9 @@ describe("AI review in the diff viewer", () => {
     expect(notes[0]!.closest("[data-line]")).toHaveAttribute("data-line", "additions:3");
     expect(within(notes[0]!).getByText("Blocking")).toBeInTheDocument();
     expect(within(notes[0]!).getByText("Zero retries hides failures")).toBeInTheDocument();
-    expect(within(notes[0]!).getByText("Blocking: set a bounded retry count.")).toBeInTheDocument();
+    // A local review has no MR, so the note offers a fix prompt for an agent.
+    expect(within(notes[0]!).queryByText("Blocking: set a bounded retry count.")).not.toBeInTheDocument();
+    expect(within(notes[0]!).getByRole("button", { name: "Copy the fix prompt for Zero retries hides failures" })).toBeInTheDocument();
     expect(within(diff).queryByText("Name the constant")).not.toBeInTheDocument();
     expect(within(diff).queryByText("Other repository")).not.toBeInTheDocument();
   });

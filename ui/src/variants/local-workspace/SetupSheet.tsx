@@ -18,6 +18,7 @@ import {
   type WorkspaceCardClickPreference,
   useWorkspaceCardClickPreference,
 } from "./workspaceCardPreference";
+import { useWorkspaceBackupPreference } from "./workspaceBackupPreference";
 import styles from "./SetupSheet.module.css";
 import { useDialogFocusReturn } from "../../components/useDialogFocusReturn";
 import { GitlabIntegrationCard } from "./GitlabIntegrationCard";
@@ -1068,6 +1069,7 @@ function GeneralPanel({
     preference: workspaceCardClickPreference,
     setPreference: setWorkspaceCardClickPreference,
   } = useWorkspaceCardClickPreference();
+  const { backupPath, setBackupPath } = useWorkspaceBackupPreference();
   const git = snapshot?.integrations.find(
     (integration) => integration.id === "git",
   );
@@ -1269,6 +1271,46 @@ function GeneralPanel({
             </label>
           ))}
         </fieldset>
+      </section>
+
+      <section className={styles.settingsBlock}>
+        <header>
+          <h4>Workspace removal backup</h4>
+          <p>
+            Save a copy of unmanaged and planning files before removing a workspace.
+          </p>
+        </header>
+        <div className={styles.backupFolderSection}>
+          <label htmlFor="wts-backup-folder-input">
+            <b>Backup folder path</b>
+            <small>
+              Leave empty to remove without creating a backup archive.
+            </small>
+          </label>
+          <div className={styles.backupFolderInputRow}>
+            <input
+              className={styles.backupFolderInput}
+              data-ui="environment.backup-folder-input"
+              data-ui-label="Backup folder path"
+              id="wts-backup-folder-input"
+              onChange={(event) => setBackupPath(event.target.value)}
+              placeholder="/Users/username/Documents/WTS Backups"
+              type="text"
+              value={backupPath}
+            />
+            {backupPath && (
+              <button
+                className={styles.backupFolderClearButton}
+                data-ui="environment.backup-folder-clear"
+                data-ui-label="Clear backup folder path"
+                onClick={() => setBackupPath("")}
+                type="button"
+              >
+                Clear
+              </button>
+            )}
+          </div>
+        </div>
       </section>
 
       <section className={styles.settingsBlock}>

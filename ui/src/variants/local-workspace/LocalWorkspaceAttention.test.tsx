@@ -74,13 +74,16 @@ describe("workspace board attention", () => {
     render(<LocalWorkspace client={fake.client} />);
     const card = await screen.findByRole("region", { name: "Project 0 attention" });
     expect(within(card).getByRole("button", { name: "Review result 0 Saved task 0" })).toBeVisible();
-    expect(within(card).getByText(/GitLab status is unavailable/)).toBeVisible();
+    expect(within(card).queryByText(/status is unavailable/)).not.toBeInTheDocument();
+    expect(within(card).queryByRole("button", { name: "Retry status" })).not.toBeInTheDocument();
     const banner = screen.getByRole("note");
+    // The stale status is a quiet item in the triage row, not a full-width banner.
+    expect(within(screen.getByRole("group", { name: "Filter by attention" })).getByRole("note")).toBe(banner);
+    expect(banner).toHaveTextContent("GitLab status unavailable · 1 workspace");
+    expect(within(banner).queryByRole("button", { name: "Retry status" })).not.toBeInTheDocument();
+    fireEvent.click(within(banner).getByRole("button", { name: /GitLab status is unavailable for 1 workspace\. Show status details/ }));
     expect(banner).toHaveTextContent("GitLab status is unavailable for 1 workspace.");
     fireEvent.click(within(banner).getByRole("button", { name: "Retry status" }));
-    await waitFor(() => expect(harness.refresh).toHaveBeenCalledWith(expect.any(Array), { force: true }));
-    harness.refresh.mockClear();
-    fireEvent.click(within(card).getByRole("button", { name: "Retry status" }));
     await waitFor(() => expect(harness.refresh).toHaveBeenCalledWith(expect.any(Array), { force: true }));
     act(() => { harness.snapshot = { ...harness.snapshot, refreshing: true }; harness.listeners.forEach(listener => listener()); });
     expect(within(card).getByRole("button", { name: "Review result 0 Saved task 0" })).toBeVisible();
@@ -94,6 +97,21 @@ describe("workspace board attention", () => {
     render(<LocalWorkspace client={fake.client} />);
     await screen.findByRole("region", { name: "Project 0 attention" });
     expect(screen.queryByRole("region", { name: "Project 1 attention" })).not.toBeInTheDocument();
+  });
+  it("filters the board to the workspaces behind a Needs you chip", async () => {
+    const { fake } = setup();
+    harness.snapshot.items[4] = { ...result(4), kind: "gitlab", label: "Read return-value thread", detail: "Unread comments and replies.",
+      target: { kind: "gitlab", repositoryId: "repo_orders", iid: 16, discussionId: "exact-thread", scopeId: "c".repeat(64) } };
+    render(<LocalWorkspace client={fake.client} />);
+    await screen.findByRole("region", { name: "Project 0 attention" });
+    const chip = screen.getByRole("button", { name: "1 unread comment" });
+    fireEvent.click(chip);
+    expect(chip).toHaveAttribute("aria-pressed", "true");
+    const card = await screen.findByRole("region", { name: "Project 4 attention" });
+    expect(within(card).getByRole("button", { name: /Read return-value thread/ })).toBeVisible();
+    expect(screen.queryByRole("region", { name: "Project 0 attention" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Show all" }));
+    expect(await screen.findByRole("region", { name: "Project 0 attention" })).toBeInTheDocument();
   });
   it("opens the exact unread MR thread in Changes", async () => {
     const { fake } = setup();

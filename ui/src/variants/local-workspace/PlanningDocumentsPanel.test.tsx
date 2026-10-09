@@ -23,6 +23,8 @@ const workspaceId = "ws_01J_PLANNING";
 
 beforeEach(() => {
   localStorage.removeItem("wts.planning-file-states.v1");
+  // These tests check the source editor. The Markdown editor has its own test.
+  localStorage.setItem("wts.planning-edit-mode.v1", "source");
   mermaidMocks.initialize.mockClear();
   mermaidMocks.render.mockReset();
   mermaidMocks.render.mockResolvedValue({
@@ -441,6 +443,57 @@ describe("PlanningDocumentsPanel", () => {
     expect(screen.queryByRole("heading", { name: "First workspace" })).not.toBeInTheDocument();
     view.rerender(<PlanningDocumentsPanel client={fake.client} workspaceId={workspaceId} workspaceKey="TASK-42" />);
     expect(screen.getByRole("heading", { name: "First workspace" })).toBeVisible();
+  });
+
+  it("edits Markdown as formatted text and saves the source with only the changed block rewritten", async () => {
+    const user = userEvent.setup();
+    localStorage.removeItem("wts.planning-edit-mode.v1");
+    const fake = planningClient();
+    const original = "# Plan\n\n| Step | Owner |\n| --- | --- |\n| Retry | Ops |\n\n- [ ] Confirm the retry rule.\n\nKeep  this   spacing.\n";
+    fake.readWorkspacePlanningDocument.mockImplementation(async (_id: string, documentId: WorkspacePlanningDocument["documentId"]) =>
+      planningDocument(documentId, documentId === "plan" ? original : "# " + documentId));
+    fake.updateWorkspacePlanningDocument.mockImplementation(async (_w: string, documentId: WorkspacePlanningDocument["documentId"], _sha: string, contents: string) =>
+      planningDocument(documentId, contents, "b"));
+    render(<PlanningDocumentsPanel client={fake.client} workspaceId={workspaceId} workspaceKey="TASK-42" />);
+    await screen.findByRole("article", { name: "PLAN.md preview" });
+    await user.click(screen.getByRole("button", { name: "Edit" }));
+
+    const modes = screen.getByRole("group", { name: "Edit mode" });
+    expect(within(modes).getByRole("button", { name: "Markdown" })).toHaveAttribute("aria-pressed", "true");
+    const editor = await screen.findByRole("textbox", { name: "Edit PLAN.md" });
+    expect(editor).toHaveAttribute("contenteditable", "true");
+    const heading = await within(editor).findByRole("heading", { name: "Plan" });
+    expect(within(editor).getByRole("table")).toBeInTheDocument();
+    expect(screen.getByRole("toolbar", { name: "Formatting" })).toBeVisible();
+
+    const view = (editor as HTMLElement & { editor?: { commands: { insertContentAt: (at: number, text: string) => boolean } } }).editor;
+    expect(view).toBeDefined();
+    await act(async () => { view!.commands.insertContentAt(5, " v2"); });
+    expect(heading).toHaveTextContent("Plan v2");
+
+    await user.click(within(modes).getByRole("button", { name: "Source" }));
+    const expected = original.replace("# Plan", "# Plan v2");
+    expect(screen.getByRole("textbox", { name: "Edit PLAN.md" })).toHaveValue(expected);
+    expect(localStorage.getItem("wts.planning-edit-mode.v1")).toBe("source");
+
+    await user.click(within(modes).getByRole("button", { name: "Markdown" }));
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(fake.updateWorkspacePlanningDocument).toHaveBeenCalledWith(workspaceId, "plan", "sha256:" + "a".repeat(64), expected));
+  });
+
+  it("keeps Source as the only editor for a file that is not Markdown", async () => {
+    const user = userEvent.setup();
+    localStorage.removeItem("wts.planning-edit-mode.v1");
+    const fake = planningClient();
+    fake.listWorkspacePlanningDocuments.mockResolvedValue({ workspaceId, documents: [{ documentId: "plan", fileName: "/private/workspace/PLAN.md" }, { documentId: "generated-flow", fileName: "flow.mmd" }] });
+    fake.readWorkspacePlanningDocument.mockImplementation(async (_id: string, documentId: WorkspacePlanningDocument["documentId"]) =>
+      documentId === "plan" ? planningDocument("plan", "# Plan") : { workspaceId, documentId, fileName: "flow.mmd", contents: "graph TD\n  A-->B\n", sha256: "sha256:" + "c".repeat(64) });
+    render(<PlanningDocumentsPanel client={fake.client} workspaceId={workspaceId} workspaceKey="TASK-42" />);
+    await user.click(await screen.findByRole("button", { name: "flow.mmd" }));
+    await screen.findByRole("article", { name: "flow.mmd preview" });
+    await user.click(screen.getByRole("button", { name: "Edit" }));
+    expect(screen.queryByRole("group", { name: "Edit mode" })).not.toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "Edit flow.mmd" }).tagName).toBe("TEXTAREA");
   });
 
   it("keeps a successful save when an older background read finishes later", async () => {

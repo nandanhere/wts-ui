@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { ActivityWatchSessionCandidate, AgentSession, ObservedAgentSession } from "../../lib/wtsClient";
 import {
   agentBlocksInRange,
+  buildHybridTimeExport,
   formatDuration,
   groupBlocks,
   topByDuration,
@@ -98,6 +99,32 @@ describe("hybrid time engine", () => {
     expect(summary.multiplier).toBe(4);
   });
 
+  it("adds agent chats outside saved workspaces to agent time", () => {
+    const agents = agentBlocksInRange(
+      [],
+      [observed("a", [{ startedAtUnixMs: day + 9 * H, endedAtUnixMs: day + 10 * H }])],
+      range,
+      day + 20 * H,
+      [
+        {
+          sessionId: "app", provider: "codex", client: "codexApp", folderName: "beacon_oncalls",
+          startedAtUnixMs: day + 9 * H, lastEventAtUnixMs: day + 10 * H,
+          workPeriods: [{ startedAtUnixMs: day + 9 * H + 30 * M, endedAtUnixMs: day + 10 * H }],
+        },
+        {
+          sessionId: "cli", provider: "codex", client: "codexCli",
+          startedAtUnixMs: day + 9 * H, lastEventAtUnixMs: day + 11 * H,
+          workPeriods: [{ startedAtUnixMs: day + 9 * H, endedAtUnixMs: day + 11 * H }],
+        },
+      ],
+    );
+    const summary = summarizeHybridTime([], agents);
+    expect(summary.agentMs).toBe(H + 30 * M + 2 * H);
+    expect(summary.agentWallMs).toBe(2 * H);
+    expect(agents.find((block) => block.id === "app:0")?.chatLabel).toBe("Codex app · beacon_oncalls");
+    expect(new Set(agents.map((block) => block.id.split(":")[0])).size).toBe(3);
+  });
+
   it("clips periods to the range and extends ongoing turns to now", () => {
     const now = day + 15 * H;
     const blocks = agentBlocksInRange(
@@ -140,6 +167,17 @@ describe("hybrid time engine", () => {
       ["t1", H],
       ["run", H],
     ]);
+  });
+
+  it("totals time by Jira ticket in the export, using the tickets the user set", () => {
+    const user = userBlocksInRange([
+      activity("a", day + 9 * H, day + 10 * H),
+      activity("b", day + 10 * H, day + 10 * H + 30 * M),
+      activity("c", day + 11 * H, day + 11 * H + 15 * M),
+    ], range);
+    const text = buildHybridTimeExport(summarizeHybridTime(user, []), range, { a: "DEVTOOLS-7176", b: "DEVTOOLS-7176", c: "" });
+    expect(text).toContain("## Time by Jira ticket\n- DEVTOOLS-7176: 1h 30m\n");
+    expect(text).not.toMatch(/: 15m · /);
   });
 
   it("reports no multiplier without user time", () => {

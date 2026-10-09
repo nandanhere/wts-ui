@@ -16,7 +16,12 @@ import { Glyph } from "./Glyph";
 import type { Workspace } from "./LocalWorkspace";
 import styles from "./LocalWorkspace.module.css";
 import { ProtectedFilePreviewBoundary } from "./ProtectedFilePreviewBoundary";
-import { canAssertDestructiveWorkspaceRemoval, removalRecoveryReport, removalRecoverySteps } from "./workspaceRemoval";
+import {
+  canAssertDestructiveWorkspaceRemoval,
+  hasUnmanagedPathsBlocker,
+  removalRecoveryReport,
+  removalRecoverySteps,
+} from "./workspaceRemoval";
 import { RecoveryCopyButton } from "./RecoveryCopyButton";
 
 const ProtectedFileCodeView = lazy(() => import("./ProtectedFileCodeView"));
@@ -41,6 +46,7 @@ export interface WorkspaceRemovalDialogProps {
   preflight: WorkspaceRemovalPreflight | null;
   state: "loading" | "ready" | "repairing" | "removing" | "error";
   error: string;
+  backupFolder?: string;
   onRetry: () => void;
   onConfirm: (deleteProtectedPaths: boolean) => void;
   onRegisterChanges?: () => void;
@@ -58,6 +64,7 @@ export const WorkspaceRemovalDialog = memo(function WorkspaceRemovalDialog({
   preflight,
   state,
   error,
+  backupFolder,
   onRetry,
   onConfirm,
   onRegisterChanges,
@@ -118,6 +125,7 @@ export const WorkspaceRemovalDialog = memo(function WorkspaceRemovalDialog({
   const canRemove =
     state === "ready" &&
     ((ready && confirmed) || destructiveDeletionConfirmed);
+  const hasUnmanagedData = hasUnmanagedPathsBlocker(preflight);
   const hasWorktreeData = Boolean(
     preflight?.blockers.some(
       (blocker) =>
@@ -328,8 +336,6 @@ export const WorkspaceRemovalDialog = memo(function WorkspaceRemovalDialog({
                       <code>{preflight.workspaceDisplayPath}</code>
                       <RecoveryCopyButton label="Copy workspace path" text={preflight.workspaceDisplayPath} disabled={busy} />
                       <RecoveryCopyButton label="Copy recovery details" text={removalRecoveryReport(preflight)} disabled={busy} />
-                    </div>
-                    <div className={styles.removalRecoveryActions}>
                       {onRegisterChanges && preflight.blockers.some((blocker) => blocker.code === "workspaceDrift") && <button disabled={busy} className={styles.secondaryButton} onClick={onRegisterChanges} type="button">Register changes &amp; re-index</button>}
                       {onReviewChanges && preflight.blockers.some((blocker) => blocker.code === "worktreeChanges" || blocker.code === "ignoredFiles") && <button disabled={busy} className={styles.secondaryButton} onClick={onReviewChanges} type="button">Review changes</button>}
                       {onOpenPlans && preflight.blockers.some((blocker) => blocker.code === "planningDocumentsPresent") && <button disabled={busy} className={styles.secondaryButton} onClick={onOpenPlans} type="button">Open Plans</button>}
@@ -451,17 +457,30 @@ export const WorkspaceRemovalDialog = memo(function WorkspaceRemovalDialog({
                     </span>
                     <span>
                       <b>
-                        {hasWorktreeData && protectedPaths.length > 0
-                          ? "Delete local changes, planning files, and this workspace"
-                          : hasWorktreeData
-                            ? "Delete local changes and this workspace"
-                            : "Delete the listed planning files and this workspace"}
+                        {hasUnmanagedData && (hasWorktreeData || protectedPaths.length > 0)
+                          ? "Delete unmanaged files, local changes, and this workspace"
+                          : hasUnmanagedData
+                            ? "Delete unmanaged files and this workspace"
+                            : hasWorktreeData && protectedPaths.length > 0
+                              ? "Delete local changes, planning files, and this workspace"
+                              : hasWorktreeData
+                                ? "Delete local changes and this workspace"
+                                : "Delete the listed planning files and this workspace"}
                       </b>
                       <small>
-                        I understand that uncommitted, untracked, ignored, and
+                        I understand that uncommitted, untracked, ignored, unmanaged, and
                         listed planning files are permanently deleted. Local
                         branches and committed work are retained.
                       </small>
+                      {backupFolder ? (
+                        <small>
+                          Backup folder: <code>{backupFolder}</code>
+                        </small>
+                      ) : (
+                        <small>
+                          No backup folder configured. You can set a backup folder in Settings.
+                        </small>
+                      )}
                     </span>
                   </Checkbox>
                 )}

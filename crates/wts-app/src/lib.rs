@@ -37,7 +37,8 @@ pub use adapter::{AdapterFailure, ProcessCollaborationAdapter, ProcessWorkspaceA
 pub use agent_observation::{
     AGENT_OBSERVATION_SCHEMA_VERSION, AgentNeedsInput, AgentNeedsInputKind,
     AgentObservationActivity, AgentObservationSource, AgentObservationStatus,
-    AgentObservationUpdateKind, ObservedAgentProvider, ObservedAgentSession,
+    AgentObservationUpdateKind, AgentWorkClient, ObservedAgentProvider, ObservedAgentSession,
+    UnassignedAgentWork,
 };
 pub use agent_session_details::{
     AGENT_SESSION_DETAIL_SCHEMA_VERSION, AgentModelAuthority, AgentModelSelection,

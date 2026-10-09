@@ -31,6 +31,24 @@ Object.defineProperty(Element.prototype, "scrollTo", {
   value: vi.fn(),
 });
 
+// ProseMirror measures text ranges and points. jsdom has no layout for them.
+const emptyRect = () => ({ x: 0, y: 0, width: 0, height: 0, top: 0, right: 0, bottom: 0, left: 0, toJSON: () => ({}) });
+for (const prototype of [Range.prototype, Element.prototype]) {
+  if (!("getClientRects" in prototype) || prototype === Range.prototype) {
+    Object.defineProperty(prototype, "getClientRects", {
+      configurable: true,
+      writable: true,
+      value: function getClientRects() { return Object.assign([], { item: () => null }); },
+    });
+  }
+}
+if (!("getBoundingClientRect" in Range.prototype)) {
+  Object.defineProperty(Range.prototype, "getBoundingClientRect", { configurable: true, writable: true, value: emptyRect });
+}
+if (!("elementFromPoint" in Document.prototype) || typeof document.elementFromPoint !== "function") {
+  Object.defineProperty(Document.prototype, "elementFromPoint", { configurable: true, writable: true, value: () => null });
+}
+
 // jsdom exposes constructable style sheets without the browser replacement API.
 Object.defineProperty(CSSStyleSheet.prototype, "replaceSync", {
   configurable: true,
