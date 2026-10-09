@@ -250,7 +250,7 @@ describe("personal local workspace registry", () => {
           name: /Open revised plan/i,
         }),
       );
-      await user.click(screen.getByRole("button", { name: /Spaces/i }));
+      await user.click(screen.getByRole("button", { name: "Open Spaces" }));
       const matchingCards = screen.getAllByRole("button", {
         name: new RegExp(`Open ${key}:`, "i"),
       });
@@ -342,7 +342,7 @@ describe("personal local workspace registry", () => {
     await user.click(
       within(dialog).getByRole("button", { name: "Close new workspace" }),
     );
-    await user.click(screen.getByRole("button", { name: /Spaces/i }));
+    await user.click(screen.getByRole("button", { name: "Open Spaces" }));
     expect(
       screen.getAllByRole("button", {
         name: "Open REV-12: Original revision source details",
@@ -658,7 +658,7 @@ describe("personal local workspace registry", () => {
       workspaceId: "ws_planning_home",
       intent: { type: "jira", issueKey: "PLAN-42" },
       title: "Work on PLAN-42",
-      planning: { folder: "plans", format: "notes" },
+      planning: { folder: "plansAndKanban", format: "kanban" },
       repositories: [
         {
           requestId: "repo_orders",
@@ -682,15 +682,9 @@ describe("personal local workspace registry", () => {
         name: /Create a starter kit/i,
       }),
     );
-    fireEvent.change(
-      within(dialog).getByRole("combobox", { name: "Planning folder" }),
-      { target: { value: "plans" } },
-    );
-    fireEvent.change(
-      within(dialog).getByRole("combobox", { name: "Planning starter" }),
-      { target: { value: "notes" } },
-    );
-    expect(within(dialog).getByText(/plans\/ · notes kit/i)).toBeVisible();
+    expect(within(dialog).queryByRole("combobox", { name: "Planning folder" })).not.toBeInTheDocument();
+    expect(within(dialog).queryByRole("combobox", { name: "Planning starter" })).not.toBeInTheDocument();
+    expect(within(dialog).getByText(/plans-and-kanban\/ · Kanban kit/i)).toBeVisible();
 
     await user.click(
       within(dialog).getByRole("button", {
@@ -711,7 +705,7 @@ describe("personal local workspace registry", () => {
             baseRef: "main",
           },
         ],
-        planning: { folder: "plans", format: "notes" },
+        planning: { folder: "plansAndKanban", format: "kanban" },
       },
       expect.any(String),
     );

@@ -5,9 +5,11 @@ import { requestAgentTask } from "../../lib/agentFeedbackEvents";
 import { observePlanningSave, planningCacheFor, planningDocumentCacheKey, planningViewFor, publishPlanningSave, rememberPlanningView, type PlanningView } from "./planningWorkspaceCache";
 import {
   isValidElement,
+  lazy,
   memo,
   type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
+  Suspense,
   useCallback,
   useEffect,
   useId,
@@ -71,7 +73,31 @@ type RequestState = "loading" | "ready" | "error";
 type SaveState = "idle" | "saving" | "error" | "conflict";
 type FeedbackCreateState = "idle" | "saving" | "error";
 type DocumentView = "preview" | "source";
+type EditMode = "markdown" | "source";
 type DocumentFilter = "current" | "old" | "all";
+
+const PlanningRichEditor = lazy(() => import("./PlanningRichEditor"));
+const PLANNING_EDIT_MODE_STORAGE_KEY = "wts.planning-edit-mode.v1";
+
+function isMarkdownFile(fileName: string) {
+  return /\.(?:md|markdown)$/i.test(fileName);
+}
+
+function storedEditMode(): EditMode {
+  try {
+    return globalThis.localStorage?.getItem(PLANNING_EDIT_MODE_STORAGE_KEY) === "source" ? "source" : "markdown";
+  } catch {
+    return "markdown";
+  }
+}
+
+function storeEditMode(mode: EditMode) {
+  try {
+    globalThis.localStorage?.setItem(PLANNING_EDIT_MODE_STORAGE_KEY, mode);
+  } catch {
+    // The mode is a preference. The editor works without storage.
+  }
+}
 
 const MERMAID_MAX_CHARACTERS = 50_000;
 const MERMAID_MIN_ZOOM = 0.1;
@@ -923,6 +949,7 @@ function PlanningDocumentsPanelContent({
   const [documentRevision, setDocumentRevision] = useState(0);
   const [documentView, setDocumentView] = useState<DocumentView>(initialView?.documentView ?? "preview");
   const [editing, setEditing] = useState(initialView?.editing ?? false);
+  const [preferredEditMode, setPreferredEditMode] = useState<EditMode>(storedEditMode);
   const [draft, setDraft] = useState(initialView?.editing ? initialView.draft : initialDocument?.contents ?? "");
   const [saveState, setSaveState] = useState<SaveState>("idle");
   const [saveError, setSaveError] = useState("");
@@ -953,6 +980,20 @@ function PlanningDocumentsPanelContent({
   );
 
   const dirty = Boolean(document && draft !== document.contents);
+  const canEditMarkdown = Boolean(document && isMarkdownFile(document.fileName));
+  const editMode: EditMode = canEditMarkdown ? preferredEditMode : "source";
+  const chooseEditMode = (mode: EditMode) => {
+    setPreferredEditMode(mode);
+    storeEditMode(mode);
+  };
+  const updateDraft = (value: string) => {
+    if (previewReadOnly || !retainDraft({ draft: value })) return;
+    setDraft(value);
+    if (saveState !== "saving") {
+      setSaveState("idle");
+      setSaveError("");
+    }
+  };
   const filteredDocuments = useMemo(() => {
     const query = documentQuery.trim().toLocaleLowerCase();
     return documents.filter((item) => {
@@ -1890,6 +1931,30 @@ function PlanningDocumentsPanelContent({
                 </>
               ) : (
                 <>
+                  {canEditMarkdown && (
+                    <div
+                      aria-label="Edit mode"
+                      className={styles.viewSwitch}
+                      data-ui="planning.edit-mode"
+                      data-ui-label="Edit mode switch"
+                      role="group"
+                    >
+                      <Button
+                        aria-pressed={editMode === "markdown"}
+                        className={styles.viewSwitchButton}
+                        onPress={() => chooseEditMode("markdown")}
+                      >
+                        Markdown
+                      </Button>
+                      <Button
+                        aria-pressed={editMode === "source"}
+                        className={styles.viewSwitchButton}
+                        onPress={() => chooseEditMode("source")}
+                      >
+                        Source
+                      </Button>
+                    </div>
+                  )}
                   <Button
                     className={styles.secondaryButton}
                     isDisabled={saveState === "saving"}
@@ -2019,21 +2084,25 @@ function PlanningDocumentsPanelContent({
                 data-ui-label="Planning document content area"
               >
                 {editing ? (
-                  <div className={styles.editorShell}>
-                    <textarea
+                  <div className={styles.editorShell} data-edit-mode={editMode}>
+                    {editMode === "markdown" ? (
+                      <Suspense fallback={<div className={styles.richLoading} role="status">Loading the editor…</div>}>
+                        <PlanningRichEditor
+                          key={document?.documentId}
+                          label={selectedLabel}
+                          onChange={updateDraft}
+                          onSave={() => void saveDocument()}
+                          readOnly={previewReadOnly}
+                          value={draft}
+                        />
+                      </Suspense>
+                    ) : <textarea
                       aria-label={`Edit ${selectedLabel}`}
                       readOnly={previewReadOnly}
                       autoFocus
                       className={styles.editor}
                       data-history-swipe-block
-                      onChange={(event) => {
-                        if (previewReadOnly || !retainDraft({ draft: event.currentTarget.value })) return;
-                        setDraft(event.currentTarget.value);
-                        if (saveState !== "saving") {
-                          setSaveState("idle");
-                          setSaveError("");
-                        }
-                      }}
+                      onChange={(event) => updateDraft(event.currentTarget.value)}
                       onKeyDown={(event) => {
                         if (
                           (event.metaKey || event.ctrlKey) &&
@@ -2045,7 +2114,7 @@ function PlanningDocumentsPanelContent({
                       }}
                       spellCheck={false}
                       value={draft}
-                    />
+                    />}
                     <footer>
                       <span>{dirty ? "Unsaved changes" : "No changes"}</span>
                       <span>{draft.split("\n").length} lines</span>

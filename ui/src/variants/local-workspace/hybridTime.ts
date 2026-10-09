@@ -3,6 +3,7 @@ import type {
   AgentProvider,
   AgentSession,
   ObservedAgentSession,
+  UnassignedAgentWork,
 } from "../../lib/wtsClient";
 
 /** One period on the hybrid timeline. Times are Unix milliseconds. */
@@ -26,8 +27,11 @@ export interface AgentTimeBlock extends TimeSpan {
   track: "agent";
   provider: AgentProvider | "copilot";
   providerLabel: string;
+  /** Empty for a chat that no saved workspace shows. */
   workspaceId: string;
-  source: "vsCode" | "terminal";
+  source: "vsCode" | "terminal" | "outsideWorkspace";
+  /** A short label for a chat outside saved workspaces, such as "Codex app · beacon_oncalls". */
+  chatLabel?: string;
   detail: string;
   durationMs: number;
   ongoing: boolean;
@@ -56,6 +60,17 @@ const providerNames: Record<string, string> = {
   hermes: "Hermes",
   copilot: "Copilot",
 };
+
+const clientNames: Record<UnassignedAgentWork["client"], string> = {
+  codexApp: "Codex app",
+  codexCli: "Codex CLI",
+  codexVscode: "Codex in VS Code",
+  other: "Codex",
+};
+
+export function unassignedWorkLabel(work: UnassignedAgentWork) {
+  return work.folderName ? `${clientNames[work.client]} · ${work.folderName}` : clientNames[work.client];
+}
 
 function clip(span: TimeSpan, range: TimeSpan): TimeSpan | null {
   const startedAtUnixMs = Math.max(span.startedAtUnixMs, range.startedAtUnixMs);
@@ -121,8 +136,32 @@ export function agentBlocksInRange(
   observed: readonly ObservedAgentSession[],
   range: TimeSpan,
   now = Date.now(),
+  unassigned: readonly UnassignedAgentWork[] = [],
 ): AgentTimeBlock[] {
   const blocks: AgentTimeBlock[] = [];
+  // Chats outside saved workspaces (Codex app, CLI). Parallel chats add together.
+  for (const work of unassigned) {
+    for (const [index, period] of work.workPeriods.entries()) {
+      const end = period.ongoing && work.working
+        ? Math.max(period.endedAtUnixMs, Math.min(now, range.endedAtUnixMs, work.lastEventAtUnixMs + 300_000))
+        : period.endedAtUnixMs;
+      const clipped = clip({ startedAtUnixMs: period.startedAtUnixMs, endedAtUnixMs: end }, range);
+      if (!clipped) continue;
+      blocks.push({
+        ...clipped,
+        id: `${work.sessionId}:${index}`,
+        track: "agent",
+        provider: work.provider,
+        providerLabel: providerNames[work.provider] ?? work.provider,
+        workspaceId: "",
+        source: "outsideWorkspace",
+        chatLabel: unassignedWorkLabel(work),
+        detail: period.ongoing ? "Working on a turn" : "Finished a turn",
+        durationMs: clipped.endedAtUnixMs - clipped.startedAtUnixMs,
+        ongoing: Boolean(period.ongoing && work.working),
+      });
+    }
+  }
   for (const session of observed) {
     for (const [index, period] of (session.workPeriods ?? []).entries()) {
       const clipped = clip(
@@ -285,7 +324,17 @@ export function topByDuration<T extends { durationMs: number }>(items: readonly 
 }
 
 /** A portable summary for a ticket or team update. It contains no agent transcript. */
-export function buildHybridTimeExport(summary: HybridTimeSummary, range: TimeSpan): string {
+export function buildHybridTimeExport(
+  summary: HybridTimeSummary,
+  range: TimeSpan,
+  assignments: Readonly<Record<string, string>> = {},
+): string {
+  const ticketOf = (block: UserTimeBlock) =>
+    block.id in assignments ? assignments[block.id] || undefined : block.jiraIssueKey;
+  const byTicket = topByDuration(
+    summary.userBlocks.filter((block) => ticketOf(block)),
+    (block) => ticketOf(block)!,
+  );
   const lines = [
     "# Work summary",
     `${new Date(range.startedAtUnixMs).toISOString()} to ${new Date(range.endedAtUnixMs).toISOString()}`,
@@ -293,8 +342,10 @@ export function buildHybridTimeExport(summary: HybridTimeSummary, range: TimeSpa
     `- Recorded agent time: ${formatDuration(summary.agentMs)}`,
     `- Combined time: ${formatDuration(summary.combinedMs)}`,
     `- Agent/user time ratio: ${summary.multiplier === null ? "Unavailable without user time" : summary.multiplier.toFixed(1) + "x"}`,
-    "", "Parallel sessions add together. Time does not measure output quality.", "", "## Work blocks",
-    ...summary.userBlocks.map(block => `- ${block.application.replace(/[\r\n]/g, " ")}: ${formatDuration(block.durationMs)}${block.jiraIssueKey ? " · " + block.jiraIssueKey : ""}`),
+    "", "Parallel sessions add together. Time does not measure output quality.",
+    ...(byTicket.length ? ["", "## Time by Jira ticket", ...byTicket.map((row) => `- ${row.name}: ${formatDuration(row.durationMs)}`)] : []),
+    "", "## Work blocks",
+    ...summary.userBlocks.map(block => `- ${block.application.replace(/[\r\n]/g, " ")}: ${formatDuration(block.durationMs)}${ticketOf(block) ? " · " + ticketOf(block) : ""}`),
     "", "## Agent work",
     ...summary.agentBlocks.map(block => `- ${block.providerLabel}: ${formatDuration(block.durationMs)}`),
   ];

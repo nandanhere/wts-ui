@@ -54,13 +54,10 @@ describe("LocalWorkspace UX Improvements", () => {
 
       render(<LocalWorkspace client={fake.client} />);
 
+      // WTS reviews the setup when the plan opens. Make that review fail.
+      fake.preflightWorkspace.mockRejectedValueOnce(new Error("Preflight check failed"));
       const card1 = await screen.findByRole("button", { name: new RegExp(ws1.title, "i") });
       await user.click(card1);
-
-      // Trigger preflight setup error
-      fake.preflightWorkspace.mockRejectedValueOnce(new Error("Preflight check failed"));
-      const reviewBtn = screen.getByRole("button", { name: "Review setup" });
-      await user.click(reviewBtn);
 
       await waitFor(() => {
         const errorText = screen.getByText(/preflight failed/i);
@@ -70,9 +67,8 @@ describe("LocalWorkspace UX Improvements", () => {
       });
 
       await user.click(screen.getByRole("button", { name: "Open Spaces" }));
-      await user.click(await screen.findByRole("button", { name: new RegExp(ws2.title, "i") }));
       fake.preflightWorkspace.mockRejectedValueOnce(new Error("Second preflight check failed"));
-      await user.click(screen.getByRole("button", { name: "Review setup" }));
+      await user.click(await screen.findByRole("button", { name: new RegExp(ws2.title, "i") }));
       await waitFor(() => expect(screen.getAllByText(/preflight failed/i)).toHaveLength(2));
 
       // Manual dismiss removes a toast

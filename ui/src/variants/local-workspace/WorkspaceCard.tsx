@@ -2,7 +2,7 @@ import { memo, type ReactNode } from "react";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import { Button, ToggleButton, type ButtonProps } from "react-aria-components";
 import { Glyph } from "./Glyph";
-import type { GitlabMergeRequest, GitlabReview } from "../../lib/wtsClient";
+import type { GitlabMergeRequest, GitlabReview, GitlabReviewTarget } from "../../lib/wtsClient";
 import {
   type Workspace,
   type WorkspaceAgentSnapshot,
@@ -30,6 +30,13 @@ export interface WorkspaceCardProps {
   mergeRequests?: readonly GitlabMergeRequest[];
   gitlabReview?: GitlabReview;
   onOpenMergeRequest?: (mergeRequest: GitlabMergeRequest) => void;
+  /**
+   * The MR that a review workspace reviews. It is the same target that the workspace screen shows.
+   * It can lack a status when GitLab is not available.
+   */
+  reviewTarget?: GitlabReviewTarget & Partial<GitlabReview>;
+  /** Opens the review MR in GitLab. */
+  onOpenGitlabReview?: (review: GitlabReviewTarget) => void;
   moveActions?: Array<{
     label: string;
     onPress: () => void;
@@ -64,7 +71,7 @@ export function workspaceNextStep(
   if (agent?.state === "working") return { label: "View progress", tone: "wait" };
   if (agent?.updateKind === "completion" && !agent.observedLocally) return { label: "Check the agent result", tone: "action" };
   if (mergeRequest?.status === "merged" || gitlabReview?.status === "merged") return { label: "Park or remove", tone: "done" };
-  if (workspace.lane === "planned") return { label: "Start the work", tone: "action" };
+  if (workspace.lane === "planned") return { label: "Start work", tone: "action" };
   return undefined;
 }
 
@@ -98,6 +105,16 @@ export function mergeRequestStatusLabel(mergeRequest: GitlabMergeRequest, gitlab
   return mergeRequest.draft ? "Draft" : "Open";
 }
 
+/** The review status that the workspace screen shows, so that the card and the screen agree. */
+export function gitlabReviewStatusLabel(review: Partial<Pick<GitlabReview, "status" | "reviewState" | "draft">>) {
+  if (!review.status) return undefined;
+  if (review.status === "merged") return "Merged";
+  if (review.status === "closed") return "Closed";
+  if (review.reviewState === "changesAfterApproval") return "New changes";
+  if (review.reviewState === "approved") return "Approved";
+  return review.draft ? "Draft" : "Review requested";
+}
+
 export const WorkspaceCard = memo(function WorkspaceCard({
   workspace,
   attention,
@@ -110,6 +127,8 @@ export const WorkspaceCard = memo(function WorkspaceCard({
   mergeRequests = [],
   gitlabReview,
   onOpenMergeRequest,
+  reviewTarget,
+  onOpenGitlabReview,
   moveActions = [],
   buttonRef,
   dragProps,
@@ -117,6 +136,9 @@ export const WorkspaceCard = memo(function WorkspaceCard({
 }: WorkspaceCardProps) {
   const ordered = orderedMergeRequests(mergeRequests);
   const primaryMergeRequest = ordered[0];
+  // A review workspace has no own MR. Show the assigned review MR, as the workspace screen does.
+  const reviewMergeRequest = primaryMergeRequest ? undefined : (reviewTarget ?? gitlabReview);
+  const reviewStatus = reviewMergeRequest ? gitlabReviewStatusLabel(reviewMergeRequest) : undefined;
   const nextStep = workspaceNextStep(workspace, agent, gitlabReview, primaryMergeRequest);
   const status = agent ? agentStatus(agent) : undefined;
   const openLabel = primaryActionLabel ?? "Open " + workspace.key + ": " + workspace.title;
@@ -131,7 +153,7 @@ export const WorkspaceCard = memo(function WorkspaceCard({
       data-pinnable={pin ? true : undefined}
       data-pinned={pin?.pinned || undefined}
       data-lane={workspace.lane}
-      data-delivery-status={primaryMergeRequest?.status}
+      data-delivery-status={primaryMergeRequest?.status ?? reviewMergeRequest?.status}
     >
       <Button
         {...dragProps}
@@ -192,6 +214,44 @@ export const WorkspaceCard = memo(function WorkspaceCard({
               </b>
               {ordered.length > 1 && <span>+{ordered.length - 1}</span>}
             </span>
+          ) : reviewMergeRequest ? (
+            <div className={styles.cardReview}>
+              <span className={styles.cardDelivery} data-status={reviewMergeRequest.status}>
+                <Glyph name="branch" size={13} />
+                {onOpenGitlabReview ? (
+                  <button
+                    aria-label={"Open merge request !" + reviewMergeRequest.number + " in GitLab"}
+                    className={styles.cardMergeRequestLink}
+                    onClick={() => onOpenGitlabReview(reviewMergeRequest)}
+                    role="link"
+                    type="button"
+                  >
+                    MR !{reviewMergeRequest.number}
+                    <Glyph name="external" size={10} />
+                  </button>
+                ) : (
+                  <b>MR !{reviewMergeRequest.number}</b>
+                )}
+                <b className={styles.cardMergeRequestStatus}>
+                  {reviewStatus ?? reviewMergeRequest.repository}
+                </b>
+              </span>
+              {reviewMergeRequest.title && (
+                <p className={styles.cardReviewTitle} title={reviewMergeRequest.title}>
+                  {reviewMergeRequest.title}
+                </p>
+              )}
+              {reviewMergeRequest.sourceBranch && reviewMergeRequest.targetBranch && (
+                <span
+                  className={styles.cardReviewBranches}
+                  title={reviewMergeRequest.sourceBranch + " into " + reviewMergeRequest.targetBranch}
+                >
+                  <code>{reviewMergeRequest.sourceBranch}</code>
+                  <Glyph name="arrow" size={10} />
+                  <code>{reviewMergeRequest.targetBranch}</code>
+                </span>
+              )}
+            </div>
           ) : workspace.kind !== "Repositories" ? (
             issueAction ? (
               <Button aria-label={issueAction.label} className={styles.cardIssueLink} onPress={issueAction.onPress}>
@@ -216,7 +276,7 @@ export const WorkspaceCard = memo(function WorkspaceCard({
               <i aria-hidden="true" />
               {status.label}
             </span>
-          ) : (
+          ) : reviewMergeRequest ? null : (
             <span className={styles.cardSummary}>
               <StateDot state={workspace.lane} />
               {workspace.summary}
@@ -228,7 +288,8 @@ export const WorkspaceCard = memo(function WorkspaceCard({
 
       <footer aria-label={workspace.key + " actions"} className={styles.cardActions} role="group">
         <Button
-          aria-label={openLabel}
+          // The hit area already uses openLabel when there is no preview. Keep each name unique.
+          aria-label={onPreview ? openLabel : ctaText + " for " + workspace.key}
           className={styles.cardPrimaryAction}
           data-tone={nextStep?.tone === "action" ? "action" : "quiet"}
           onPress={(event) => onOpen(event.metaKey || event.ctrlKey)}

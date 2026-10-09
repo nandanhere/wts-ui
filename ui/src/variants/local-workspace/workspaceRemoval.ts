@@ -14,7 +14,7 @@ const recoverySteps: Record<RemovalBlockerCode, string[]> = {
   unexpectedPath: [
     "Inspect this path in Finder with Go to Folder.",
     "Move files you want to keep outside the workspace.",
-    "Select Check again after you resolve the listed path.",
+    "To delete unmanaged files, use the explicit deletion confirmation below.",
   ],
   worktreeChanges: [
     "Review the local changes before removal.",
@@ -55,6 +55,20 @@ const reviewedDestructiveBlockers = new Set([
   "ignoredFiles",
 ]);
 
+export function isUnmanagedWorkspaceBlocker(blocker: RemovalBlocker): boolean {
+  return (
+    blocker.code === "unexpectedPath" &&
+    blocker.message === "The workspace root contains a path that is not managed by WTS."
+  );
+}
+
+export function isDestructivelyRemovableBlocker(blocker: RemovalBlocker): boolean {
+  return (
+    reviewedDestructiveBlockers.has(blocker.code) ||
+    isUnmanagedWorkspaceBlocker(blocker)
+  );
+}
+
 export function canAssertDestructiveWorkspaceRemoval(
   preflight: WorkspaceRemovalPreflight | null,
 ): boolean {
@@ -62,8 +76,14 @@ export function canAssertDestructiveWorkspaceRemoval(
     preflight &&
       !preflight.ready &&
       preflight.blockers.length > 0 &&
-      preflight.blockers.every((blocker) =>
-        reviewedDestructiveBlockers.has(blocker.code),
-      ),
+      preflight.blockers.every(isDestructivelyRemovableBlocker),
+  );
+}
+
+export function hasUnmanagedPathsBlocker(
+  preflight: WorkspaceRemovalPreflight | null,
+): boolean {
+  return Boolean(
+    preflight?.blockers.some(isUnmanagedWorkspaceBlocker),
   );
 }

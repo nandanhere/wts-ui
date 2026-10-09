@@ -145,11 +145,13 @@
 
 .popover {
   z-index: 180;
-  width: var(--trigger-width);
-  min-width: 180px;
-  max-width: min(440px, calc(100vw - 24px));
-  max-height: min(360px, var(--available-height));
+  /* React Aria sizes the menu to the window. In a dialog, .listBox also uses --select-menu-room. */
+  box-sizing: border-box;
+  width: max-content;
+  min-width: max(180px, var(--trigger-width));
+  max-width: min(560px, calc(100vw - 24px));
   padding: 5px;
+  overscroll-behavior: contain;
   overflow: auto;
   background: color-mix(in srgb, var(--wts-surface) 97%, var(--wts-canvas));
   border: 1px solid var(--wts-line-strong);
@@ -168,6 +170,10 @@
 }
 
 .listBox {
+  /* 12px is the popover padding and border. */
+  max-height: calc(var(--select-menu-room, 100vh) - 12px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
   outline: none;
 }
 

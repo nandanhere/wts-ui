@@ -1,7 +1,6 @@
 use crate::{
     AgentChangeRequestProposal, AgentMrLinkProposal,
     agent_sessions::{
-        CHANGE_REQUEST_PROPOSAL_PREFIX, MR_LINK_PROPOSAL_PREFIX,
         parse_agent_change_request_proposals, parse_agent_mr_link_proposals,
     },
 };
@@ -179,6 +178,44 @@ pub(crate) struct CodexSessionObserver {
     sessions_root: Option<PathBuf>,
 }
 
+/// The Codex client that wrote a chat log.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum AgentWorkClient {
+    CodexApp,
+    CodexCli,
+    CodexVscode,
+    Other,
+}
+
+/// Agent work from a chat that no saved workspace shows. My time counts this
+/// work so that parallel chats outside WTS workspaces are not lost.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UnassignedAgentWork {
+    pub session_id: Uuid,
+    pub provider: ObservedAgentProvider,
+    pub client: AgentWorkClient,
+    /// The last part of the chat folder, for a label. The full path is not sent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub folder_name: Option<String>,
+    /// True while a turn runs and the agent does not wait for the user.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub working: bool,
+    pub started_at_unix_ms: i64,
+    pub last_event_at_unix_ms: i64,
+    pub work_periods: Vec<AgentWorkPeriod>,
+}
+
+/// The result of one scan of the Codex chat logs.
+#[derive(Default)]
+pub(crate) struct AgentObservation {
+    pub(crate) observed: Vec<ObservedAgentSession>,
+    pub(crate) unassigned_work: Vec<UnassignedAgentWork>,
+}
+
+const MAX_FOLDER_NAME_CHARS: usize = 80;
+
 impl CodexSessionObserver {
     pub(crate) fn from_environment() -> Self {
         let codex_home = env::var_os("CODEX_HOME")
@@ -202,13 +239,20 @@ impl CodexSessionObserver {
         workspace_id: Uuid,
         workspace_path: &Path,
     ) -> Vec<ObservedAgentSession> {
-        self.observe_workspaces_at(&[(workspace_id, workspace_path.to_owned())], now_unix_ms())
+        self.observe_workspaces_at(&[(workspace_id, workspace_path.to_owned())], now_unix_ms()).observed
     }
 
+    #[cfg(test)]
     pub(crate) fn observe_workspaces(
         &self,
         workspaces: &[(Uuid, PathBuf)],
     ) -> Vec<ObservedAgentSession> {
+        self.observe_workspaces_at(workspaces, now_unix_ms()).observed
+    }
+
+    /// Scans once. Returns workspace chats, and the work of every other
+    /// interactive Codex chat (Codex app, CLI, or a VS Code chat outside a workspace).
+    pub(crate) fn observe_all(&self, workspaces: &[(Uuid, PathBuf)]) -> AgentObservation {
         self.observe_workspaces_at(workspaces, now_unix_ms())
     }
 
@@ -219,42 +263,47 @@ impl CodexSessionObserver {
         workspace_path: &Path,
         now: i64,
     ) -> Vec<ObservedAgentSession> {
-        self.observe_workspaces_at(&[(workspace_id, workspace_path.to_owned())], now)
+        self.observe_workspaces_at(&[(workspace_id, workspace_path.to_owned())], now).observed
     }
 
     fn observe_workspaces_at(
         &self,
         workspaces: &[(Uuid, PathBuf)],
         now: i64,
-    ) -> Vec<ObservedAgentSession> {
+    ) -> AgentObservation {
         let mut valid_workspaces = workspaces
             .iter()
             .filter(|(_, path)| valid_absolute_path(path))
             .collect::<Vec<_>>();
-        if valid_workspaces.is_empty() {
-            return Vec::new();
-        }
         // Prefer the most specific workspace when saved workspace roots overlap.
         valid_workspaces.sort_by_key(|(_, path)| std::cmp::Reverse(path.components().count()));
         let Some(root) = self.sessions_root.as_deref() else {
-            return Vec::new();
+            return AgentObservation::default();
         };
         let mut candidates = Vec::new();
         collect_candidates(root, 0, &mut candidates);
         candidates.sort_by_key(|candidate| std::cmp::Reverse(candidate.modified_at));
         candidates.truncate(MAX_CANDIDATE_FILES);
 
-        let mut observed = candidates
-            .into_iter()
-            .filter_map(|candidate| observe_candidate(&candidate, &valid_workspaces, now))
-            .collect::<Vec<_>>();
+        let mut observation = AgentObservation::default();
+        for candidate in candidates {
+            match observe_candidate(&candidate, &valid_workspaces, now) {
+                Some(CandidateObservation::Workspace(session)) => observation.observed.push(*session),
+                Some(CandidateObservation::Unassigned(work)) => observation.unassigned_work.push(work),
+                None => {}
+            }
+        }
+        let observed = &mut observation.observed;
         observed.sort_by(|left, right| {
             right
                 .last_event_at_unix_ms
                 .cmp(&left.last_event_at_unix_ms)
                 .then_with(|| left.session_id.cmp(&right.session_id))
         });
-        observed
+        observation
+            .unassigned_work
+            .sort_by(|left, right| right.last_event_at_unix_ms.cmp(&left.last_event_at_unix_ms));
+        observation
     }
 }
 
@@ -303,24 +352,68 @@ fn collect_candidates(root: &Path, depth: usize, candidates: &mut Vec<Candidate>
     }
 }
 
+enum CandidateObservation {
+    Workspace(Box<ObservedAgentSession>),
+    Unassigned(UnassignedAgentWork),
+}
+
+fn work_client(originator: Option<&str>, source: Option<&str>) -> AgentWorkClient {
+    match (originator, source) {
+        (Some("codex_vscode"), _) => AgentWorkClient::CodexVscode,
+        (Some("Codex Desktop"), _) => AgentWorkClient::CodexApp,
+        (_, Some("cli")) => AgentWorkClient::CodexCli,
+        _ => AgentWorkClient::Other,
+    }
+}
+
+fn folder_name(cwd: &Path) -> Option<String> {
+    let name = cwd.file_name()?.to_str()?;
+    if name.is_empty() || name.chars().any(char::is_control) {
+        return None;
+    }
+    Some(name.chars().take(MAX_FOLDER_NAME_CHARS).collect())
+}
+
 fn observe_candidate(
     candidate: &Candidate,
     workspaces: &[&(Uuid, PathBuf)],
     now: i64,
-) -> Option<ObservedAgentSession> {
+) -> Option<CandidateObservation> {
     let metadata = read_session_metadata(&candidate.path)?;
-    if metadata.originator.as_deref() != Some("codex_vscode")
-        || metadata.source.as_deref() != Some("vscode")
-    {
+    // Interactive chats only. Subagents and exec runs work inside a parent
+    // turn, so they would count the same work two times.
+    if !matches!(metadata.source.as_deref(), Some("vscode") | Some("cli")) {
         return None;
     }
     let cwd = Path::new(metadata.cwd.as_deref()?);
     if !valid_absolute_path(cwd) {
         return None;
     }
-    let workspace_id = matching_workspace_id(cwd, workspaces)?;
     let session_id = Uuid::parse_str(metadata.id.as_deref()?).ok()?;
+    let workspace_id = (metadata.originator.as_deref() == Some("codex_vscode")
+        && metadata.source.as_deref() == Some("vscode"))
+    .then(|| matching_workspace_id(cwd, workspaces))
+    .flatten();
     let event_state = read_event_state(&candidate.path)?;
+    let Some(workspace_id) = workspace_id else {
+        let work_periods = event_state.work_periods(candidate.modified_at);
+        if work_periods.is_empty() {
+            return None;
+        }
+        let age = now.saturating_sub(candidate.modified_at);
+        return Some(CandidateObservation::Unassigned(UnassignedAgentWork {
+            session_id,
+            provider: ObservedAgentProvider::Codex,
+            client: work_client(metadata.originator.as_deref(), metadata.source.as_deref()),
+            folder_name: folder_name(cwd),
+            working: !event_state.active_turns.is_empty()
+                && age <= STALE_AFTER_MS
+                && event_state.pending_input.is_empty(),
+            started_at_unix_ms: candidate.created_at,
+            last_event_at_unix_ms: candidate.modified_at,
+            work_periods,
+        }));
+    };
     let work_periods = event_state.work_periods(candidate.modified_at);
     let age = now.saturating_sub(candidate.modified_at);
     let status = if !event_state.active_turns.is_empty() {
@@ -339,7 +432,7 @@ fn observe_candidate(
             None => AgentObservationStatus::Idle,
         }
     };
-    Some(ObservedAgentSession {
+    Some(CandidateObservation::Workspace(Box::new(ObservedAgentSession {
         schema_version: AGENT_OBSERVATION_SCHEMA_VERSION,
         session_id,
         workspace_id,
@@ -356,7 +449,7 @@ fn observe_candidate(
         started_at_unix_ms: candidate.created_at,
         last_event_at_unix_ms: candidate.modified_at,
         work_periods,
-    })
+    })))
 }
 
 pub(crate) fn matching_workspace_id(cwd: &Path, workspaces: &[&(Uuid, PathBuf)]) -> Option<Uuid> {
@@ -819,9 +912,7 @@ fn bounded_agent_update(value: &str) -> Option<String> {
         .lines()
         .map(str::trim)
         .filter(|line| {
-            !line.is_empty()
-                && !line.starts_with(CHANGE_REQUEST_PROPOSAL_PREFIX)
-                && !line.starts_with(MR_LINK_PROPOSAL_PREFIX)
+            !line.is_empty() && !crate::agent_sessions::is_proposal_line(line)
         })
         .take(MAX_AGENT_UPDATE_LINES)
         .collect::<Vec<_>>();
@@ -1282,6 +1373,60 @@ mod tests {
         );
     }
 
+    fn rollout_with_turn(originator: &str, source: serde_json::Value, cwd: &Path, start: &str, end: &str) -> String {
+        [
+            serde_json::json!({
+                "timestamp": start, "type": "session_meta",
+                "payload": {"id": Uuid::new_v4(), "originator": originator, "source": source, "cwd": cwd}
+            }),
+            serde_json::json!({"timestamp": start, "type": "event_msg", "payload": {"type": "task_started", "turn_id": "t1"}}),
+            serde_json::json!({"timestamp": end, "type": "event_msg", "payload": {"type": "task_complete", "turn_id": "t1"}}),
+        ]
+        .map(|line| line.to_string())
+        .join("\n")
+            + "\n"
+    }
+
+    #[test]
+    fn counts_parallel_chats_outside_saved_workspaces_once() {
+        let fixture = TempDir::new().expect("fixture");
+        let workspace = fixture.path().join("saved-workspace");
+        let elsewhere = fixture.path().join("beacon_oncalls");
+        fs::create_dir(&workspace).unwrap();
+        fs::create_dir(&elsewhere).unwrap();
+        let day = fixture.path().join("sessions/2026/10/08");
+        fs::create_dir_all(&day).unwrap();
+        let chats = [
+            ("vscode.jsonl", "codex_vscode", serde_json::json!("vscode"), &workspace),
+            ("app.jsonl", "Codex Desktop", serde_json::json!("vscode"), &elsewhere),
+            ("cli.jsonl", "codex-tui", serde_json::json!("cli"), &elsewhere),
+            ("subagent.jsonl", "codex-tui", serde_json::json!({"subagent": {"thread_spawn": {}}}), &elsewhere),
+            ("exec.jsonl", "codex_exec", serde_json::json!("exec"), &elsewhere),
+        ];
+        for (name, originator, source, cwd) in chats {
+            fs::write(
+                day.join(name),
+                rollout_with_turn(originator, source, cwd, "2026-10-08T05:00:00Z", "2026-10-08T05:30:00Z"),
+            )
+            .unwrap();
+        }
+
+        let observer = CodexSessionObserver::new(fixture.path().join("sessions"));
+        let observation = observer.observe_workspaces_at(&[(Uuid::new_v4(), workspace)], now_unix_ms());
+
+        assert_eq!(observation.observed.len(), 1, "the workspace chat stays on its workspace");
+        let mut clients = observation.unassigned_work.iter().map(|work| work.client).collect::<Vec<_>>();
+        clients.sort_by_key(|client| format!("{client:?}"));
+        assert_eq!(clients, [AgentWorkClient::CodexApp, AgentWorkClient::CodexCli]);
+        for work in &observation.unassigned_work {
+            assert_eq!(work.folder_name.as_deref(), Some("beacon_oncalls"));
+            assert_eq!(work.work_periods.len(), 1);
+            assert_eq!(work.work_periods[0].ended_at_unix_ms - work.work_periods[0].started_at_unix_ms, 30 * 60 * 1_000);
+            let wire = serde_json::to_value(work).unwrap();
+            assert!(wire.get("cwd").is_none(), "the full folder path stays private");
+        }
+    }
+
     #[test]
     fn maps_one_global_scan_to_the_matching_saved_workspace() {
         let fixture = TempDir::new().expect("fixture");
@@ -1313,7 +1458,7 @@ mod tests {
         let observed = observer.observe_workspaces_at(
             &[(first_id, first_workspace), (second_id, second_workspace)],
             now_unix_ms(),
-        );
+        ).observed;
 
         assert_eq!(observed.len(), 1);
         assert_eq!(observed[0].workspace_id, second_id);

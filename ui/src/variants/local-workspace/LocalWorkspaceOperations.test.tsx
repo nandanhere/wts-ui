@@ -109,24 +109,13 @@ describe("personal local workspace registry", () => {
         name: /^Open TASK-42.* details$/i,
       }),
     );
-    await user.click(
-      await screen.findByRole("button", { name: "Review setup" }),
-    );
 
-    expect(
-      await screen.findByRole("table", {
-        name: "Workspace creation effects",
-      }),
-    ).toBeVisible();
-    expect(screen.getByText(/01234567/)).toBeVisible();
-    expect(fake.preflightWorkspace).toHaveBeenCalledWith(persisted.workspaceId);
-
-    await user.click(
-      screen.getAllByRole("button", { name: "Create workspace" })[0]!,
-    );
+    // WTS reviews and creates the saved plan without a Review or Create click.
     const workspaceFacts = await screen.findByRole("region", {
       name: "Workspace facts",
     });
+    expect(fake.preflightWorkspace).toHaveBeenCalledExactlyOnceWith(persisted.workspaceId);
+    expect(fake.materializeWorkspace).toHaveBeenCalledTimes(1);
     expect(within(workspaceFacts).getByText("Repositories")).toBeVisible();
     expect(within(workspaceFacts).getByText("1 resolved")).toBeVisible();
     expect(within(workspaceFacts).getByText("Worktrees")).toBeVisible();
@@ -244,9 +233,6 @@ describe("personal local workspace registry", () => {
         name: "Open TASK-42: Orders retries create duplicate captures details",
       }),
     );
-    await user.click(
-      await screen.findByRole("button", { name: "Review setup" }),
-    );
 
     const replacement = await screen.findByRole("combobox", {
       name: "Replacement base for orders-api",
@@ -305,9 +291,6 @@ describe("personal local workspace registry", () => {
       await screen.findByRole("button", {
         name: "Open TASK-42: Orders retries create duplicate captures details",
       }),
-    );
-    await user.click(
-      await screen.findByRole("button", { name: "Review setup" }),
     );
 
     expect(
@@ -460,7 +443,7 @@ describe("personal local workspace registry", () => {
       screen.queryByRole("button", { name: "Open Codex in Terminal" }),
     ).not.toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: /Spaces/ }));
+    await user.click(screen.getByRole("button", { name: "Open Spaces" }));
     await user.click(screen.getByRole("button", { name: /^Open AUTH-778.* details$/i }));
     expect(
       await screen.findByRole("button", { name: "Workspace actions" }),
@@ -2548,16 +2531,15 @@ describe("personal local workspace registry", () => {
     const fake = fakeWorkspaceClient({
       list: workspaceListFixture([first, second]),
     });
-    fake.preflightWorkspace.mockReturnValue(pendingPreflight);
+    fake.preflightWorkspace.mockReturnValueOnce(pendingPreflight);
 
     render(<LocalWorkspace client={fake.client} />);
+    // Opening the plan starts the automatic setup review.
     await user.click(
       await screen.findByRole("button", { name: /^Open TASK-42.* details$/i }),
     );
-    await user.click(
-      await screen.findByRole("button", { name: "Review setup" }),
-    );
-    await user.click(screen.getByRole("button", { name: /Spaces/i }));
+    await waitFor(() => expect(fake.preflightWorkspace).toHaveBeenCalledWith(first.workspaceId));
+    await user.click(screen.getByRole("button", { name: "Open Spaces" }));
     await user.click(screen.getByRole("button", { name: /^Open AUTH-778.* details$/i }));
 
     await act(async () => {

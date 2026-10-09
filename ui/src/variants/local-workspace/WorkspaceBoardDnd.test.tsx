@@ -108,7 +108,8 @@ describe("workspace board order fallback", () => {
     expect(
       screen.queryByRole("button", { name: "Drag workspace drag" }),
     ).not.toBeInTheDocument();
-    const cardSurface = screen.getByRole("button", { name: /Open drag:/ });
+    // The first match is the card surface. The second is the next-step button in the card footer.
+    const [cardSurface] = screen.getAllByRole("button", { name: /Open drag:/ });
     fireEvent.mouseDown(cardSurface, {
       button: 0,
       clientX: 20,

@@ -193,6 +193,48 @@ export function labelClass(label: CodeReviewLabel): string {
   return styles[`label_${label}`] ?? "";
 }
 
+/** Labels that ask for a code change. Praise and questions do not. */
+const FIXABLE_LABELS: ReadonlySet<CodeReviewLabel> = new Set(["blocking", "issue", "suggestion", "nit"]);
+
+export function isFixableFinding(finding: CodeReviewFinding): boolean {
+  return FIXABLE_LABELS.has(findingLabel(finding));
+}
+
+function findingLocationText(finding: CodeReviewFinding): string {
+  if (!finding.filePath) return "In this change";
+  const side = finding.side === "deletions" ? " (removed line)" : "";
+  return finding.line ? `In \`${finding.filePath}\` around line ${finding.line}${side}` : `In \`${finding.filePath}\``;
+}
+
+function findingFixSection(finding: CodeReviewFinding): string {
+  const parts = [`${findingLocationText(finding)}: ${finding.title}`];
+  if (finding.explanation) parts.push(finding.explanation.trim());
+  if (finding.suggestedPatch) parts.push(`Suggested change:\n\`\`\`diff\n${finding.suggestedPatch.trim()}\n\`\`\``);
+  return parts.join("\n\n");
+}
+
+/** A prompt that tells a coding agent to fix one finding. */
+export function findingFixPrompt(finding: CodeReviewFinding): string {
+  return [
+    "Verify each finding against the current code and only fix it if needed.",
+    findingFixSection(finding),
+    "Keep the change small. Run the tests that cover this code.",
+  ].join("\n\n");
+}
+
+/** A prompt that tells a coding agent to fix every finding that asks for a change. */
+export function reviewFixPrompt(review: WorkspaceCodeReviewResult): string {
+  const fixable = review.findings.filter(isFixableFinding);
+  const sections = fixable.map((finding, index) => `${index + 1}. [${codeReviewLabelText(findingLabel(finding))}] ${findingFixSection(finding)}`);
+  const tests = review.suggestedTests?.length ? ["Add these tests:", ...review.suggestedTests.map((test) => `- ${test}`)].join("\n") : "";
+  return [
+    "Verify each finding against the current code and only fix it if needed.",
+    ...sections,
+    tests,
+    "Keep each change small. Run the tests that cover the changed code.",
+  ].filter(Boolean).join("\n\n");
+}
+
 /** True when a repository in the review has a different patch than the one on screen. */
 export function codeReviewIsStale(
   review: WorkspaceCodeReviewResult | null | undefined,
@@ -227,7 +269,7 @@ async function copyText(value: string): Promise<boolean> {
   }
 }
 
-export function CopyCommentButton({ value, label = "Copy comment" }: { value: string; label?: string }) {
+export function CopyCommentButton({ value, label = "Copy comment", text = "Copy", className }: { value: string; label?: string; text?: string; className?: string }) {
   const [copied, setCopied] = useState(false);
   useEffect(() => {
     if (!copied) return;
@@ -237,22 +279,40 @@ export function CopyCommentButton({ value, label = "Copy comment" }: { value: st
   return (
     <button
       aria-label={label}
-      className={styles.copyButton}
+      className={className ? `${styles.copyButton} ${className}` : styles.copyButton}
       data-copied={copied || undefined}
-      onClick={() => void copyText(value).then(setCopied)}
+      onClick={(event) => {
+        // The button can sit in a summary. A click must copy, not open the details.
+        event.preventDefault();
+        event.stopPropagation();
+        void copyText(value).then(setCopied);
+      }}
       type="button"
     >
       <Glyph name={copied ? "check" : "copy"} size={12} />
-      {copied ? "Copied" : "Copy"}
+      {copied ? "Copied" : text}
     </button>
   );
 }
 
 export function CodeReviewFindingBody({ finding, reviewer }: { finding: CodeReviewFinding; reviewer?: string }) {
+  // Without an MR there is nobody to comment to, so the MR comment shows only for an MR.
+  const ownCode = useContext(CodeReviewPublishContext) === null;
+  const prompt = isFixableFinding(finding) ? findingFixPrompt(finding) : "";
   return (
     <>
       {finding.explanation && <p className={styles.findingExplanation}>{finding.explanation}</p>}
-      {finding.suggestedComment && (
+      {prompt && (
+        <details className={styles.fixPrompt} data-ui="verification.code-review-fix-prompt" data-ui-label="Prompt for AI agent">
+          <summary>
+            <Glyph name="terminal" size={12} />
+            <span>Prompt for AI agent</span>
+            <CopyCommentButton label={`Copy the fix prompt for ${finding.title}`} value={prompt} />
+          </summary>
+          <pre>{prompt}</pre>
+        </details>
+      )}
+      {!ownCode && finding.suggestedComment && (
         <div className={styles.suggestedComment}>
           <div className={styles.suggestedCommentHeader}>
             <span>Suggested MR comment</span>
@@ -468,6 +528,8 @@ export function WorkspaceCodeReviewCard({
   const trace = useCodeReviewTrace(client, workspaceId, running, runStartedAt);
   const [error, setError] = useState<string | null>(null);
   const [opening, setOpening] = useState(false);
+  const [shownLabel, setShownLabel] = useState<CodeReviewLabel | null>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const onReviewChangeRef = useRef(onReviewChange);
   onReviewChangeRef.current = onReviewChange;
 
@@ -582,9 +644,13 @@ export function WorkspaceCodeReviewCard({
   }, [review]);
 
   const findingCount = review?.findings.length ?? 0;
+  const fixableCount = review?.findings.filter(isFixableFinding).length ?? 0;
+  const showSettings = !running && (!review || settingsOpen);
   const anchoredCount = review?.findings.filter((finding) => finding.anchored).length ?? 0;
   const questions = review?.findings.filter((finding) => findingLabel(finding) === "question") ?? [];
   const others = review?.findings.filter((finding) => findingLabel(finding) !== "question") ?? [];
+  const shownFindings = shownLabel ? review?.findings.filter((finding) => findingLabel(finding) === shownLabel) ?? [] : [];
+  useEffect(() => setShownLabel(null), [review]);
   const renderFindings = (items: CodeReviewFinding[], listLabel: string) => (
     <ol className={styles.findingsList} aria-label={listLabel}>
       {items.map((finding) => {
@@ -640,7 +706,7 @@ export function WorkspaceCodeReviewCard({
               {badgeText}
             </span>
           </div>
-          {!compact && <p>
+          {!compact && !running && !review && <p>
             {mergeRequest
               ? `The agent reviews the published code of MR !${mergeRequest.iid}. It can read files but cannot change them. You decide which comments go to GitLab.`
               : selectedSkill?.reviewer
@@ -648,6 +714,20 @@ export function WorkspaceCodeReviewCard({
                 : "Review the changes with an AI agent. The agent can read files but cannot change them."}
           </p>}
         </div>
+        <div className={styles.headerActions}>
+        {review && !running && (
+          <button
+            aria-expanded={settingsOpen}
+            className={styles.settingsToggle}
+            data-ui="verification.code-review-settings-toggle"
+            data-ui-label="Review settings button"
+            onClick={() => setSettingsOpen((open) => !open)}
+            type="button"
+          >
+            <Glyph name="settings" size={12} />
+            {settingsOpen ? "Hide settings" : "Settings"}
+          </button>
+        )}
         <button
           className={styles.reviewButton}
           data-ui="verification.code-review-run"
@@ -659,9 +739,10 @@ export function WorkspaceCodeReviewCard({
           {running ? <span aria-hidden="true" className={styles.spinner} /> : <Glyph name="play" size={12} />}
           {running ? "Review in progress" : review ? "Review again" : "Review code"}
         </button>
+        </div>
       </header>
 
-      <div
+      {showSettings && <div
         className={styles.controls}
         data-ui="verification.code-review-controls"
         data-ui-label="Code review settings"
@@ -752,7 +833,7 @@ export function WorkspaceCodeReviewCard({
             </button>
           )}
         </span>
-      </div>
+      </div>}
 
       {noProvider && (
         <div className={styles.notice} role="status">
@@ -831,33 +912,63 @@ export function WorkspaceCodeReviewCard({
             <div className={styles.notice} role="status">{review.summary || "There are no changes to review."}</div>
           ) : (
             <>
-              {review.intent && (
-                <p className={styles.intent}><span>Intent</span>{review.intent}</p>
-              )}
-              <p className={styles.summary}>{review.summary}</p>
-              {review.outcome === "unstructured" && (
-                <details className={styles.rawOutput}>
-                  <summary>Could not read findings from the agent. Show the agent output.</summary>
-                  <pre>{review.rawOutput || "The agent gave no output."}</pre>
-                </details>
-              )}
-              {counts.length > 0 && (
-                <div className={styles.counts} aria-label="Findings by label">
+              <div className={styles.overview} data-ui="verification.code-review-overview" data-ui-label="Review summary">
+                {review.intent && (
+                  <p className={styles.intent}><span>Intent</span><span>{review.intent}</span></p>
+                )}
+                <p className={styles.summary}>{review.summary}</p>
+                {review.outcome === "unstructured" && (
+                  <details className={styles.rawOutput}>
+                    <summary>Could not read findings from the agent. Show the agent output.</summary>
+                    <pre>{review.rawOutput || "The agent gave no output."}</pre>
+                  </details>
+                )}
+              </div>
+              <div className={styles.findingsGroup} data-ui="verification.code-review-findings" data-ui-label="Review findings">
+              {(counts.length > 0 || fixableCount > 0) && (
+                <div className={styles.countsRow}>
+                {counts.length > 0 && <div className={styles.counts} aria-label="Findings by label" role="group">
                   {counts.map(({ label, count }) => (
-                    <span className={`${styles.labelChip} ${labelClass(label)}`} key={label}>
+                    <button
+                      aria-pressed={shownLabel === label}
+                      className={`${styles.labelChip} ${styles.labelFilter} ${labelClass(label)}`}
+                      key={label}
+                      onClick={() => setShownLabel((current) => (current === label ? null : label))}
+                      title={shownLabel === label ? "Hide these findings" : "Show these findings"}
+                      type="button"
+                    >
                       {count} {codeReviewLabelText(label)}
-                    </span>
+                    </button>
                   ))}
+                </div>}
+                {fixableCount > 0 && (
+                  <CopyCommentButton
+                    className={styles.copyAllPrompt}
+                    label={`Copy a fix prompt for ${fixableCount} ${fixableCount === 1 ? "finding" : "findings"}`}
+                    text={`Copy fix prompt (${fixableCount})`}
+                    value={reviewFixPrompt(review)}
+                  />
+                )}
                 </div>
               )}
-              {findingsInDiff && findingCount > 0 && (
+              {shownLabel && shownFindings.length > 0 && (
+                <section
+                  aria-label={`${codeReviewLabelText(shownLabel)} findings`}
+                  className={styles.shownFindings}
+                  data-ui="verification.code-review-label-findings"
+                  data-ui-label="Findings for one label"
+                >
+                  {renderFindings(shownFindings, `${codeReviewLabelText(shownLabel)} findings`)}
+                </section>
+              )}
+              {!shownLabel && findingsInDiff && findingCount > 0 && (
                 <p className={styles.diffHint}>
                   {anchoredCount === findingCount
-                    ? "Each finding shows on its changed line in the diff and in the AI review panel."
-                    : `${anchoredCount} of ${findingCount} findings show on changed lines. The AI review panel shows all findings.`}
+                    ? "Each finding shows on its changed line in the diff. Select a label to show its findings here."
+                    : `${anchoredCount} of ${findingCount} findings show on changed lines. Select a label to show its findings here.`}
                 </p>
               )}
-              {questions.length > 0 && (
+              {!shownLabel && questions.length > 0 && (
                 <section
                   aria-label="Questions for you"
                   className={styles.questions}
@@ -872,10 +983,13 @@ export function WorkspaceCodeReviewCard({
                   {renderFindings(questions, "Agent questions")}
                 </section>
               )}
-              {!findingsInDiff && others.length > 0 && renderFindings(others, "Code review findings")}
+              {!shownLabel && !findingsInDiff && others.length > 0 && renderFindings(others, "Code review findings")}
               {review.outcome !== "unstructured" && findingCount === 0 && (
                 <div className={styles.clean} role="status"><Glyph name="check" size={13} /> The review found no problems.</div>
               )}
+              </div>
+              {((review.suggestedTests?.length ?? 0) > 0 || review.actionableSteps.length > 0 || (review.notChecked?.length ?? 0) > 0) && (
+              <div className={styles.followUp} data-ui="verification.code-review-follow-up" data-ui-label="Review follow-up">
               {(review.suggestedTests?.length ?? 0) > 0 && (
                 <div className={styles.listBlock}>
                   <b>Tests to add</b>
@@ -893,6 +1007,8 @@ export function WorkspaceCodeReviewCard({
                   <b>Not checked</b>
                   <ul>{review.notChecked!.map((item) => <li key={item}>{item}</li>)}</ul>
                 </div>
+              )}
+              </div>
               )}
             </>
           )}

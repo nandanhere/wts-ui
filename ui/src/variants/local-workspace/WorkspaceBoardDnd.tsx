@@ -7,7 +7,7 @@ import {
 import { useDraggable, useDroppable } from "@dnd-kit/core";
 import { CSS } from "@dnd-kit/utilities";
 import type { Lane, Workspace, WorkspaceAgentSnapshot } from "./LocalWorkspace";
-import type { GitlabMergeRequest, GitlabReview } from "../../lib/wtsClient";
+import type { GitlabMergeRequest, GitlabReview, GitlabReviewTarget } from "../../lib/wtsClient";
 import { Glyph } from "./Glyph";
 import { WorkspaceCard, type WorkspaceCardProps } from "./WorkspaceCard";
 import styles from "./LocalWorkspace.module.css";
@@ -282,6 +282,8 @@ export function DraggableWorkspaceCard({
   gitlabReview,
   mergeRequests,
   onOpenMergeRequest,
+  reviewTarget,
+  onOpenGitlabReview,
   moveActions,
   workspace,
 }: {
@@ -303,6 +305,8 @@ export function DraggableWorkspaceCard({
   gitlabReview?: GitlabReview;
   mergeRequests?: readonly GitlabMergeRequest[];
   onOpenMergeRequest?: (mergeRequest: GitlabMergeRequest) => void;
+  reviewTarget?: GitlabReviewTarget & Partial<GitlabReview>;
+  onOpenGitlabReview?: (review: GitlabReviewTarget) => void;
   moveActions?: Array<{
     label: string;
     onPress: () => void;
@@ -376,6 +380,8 @@ export function DraggableWorkspaceCard({
         mergeRequests={mergeRequests}
         moveActions={moveActions}
         onOpenMergeRequest={onOpenMergeRequest}
+        onOpenGitlabReview={onOpenGitlabReview}
+        reviewTarget={reviewTarget}
         workspace={
           workspace.lane === displayLane
             ? workspace

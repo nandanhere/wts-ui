@@ -130,6 +130,10 @@ const WTS_DIFF_SURFACE_CSS = `:host {
   --diffs-fg-number-override: var(--wts-muted);
   --diffs-font-family: var(--wts-font-mono);
 }`;
+/* The comment button gets its own space at the left of the line number. It must not cover the number. */
+const LINE_COMMENT_GUTTER_CSS = `
+[data-column-number] { padding-left: 30px; }
+[data-gutter-utility-slot] { right: auto; left: 7px; justify-content: flex-start; align-items: center; }`;
 const fileDiffVersions = new WeakMap<FileDiffMetadata, number>();
 const fileDiffCachePrefix = `wts-${crypto.randomUUID()}`;
 let nextFileDiffVersion = 1;
@@ -1118,7 +1122,7 @@ export function RepositoryPatchViewer({
       themeType: theme,
       itemMetrics: { lineHeight: 20 * textZoom / 100 },
       unsafeCSS: `${WTS_DIFF_SURFACE_CSS}
-:host { --diffs-font-size: ${13 * textZoom / 100}px; --diffs-line-height: ${20 * textZoom / 100}px; }`,
+:host { --diffs-font-size: ${13 * textZoom / 100}px; --diffs-line-height: ${20 * textZoom / 100}px; }${lineCommentProvider ? LINE_COMMENT_GUTTER_CSS : ""}`,
       onTokenEnter: (token, event) => {
         if (/^[A-Za-z_$][\w$]*$/.test(token.tokenText)) {
           token.tokenElement.title = `${navigator.platform.includes("Mac") ? "Command" : "Control"}-click to find changed references`;
@@ -1631,16 +1635,13 @@ export function RepositoryPatchViewer({
                             );
                           }}
                           renderGutterUtility={(getHoveredLine, item) => {
+                            if (!lineCommentProvider) return null;
                             const line = getHoveredLine();
-                            if (
-                              !lineCommentProvider ||
-                              !line ||
-                              !("side" in line) ||
-                              (line.side !== "additions" && line.side !== "deletions")
-                            ) return null;
+                            const changed = line && "side" in line && (line.side === "additions" || line.side === "deletions") ? line : undefined;
+                            // The library shows this slot only on the hovered line. The click reads the line again.
                             return (
                               <button
-                                aria-label={`Comment on ${line.side === "additions" ? "added" : "deleted"} line ${line.lineNumber}`}
+                                aria-label={changed ? `Comment on ${changed.side === "additions" ? "added" : "deleted"} line ${changed.lineNumber}` : "Comment on this line"}
                                 className={styles.lineCommentButton}
                                 onClick={() => {
                                   const currentLine = getHoveredLine();

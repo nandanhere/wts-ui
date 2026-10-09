@@ -6,6 +6,7 @@ import {
   saveActivityWatchReviewHistorySnapshot,
 } from "./activityWatchReviewCache";
 import { sendDesktopNotification } from "./desktopNotifications";
+import { formatDuration } from "./hybridTime";
 import {
   announceTimeReviewSnapshot,
   completeScheduledTimeReview,
@@ -105,10 +106,12 @@ export function TimeReviewScheduler({
         announceTimeReviewSnapshot();
         if (completed.notificationsEnabled) {
           const blockCount = reviewResult.value.sessions.length;
+          const activeMs = reviewResult.value.totalActiveSeconds * 1_000;
           void notify(
             "My time summary is ready",
-            `Found ${blockCount} ${blockCount === 1 ? "work block" : "work blocks"}.`,
+            `${formatDuration(activeMs)} active in ${blockCount} ${blockCount === 1 ? "work block" : "work blocks"}. Click to open My time.`,
             "wts-time-review",
+            { path: "/time" },
           ).catch(() => false);
         }
       } catch {

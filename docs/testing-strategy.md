@@ -505,6 +505,25 @@ For Tauri, keep a smaller native smoke suite:
 Native tests should not duplicate the full browser suite. They prove packaging,
 IPC, capabilities, and platform integration.
 
+#### Desktop layout and scroll check
+
+The macOS app renders in WKWebView, not Chromium. Chromium can hide a layout
+defect that WebKit shows. Run these checks after each UI layout change:
+
+1. Run the fixture audit in WebKit at two laptop window sizes:
+   `npm --prefix ui run test:desktop-webkit`.
+   The audit opens the main screens. It fails when content extends past a
+   clipping container that cannot scroll. It also fails when a scroll
+   container does not move on a wheel scroll.
+2. Run the same audit on real workspaces. Start `wtsd` on a copy of the
+   desktop data with `WTS_WORKSPACE_ROOT_ID=local-default`. Then run
+   `WTS_REAL_URL=http://127.0.0.1:18990 npm --prefix ui run test:desktop-webkit -- real-desktop-scroll-audit`.
+   The audit only opens views.
+3. Build and install the app. Open a workspace with code changes. Then run
+   `osascript -l JavaScript scripts/check-native-scroll.js "<workspace name>"`.
+   The check reads the accessibility tree of the real window. It brings WTS to
+   the front.
+
 ### Layer 7 — agent evaluation
 
 Separate product correctness from model quality.

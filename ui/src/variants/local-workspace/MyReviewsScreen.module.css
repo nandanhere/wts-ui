@@ -144,10 +144,11 @@
 
 .listHeader {
   display: flex;
-  min-height: 38px;
+  min-height: 44px;
   align-items: center;
   justify-content: space-between;
-  padding: 0 16px;
+  gap: 12px;
+  padding: 0 16px 0 8px;
   color: var(--wts-faint);
   background: var(--wts-surface-muted);
   border-bottom: 1px solid var(--wts-line);
@@ -155,6 +156,36 @@
   font-weight: 650;
   letter-spacing: 0.02em;
 }
+.tabs { display: inline-flex; align-self: stretch; gap: 2px; }
+.tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px;
+  color: var(--wts-muted);
+  background: transparent;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0;
+  cursor: pointer;
+}
+.tab:hover { color: var(--wts-ink); }
+.tab[aria-selected="true"] { color: var(--wts-ink); border-bottom-color: var(--wts-blue); }
+.tab:focus-visible { outline: none; box-shadow: var(--wts-focus-ring); }
+.tabCount {
+  min-width: 18px;
+  padding: 0 5px;
+  color: var(--wts-muted);
+  background: var(--wts-surface-hover);
+  border-radius: 9px;
+  font-size: 11px;
+  line-height: 18px;
+  text-align: center;
+}
+.tabEmpty { margin: 0; padding: 28px 16px; color: var(--wts-muted); text-align: center; }
 
 .review {
   display: grid;
@@ -265,6 +296,13 @@
   cursor: pointer;
 }
 
+.reviewActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
 .reviewAction:hover {
   color: var(--wts-blue);
   background: var(--wts-surface-hover);
@@ -294,9 +332,8 @@
     grid-template-columns: 32px minmax(0, 1fr);
   }
 
-  .reviewAction {
+  .reviewActions {
     grid-column: 2;
-    margin-top: 0;
-    justify-self: start;
+    justify-content: flex-start;
   }
 }

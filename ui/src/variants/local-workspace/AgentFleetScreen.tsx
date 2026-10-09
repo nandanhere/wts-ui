@@ -73,12 +73,31 @@ const providerNames: Record<string, string> = {
 
 const failureText: Record<string, string> = {
   launchRejected: "The terminal did not start the agent.",
-  providerFailed: "The agent CLI failed.",
-  processExited: "The agent process stopped.",
-  staleHeartbeat: "The agent stopped sending a heartbeat.",
+  providerFailed: "The agent CLI failed. Open the workspace to check the files, then start the task again.",
+  processExited: "The agent stopped before it gave a result. Open the workspace to check the files, then start the task again.",
+  staleHeartbeat: "The agent stopped sending a heartbeat. Open the workspace to check the files, then start the task again.",
   launchOutcomeUnknown: "The launch result is unknown.",
   userStopped: "You stopped this session.",
 };
+
+const DISMISSED_KEY = "wts.agents.dismissed-errors.v1";
+
+function loadDismissed(): ReadonlySet<string> {
+  try {
+    const value: unknown = JSON.parse(globalThis.localStorage?.getItem(DISMISSED_KEY) ?? "[]");
+    return new Set(Array.isArray(value) ? value.filter((id): id is string => typeof id === "string").slice(-200) : []);
+  } catch {
+    return new Set();
+  }
+}
+
+function saveDismissed(ids: ReadonlySet<string>) {
+  try {
+    globalThis.localStorage?.setItem(DISMISSED_KEY, JSON.stringify([...ids].slice(-200)));
+  } catch {
+    // The dismissal still applies until the screen closes.
+  }
+}
 
 function dayStart(now: number) {
   const start = new Date(now);
@@ -131,6 +150,7 @@ export function buildFleetCards(
   sessions: readonly AgentSession[],
   observed: readonly ObservedAgentSession[],
   now: number,
+  dismissed: ReadonlySet<string> = new Set(),
 ): FleetCard[] {
   const cards: FleetCard[] = [
     ...observed.map((session): FleetCard => {
@@ -158,7 +178,9 @@ export function buildFleetCards(
       };
     }),
     ...sessions.map((session): FleetCard => {
-      const health = managedHealth(session, now);
+      const reported = managedHealth(session, now);
+      // A dismissed error is history. It no longer asks for the user.
+      const health = reported === "error" && dismissed.has("managed:" + session.sessionId) ? "finished" : reported;
       const running = session.status === "running";
       return {
         id: "managed:" + session.sessionId,
@@ -211,20 +233,20 @@ export function relativeTime(fromUnixMs: number, now: number) {
   return Math.floor(hours / 24) + "d ago";
 }
 
-type Filter = "all" | "active" | "attention" | "done";
+/** A session that works, starts, or needs the user. It shows as a full card. */
+export function isCurrent(card: FleetCard) {
+  return card.health === "working" || card.health === "starting" || card.health === "waiting" || card.health === "error";
+}
 
-const filterLabels: Record<Filter, string> = {
-  all: "All",
-  active: "Working",
-  attention: "Needs you",
-  done: "Idle and finished",
-};
-
-function matchesFilter(card: FleetCard, filter: Filter) {
-  if (filter === "all") return true;
-  if (filter === "active") return card.health === "working" || card.health === "starting";
-  if (filter === "attention") return card.health === "waiting" || card.health === "error";
-  return card.health === "idle" || card.health === "finished";
+/** Groups idle and finished sessions by workspace. The most recent workspace comes first. */
+export function groupEarlierSessions(cards: readonly FleetCard[]) {
+  const groups = new Map<string, FleetCard[]>();
+  for (const card of [...cards].filter((card) => !isCurrent(card)).sort((left, right) => right.lastSignalAtUnixMs - left.lastSignalAtUnixMs)) {
+    const group = groups.get(card.workspaceId) ?? [];
+    group.push(card);
+    groups.set(card.workspaceId, group);
+  }
+  return [...groups].map(([workspaceId, group]) => ({ workspaceId, cards: group }));
 }
 
 function updatePreview(text: string): string {
@@ -256,9 +278,10 @@ export function AgentFleetScreen({
   const [error, setError] = useState("");
   const [updatedAt, setUpdatedAt] = useState(0);
   const [now, setNow] = useState(() => Date.now());
-  const [filter, setFilter] = useState<Filter>("all");
+  const [openGroups, setOpenGroups] = useState<ReadonlySet<string>>(() => new Set());
   const [openLog, setOpenLog] = useState<string | null>(null);
-  const [details, setDetails] = useState<Record<string, AgentSessionDetail | "loading" | "error">>({});
+  const [details, setDetails] = useState<Record<string, AgentSessionDetail | "loading" | "error" | "gone">>({});
+  const [dismissed, setDismissed] = useState<ReadonlySet<string>>(loadDismissed);
   const [confirmStop, setConfirmStop] = useState<string | null>(null);
   const [stopError, setStopError] = useState<Record<string, string>>({});
   const refreshes = useRef(0);
@@ -303,18 +326,29 @@ export function AgentFleetScreen({
     };
   }, [refresh]);
 
-  const cards = useMemo(() => buildFleetCards(sessions, observed, now), [now, observed, sessions]);
-  const counts = useMemo(() => {
-    const result: Record<Filter, number> = { all: cards.length, active: 0, attention: 0, done: 0 };
-    for (const card of cards) {
-      for (const key of ["active", "attention", "done"] as const) {
-        if (matchesFilter(card, key)) result[key] += 1;
-      }
-    }
-    return result;
-  }, [cards]);
+  const cards = useMemo(() => buildFleetCards(sessions, observed, now, dismissed), [dismissed, now, observed, sessions]);
+  const dismiss = (card: FleetCard) => {
+    setDismissed((current) => {
+      const next = new Set(current).add(card.id);
+      saveDismissed(next);
+      return next;
+    });
+    if (openLog === card.id) setOpenLog(null);
+  };
+  const current = cards.filter(isCurrent);
+  const earlierGroups = useMemo(() => groupEarlierSessions(cards), [cards]);
+  const earlierCount = cards.length - current.length;
   const agentMsToday = cards.reduce((total, card) => total + card.workedTodayMs, 0);
-  const visible = cards.filter((card) => matchesFilter(card, filter));
+  const attentionCount = cards.filter((card) => card.health === "waiting" || card.health === "error").length;
+  const workingCount = cards.filter((card) => card.health === "working" || card.health === "starting").length;
+
+  const toggleGroup = (workspaceId: string) =>
+    setOpenGroups((open) => {
+      const next = new Set(open);
+      if (next.has(workspaceId)) next.delete(workspaceId);
+      else next.add(workspaceId);
+      return next;
+    });
 
   const toggleLog = (card: FleetCard) => {
     if (openLog === card.id) {
@@ -329,8 +363,9 @@ export function AgentFleetScreen({
         .then((detail) => {
           if (mounted.current && currentClient.current === client) setDetails((current) => ({ ...current, [card.sessionId]: detail }));
         })
-        .catch(() => {
-          if (mounted.current && currentClient.current === client) setDetails((current) => ({ ...current, [card.sessionId]: "error" }));
+        .catch((cause: unknown) => {
+          const gone = typeof cause === "object" && cause !== null && "code" in cause && cause.code === "agent_session_not_found";
+          if (mounted.current && currentClient.current === client) setDetails((current) => ({ ...current, [card.sessionId]: gone ? "gone" : "error" }));
         });
     }
   };
@@ -349,12 +384,157 @@ export function AgentFleetScreen({
     }
   };
 
+  const renderLog = (card: FleetCard) => {
+    const detail = details[card.sessionId];
+    return (
+      <div className={styles.log} aria-label={"Log for " + card.providerLabel} role="region">
+        {card.kind === "observed" && card.observed && (
+          <>
+            {card.observed.latestUpdate && <p className={styles.logUpdate}>{card.observed.latestUpdate}</p>}
+            <ol>
+              {(card.observed.workPeriods ?? []).slice(-8).reverse().map((period) => (
+                <li key={period.startedAtUnixMs}>
+                  <time>{timeOfDay(period.startedAtUnixMs)}</time>
+                  <span>{period.ongoing ? "Turn in progress" : "Turn finished"}</span>
+                  <b>{formatDuration((period.ongoing ? now : period.endedAtUnixMs) - period.startedAtUnixMs)}</b>
+                </li>
+              ))}
+            </ol>
+            {(card.observed.workPeriods ?? []).length === 0 && <p>No turns recorded.</p>}
+          </>
+        )}
+        {card.kind === "managed" && detail === "loading" && <p role="status">Reading the session log…</p>}
+        {card.kind === "managed" && detail === "error" && <p role="alert">Cannot read the session log.</p>}
+        {card.kind === "managed" && detail === "gone" && (
+          <p role="status">This log is not available. The log of a background agent stays in memory only until the app restarts, and the app restarted after this session.</p>
+        )}
+        {card.kind === "managed" && detail && typeof detail === "object" && (
+          <>
+            <p className={styles.logUpdate}>{detail.task}</p>
+            <ol>
+              {detail.events.slice(-12).reverse().map((event) => (
+                <li key={event.sequence}>
+                  <time>{timeOfDay(event.observedAtUnixMs, true)}</time>
+                  <span>{event.summary}</span>
+                </li>
+              ))}
+            </ol>
+            {detail.events.length === 0 && <p>No events recorded.</p>}
+          </>
+        )}
+      </div>
+    );
+  };
+
+  const renderCard = (card: FleetCard) => {
+    const workspace = workspaceLabels[card.workspaceId];
+    const live = card.health === "working" && now - card.lastSignalAtUnixMs < 90_000;
+    return (
+      <li
+        aria-label={card.providerLabel + " in " + (workspace?.title ?? "an unsaved workspace")}
+        className={styles.card}
+        data-health={card.health}
+        key={card.id}
+      >
+        <div className={styles.cardTop}>
+          <span className={styles.provider}>
+            <span className={styles.providerMark} aria-hidden="true">{card.providerLabel.slice(0, 1)}</span>
+            <span>
+              <strong>{card.providerLabel}</strong>
+              <small>
+                {card.surface}
+                {card.model ? <> · <code>{card.model}</code></> : card.kind === "observed" ? " · Provider model" : ""}
+              </small>
+            </span>
+          </span>
+          <span className={styles.health} data-health={card.health}>
+            <span className={styles.healthDot} data-live={live || undefined} aria-hidden="true" />
+            {card.healthLabel}
+          </span>
+        </div>
+        <div className={styles.workspace}>
+          <Glyph name="folder" size={13} />
+          <strong>{workspace?.title ?? "Workspace not saved"}</strong>
+        </div>
+        <p className={styles.task} title={card.task}>{updatePreview(card.task)}</p>
+        <p className={styles.cardMeta}>
+          {formatDuration(card.workedTodayMs)} today · last signal{" "}
+          <time dateTime={new Date(card.lastSignalAtUnixMs).toISOString()}>
+            {relativeTime(card.lastSignalAtUnixMs, now)}
+          </time>
+        </p>
+        {stopError[card.sessionId] && (
+          <p className={styles.cardError} role="alert">{stopError[card.sessionId]}</p>
+        )}
+        {confirmStop === card.id ? (
+          <div className={styles.confirm} role="group" aria-label="Confirm stop">
+            <span>Stop this agent? Saved files stay in the workspace.</span>
+            <button className={styles.danger} onClick={() => void stop(card)} type="button">Stop agent</button>
+            <button className={styles.ghost} onClick={() => setConfirmStop(null)} type="button">Keep running</button>
+          </div>
+        ) : (
+          <div className={styles.actions}>
+            <button
+              className={styles.primary}
+              disabled={!workspace}
+              onClick={() => onOpenWorkspace(card.workspaceId)}
+              type="button"
+            >
+              Open workspace
+            </button>
+            <button
+              aria-label="Open in VS Code"
+              className={styles.secondary}
+              disabled={!workspace}
+              onClick={() => onOpenInVscode(card.workspaceId)}
+              type="button"
+            >
+              <Glyph name="code" size={13} /> VS Code
+            </button>
+            <button
+              aria-expanded={openLog === card.id}
+              className={styles.ghost}
+              onClick={() => toggleLog(card)}
+              type="button"
+            >
+              {openLog === card.id ? "Hide log" : "Inspect log"}
+            </button>
+            {card.canStop && (
+              <button
+                aria-label={"Stop " + card.providerLabel}
+                className={styles.ghostDanger}
+                onClick={() => setConfirmStop(card.id)}
+                type="button"
+              >
+                <Glyph name="stop" size={13} /> Stop
+              </button>
+            )}
+            {card.kind === "managed" && card.health === "error" && (
+              <button
+                aria-label={"Dismiss the " + card.providerLabel + " error"}
+                className={styles.ghost}
+                data-ui="fleet.dismiss-error"
+                data-ui-label="Dismiss agent error"
+                onClick={() => dismiss(card)}
+                title="Move this session to Earlier sessions"
+                type="button"
+              >
+                Dismiss
+              </button>
+            )}
+          </div>
+        )}
+        {openLog === card.id && renderLog(card)}
+      </li>
+    );
+  };
+
   return (
     <main className={styles.page} data-ui="fleet.page" data-ui-label="Agents page">
       <header className={styles.header}>
         <div>
           <h1>Agents</h1>
-          <p>Every agent session in your workspaces. Sessions that need you come first.</p>
+          <p>Agents that work or need you show first. Earlier sessions are grouped by workspace.</p>
         </div>
         <div className={styles.headerActions}>
           <span className={styles.updated} aria-live="polite">
@@ -381,36 +561,17 @@ export function AgentFleetScreen({
       <section className={styles.kpis} aria-label="Agent summary" data-ui="fleet.summary" data-ui-label="Agent summary">
         <div className={styles.kpi} data-tone="working">
           <span>Working now</span>
-          <strong>{counts.active}</strong>
+          <strong>{workingCount}</strong>
         </div>
         <div className={styles.kpi} data-tone="attention">
           <span>Needs you</span>
-          <strong>{counts.attention}</strong>
-        </div>
-        <div className={styles.kpi}>
-          <span>Idle or finished</span>
-          <strong>{counts.done}</strong>
+          <strong>{attentionCount}</strong>
         </div>
         <div className={styles.kpi} data-tone="agent">
           <span>Agent work today</span>
           <strong>{formatDuration(agentMsToday)}</strong>
         </div>
       </section>
-
-      <div className={styles.toolbar} role="group" aria-label="Filter agent sessions" data-ui="fleet.filter" data-ui-label="Agent filter">
-        {(Object.keys(filterLabels) as Filter[]).map((key) => (
-          <button
-            aria-pressed={filter === key}
-            className={styles.filter}
-            key={key}
-            onClick={() => setFilter(key)}
-            type="button"
-          >
-            {filterLabels[key]}
-            <span className={styles.count}>{counts[key]}</span>
-          </button>
-        ))}
-      </div>
 
       {state === "loading" && cards.length === 0 && (
         <div className={styles.grid} role="status" aria-label="Reading agent sessions…">
@@ -442,153 +603,94 @@ export function AgentFleetScreen({
           <span>Open Codex or Copilot in a saved workspace in VS Code, or start a background task from a workspace. The session shows here.</span>
         </div>
       )}
-      {state === "ready" && cards.length > 0 && visible.length === 0 && (
-        <div className={styles.empty}>
-          <strong>No sessions match this filter.</strong>
-          <button className={styles.link} onClick={() => setFilter("all")} type="button">Show all sessions</button>
-        </div>
+
+      {cards.length > 0 && (
+        <section className={styles.section} aria-labelledby="fleet-current-heading" data-ui="fleet.current" data-ui-label="Current agents">
+          <h2 className={styles.sectionHeading} id="fleet-current-heading">
+            Now <span className={styles.count}>{current.length}</span>
+          </h2>
+          {current.length === 0 ? (
+            <p className={styles.quietNote}>No agent works or needs you now.</p>
+          ) : (
+            <ol className={styles.grid} aria-label="Agent sessions" data-ui="fleet.sessions" data-ui-label="Agent sessions">
+              {current.map((card) => renderCard(card))}
+            </ol>
+          )}
+        </section>
       )}
 
-      {visible.length > 0 && (
-        <ol className={styles.grid} aria-label="Agent sessions" data-ui="fleet.sessions" data-ui-label="Agent sessions">
-          {visible.map((card) => {
-            const workspace = workspaceLabels[card.workspaceId];
-            const live = card.health === "working" && now - card.lastSignalAtUnixMs < 90_000;
-            const detail = details[card.sessionId];
-            const elapsedEnd = card.health === "working" || card.health === "starting" ? now : card.lastSignalAtUnixMs;
-            return (
-              <li
-                aria-label={card.providerLabel + " in " + (workspace?.title ?? "an unsaved workspace")}
-                className={styles.card}
-                data-health={card.health}
-                key={card.id}
-              >
-                <div className={styles.cardTop}>
-                  <span className={styles.provider}>
-                    <span className={styles.providerMark} aria-hidden="true">{card.providerLabel.slice(0, 1)}</span>
-                    <span>
-                      <strong>{card.providerLabel}</strong>
-                      <small>
-                        {card.surface}
-                        {card.model ? <> · <code>{card.model}</code></> : card.kind === "observed" ? " · Provider model" : ""}
-                      </small>
-                    </span>
-                  </span>
-                  <span className={styles.health} data-health={card.health}>
-                    <span className={styles.healthDot} data-live={live || undefined} aria-hidden="true" />
-                    {card.healthLabel}
-                  </span>
-                </div>
-                <div className={styles.workspace}>
-                  <Glyph name="folder" size={13} />
-                  <strong>{workspace?.title ?? "Workspace not saved"}</strong>
-                </div>
-                <p className={styles.task} title={card.task}>{updatePreview(card.task)}</p>
-                <dl className={styles.metrics}>
-                  <div>
-                    <dt>Session span</dt>
-                    <dd>{formatDuration(Math.max(0, elapsedEnd - card.startedAtUnixMs))}</dd>
-                  </div>
-                  <div>
-                    <dt>Worked today</dt>
-                    <dd>{formatDuration(card.workedTodayMs)}</dd>
-                  </div>
-                  <div>
-                    <dt>Last signal</dt>
-                    <dd>
-                      <time dateTime={new Date(card.lastSignalAtUnixMs).toISOString()}>
-                        {relativeTime(card.lastSignalAtUnixMs, now)}
-                      </time>
-                    </dd>
-                  </div>
-                </dl>
-                {stopError[card.sessionId] && (
-                  <p className={styles.cardError} role="alert">{stopError[card.sessionId]}</p>
-                )}
-                {confirmStop === card.id ? (
-                  <div className={styles.confirm} role="group" aria-label="Confirm stop">
-                    <span>Stop this agent? Saved files stay in the workspace.</span>
-                    <button className={styles.danger} onClick={() => void stop(card)} type="button">Stop agent</button>
-                    <button className={styles.ghost} onClick={() => setConfirmStop(null)} type="button">Keep running</button>
-                  </div>
-                ) : (
-                  <div className={styles.actions}>
+      {earlierGroups.length > 0 && (
+        <section className={styles.section} aria-labelledby="fleet-earlier-heading" data-ui="fleet.earlier" data-ui-label="Earlier sessions">
+          <h2 className={styles.sectionHeading} id="fleet-earlier-heading">
+            Earlier sessions <span className={styles.count}>{earlierCount}</span>
+          </h2>
+          <ul className={styles.groups} aria-label="Earlier sessions by workspace">
+            {earlierGroups.map((group) => {
+              const workspace = workspaceLabels[group.workspaceId];
+              const title = workspace?.title ?? "Workspace not saved";
+              const open = openGroups.has(group.workspaceId);
+              const latest = group.cards[0];
+              return (
+                <li className={styles.group} key={group.workspaceId}>
+                  <div className={styles.groupHeader}>
                     <button
-                      className={styles.primary}
-                      disabled={!workspace}
-                      onClick={() => onOpenWorkspace(card.workspaceId)}
+                      aria-expanded={open}
+                      className={styles.groupToggle}
+                      onClick={() => toggleGroup(group.workspaceId)}
                       type="button"
                     >
-                      Open workspace
+                      <Glyph name="chevron" size={12} />
+                      <Glyph name="folder" size={13} />
+                      <strong>{title}</strong>
+                      <span>
+                        {group.cards.length} {group.cards.length === 1 ? "session" : "sessions"} · last {relativeTime(latest.lastSignalAtUnixMs, now)}
+                      </span>
                     </button>
-                    <button
-                      aria-label="Open in VS Code"
-                      className={styles.secondary}
-                      disabled={!workspace}
-                      onClick={() => onOpenInVscode(card.workspaceId)}
-                      type="button"
-                    >
-                      <Glyph name="code" size={13} /> VS Code
-                    </button>
-                    <button
-                      aria-expanded={openLog === card.id}
-                      className={styles.ghost}
-                      onClick={() => toggleLog(card)}
-                      type="button"
-                    >
-                      {openLog === card.id ? "Hide log" : "Inspect log"}
-                    </button>
-                    {card.canStop && (
+                    {workspace && (
                       <button
-                        aria-label={"Stop " + card.providerLabel}
-                        className={styles.ghostDanger}
-                        onClick={() => setConfirmStop(card.id)}
+                        aria-label={"Open workspace " + title}
+                        className={styles.ghost}
+                        onClick={() => onOpenWorkspace(group.workspaceId)}
                         type="button"
                       >
-                        <Glyph name="stop" size={13} /> Stop
+                        Open workspace
                       </button>
                     )}
                   </div>
-                )}
-                {openLog === card.id && (
-                  <div className={styles.log} aria-label={"Log for " + card.providerLabel} role="region">
-                    {card.kind === "observed" && card.observed && (
-                      <>
-                        {card.observed.latestUpdate && <p className={styles.logUpdate}>{card.observed.latestUpdate}</p>}
-                        <ol>
-                          {(card.observed.workPeriods ?? []).slice(-8).reverse().map((period) => (
-                            <li key={period.startedAtUnixMs}>
-                              <time>{timeOfDay(period.startedAtUnixMs)}</time>
-                              <span>{period.ongoing ? "Turn in progress" : "Turn finished"}</span>
-                              <b>{formatDuration((period.ongoing ? now : period.endedAtUnixMs) - period.startedAtUnixMs)}</b>
-                            </li>
-                          ))}
-                        </ol>
-                        {(card.observed.workPeriods ?? []).length === 0 && <p>No turns recorded.</p>}
-                      </>
-                    )}
-                    {card.kind === "managed" && detail === "loading" && <p role="status">Reading the session log…</p>}
-                    {card.kind === "managed" && detail === "error" && <p role="alert">Cannot read the session log.</p>}
-                    {card.kind === "managed" && detail && typeof detail === "object" && (
-                      <>
-                        <p className={styles.logUpdate}>{detail.task}</p>
-                        <ol>
-                          {detail.events.slice(-12).reverse().map((event) => (
-                            <li key={event.sequence}>
-                              <time>{timeOfDay(event.observedAtUnixMs, true)}</time>
-                              <span>{event.summary}</span>
-                            </li>
-                          ))}
-                        </ol>
-                        {detail.events.length === 0 && <p>No events recorded.</p>}
-                      </>
-                    )}
-                  </div>
-                )}
-              </li>
-            );
-          })}
-        </ol>
+                  {open && (
+                    <ol className={styles.rows} aria-label={"Earlier sessions in " + title}>
+                      {group.cards.map((card) => (
+                        <li className={styles.row} key={card.id}>
+                          <div className={styles.rowLine}>
+                            <span className={styles.rowDot} data-health={card.health} aria-hidden="true" />
+                            <span className={styles.rowStatus}>{card.healthLabel}</span>
+                            <span className={styles.rowMeta}>
+                              {card.providerLabel}
+                              {card.model ? " · " + card.model : " · " + card.surface}
+                            </span>
+                            <span className={styles.rowPreview} title={card.task}>{updatePreview(card.task)}</span>
+                            <time dateTime={new Date(card.lastSignalAtUnixMs).toISOString()}>
+                              {relativeTime(card.lastSignalAtUnixMs, now)}
+                            </time>
+                            <button
+                              aria-expanded={openLog === card.id}
+                              className={styles.ghost}
+                              onClick={() => toggleLog(card)}
+                              type="button"
+                            >
+                              {openLog === card.id ? "Hide log" : "Log"}
+                            </button>
+                          </div>
+                          {openLog === card.id && renderLog(card)}
+                        </li>
+                      ))}
+                    </ol>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        </section>
       )}
     </main>
   );

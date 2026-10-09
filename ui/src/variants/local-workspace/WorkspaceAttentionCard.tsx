@@ -12,6 +12,17 @@ function updatedLabel(time: number | null) {
 }
 function plural(count: number, one: string, many: string) { return count + " " + (count === 1 ? one : many); }
 
+/** A card shows this many items in each group before "Show more". */
+const VISIBLE_ITEMS = 3;
+
+function ageLabel(time: number, now = Date.now()) {
+  const minutes = Math.max(0, Math.floor((now - time) / 60_000));
+  if (minutes < 1) return "now";
+  if (minutes < 60) return minutes + "m";
+  const hours = Math.floor(minutes / 60);
+  return hours < 24 ? hours + "h" : Math.floor(hours / 24) + "d";
+}
+
 export type AttentionFilter = WorkspaceAttentionKind | null;
 
 /** Counts for one workspace or for the board. Unread comments count comments, not threads. */
@@ -92,19 +103,24 @@ export function BoardAttentionStatus({ items, refreshing, unavailable, onRefresh
       {filter && <button type="button" className={styles.clearChip} onClick={() => onFilter?.(null)}>
         <Glyph name="close" size={12} /> Show all
       </button>}
-      {refreshing && <small className={styles.checking} role="status"><Glyph name="refresh" size={12} /> Checking status…</small>}
+      <span className={styles.statusEnd}>
+        {refreshing && <small className={styles.checking} role="status"><Glyph name="refresh" size={12} /> Checking status…</small>}
+        {!!unavailable?.workspaces && <span className={styles.staleStatus} role="note"
+          data-ui="spaces.attention-stale" data-ui-label="Stale status" data-open={healthOpen || undefined}>
+          <button type="button" className={styles.staleToggle} aria-expanded={healthOpen}
+            aria-label={`${unavailable.names.join(" and ")} status is unavailable for ${plural(unavailable.workspaces, "workspace", "workspaces")}. ${healthOpen ? "Hide" : "Show"} status details`}
+            onClick={() => setHealthOpen(value => !value)}>
+            <span className={styles.staleDot} aria-hidden="true" />
+            {unavailable.names.join(" and ")} status unavailable · {plural(unavailable.workspaces, "workspace", "workspaces")}
+          </button>
+          {healthOpen && <span className={styles.stalePanel}>
+            <span>{unavailable.names.join(" and ")} status is unavailable for {plural(unavailable.workspaces, "workspace", "workspaces")}. The board shows the last known items. Open a workspace to see the status of each source.</span>
+            {onRefresh && <button type="button" disabled={refreshing}
+              onClick={() => { setHealthOpen(false); onRefresh(); }}>Retry status</button>}
+          </span>}
+        </span>}
+      </span>
     </div>
-    {!!unavailable?.workspaces && <div className={styles.boardFailure} role="note"
-      data-ui="spaces.attention-stale" data-ui-label="Stale status banner" data-open={healthOpen || undefined}>
-      <Glyph name="warning" size={14} />
-      <span>{unavailable.names.join(" and ")} status is unavailable for {plural(unavailable.workspaces, "workspace", "workspaces")}. Saved items remain visible.</span>
-      {onRefresh && <button type="button" disabled={refreshing} onClick={onRefresh}>Retry status</button>}
-      <button type="button" className={styles.bannerToggle} aria-expanded={healthOpen}
-        aria-label={healthOpen ? "Hide status details" : "Show status details"} onClick={() => setHealthOpen(value => !value)}>
-        <Glyph name="chevron" size={14} />
-      </button>
-      {healthOpen && <p className={styles.bannerDetail}>WTS keeps the last known items. Retry status after the connection is available. Open a workspace to see the status of each source.</p>}
-    </div>}
   </div>;
 }
 
@@ -135,7 +151,6 @@ export function ConnectedWorkspaceAttentionCard({ store, ...props }: {
   workspaceLabel: string;
   kinds?: readonly WorkspaceAttentionKind[];
   onOpen: (item: WorkspaceAttentionItem) => void;
-  onRefresh: () => void;
 }) {
   const state = useWorkspaceAttention(store, snapshot => ({
     items: snapshot.items.filter(item => item.workspaceId === props.workspaceId),
@@ -153,8 +168,8 @@ const groupDetails: Record<WorkspaceAttentionKind, { title: string; icon: GlyphN
   agent: { title: "Agent results", icon: "check", empty: "No results to review." },
 };
 
-/** The full attention list for one workspace. The inspector shows it. */
-export function WorkspaceAttentionCard({ workspaceId, workspaceLabel, items, history, sources, kinds = ["verification", "gitlab", "agent"], onOpen, onAcknowledge, onRefresh }: {
+/** The open attention items for one workspace. The board banner reports unavailable sources once. */
+export function WorkspaceAttentionCard({ workspaceId, workspaceLabel, items, history, sources, kinds = ["verification", "gitlab", "agent"], onOpen, onAcknowledge }: {
   workspaceId: string;
   workspaceLabel: string;
   items: WorkspaceAttentionItem[];
@@ -163,25 +178,25 @@ export function WorkspaceAttentionCard({ workspaceId, workspaceLabel, items, his
   kinds?: readonly WorkspaceAttentionKind[];
   onOpen: (item: WorkspaceAttentionItem) => void;
   onAcknowledge: (item: WorkspaceAttentionItem) => void;
-  onRefresh: () => void;
 }) {
   const sourceEntries = sources ? Object.entries(sources) as [WorkspaceAttentionKind, WorkspaceAttentionSource][] : [];
-  const failures = sourceEntries.filter(([kind, source]) => kinds.includes(kind) && (source.status === "error" || source.status === "stale"));
-  const refreshing = sourceEntries.some(([, source]) => source.refreshing);
+  const stale = sourceEntries.some(([kind, source]) => kinds.includes(kind) && (source.status === "error" || source.status === "stale"));
   const updated = sourceEntries.length && sourceEntries.every(([, source]) => source.updatedAt !== null)
     ? Math.min(...sourceEntries.map(([, source]) => source.updatedAt!)) : null;
   const shownHistory = history.filter(item => kinds.includes(item.kind));
+  const shownKinds = kinds.filter(kind => items.some(item => item.kind === kind));
+  const [expandedKinds, setExpandedKinds] = useState<ReadonlySet<WorkspaceAttentionKind>>(() => new Set());
+  if (!shownKinds.length && !shownHistory.length) return null;
   return <section className={styles.card} aria-label={workspaceLabel + " attention"}
     data-ui={"spaces.attention." + workspaceId} data-ui-label={workspaceLabel + " attention"}>
-    {!!failures.length && <p className={styles.failure}>
-      <Glyph name="warning" size={13} />
-      <span>{failures.map(([kind]) => sourceNames[kind]).join(" and ")} status is unavailable. Saved items remain visible.</span>
-      <button type="button" disabled={refreshing} onClick={onRefresh} aria-label="Retry status">Retry</button>
-    </p>}
-    {kinds.map(kind => {
+    {shownKinds.map(kind => {
       const group = items.filter(item => item.kind === kind);
       const detail = groupDetails[kind];
-      return <details key={kind} className={styles.group} data-kind={kind} open={group.length > 0}>
+      const expanded = expandedKinds.has(kind);
+      const visible = expanded ? group : group.slice(0, VISIBLE_ITEMS);
+      const hidden = group.length - visible.length;
+      const compact = kind === "agent";
+      return <details key={kind} className={styles.group} data-kind={kind} open>
         <summary>
           <span className={styles.groupIcon} data-kind={kind} data-empty={!group.length || undefined}>
             <Glyph name={group.length ? detail.icon : "check"} size={13} />
@@ -190,25 +205,38 @@ export function WorkspaceAttentionCard({ workspaceId, workspaceLabel, items, his
           <span className={styles.count}>{kind === "gitlab" ? group.reduce((sum, item) => sum + item.count, 0) : group.length}</span>
           <Glyph name="chevron" size={14} />
         </summary>
-        {group.length ? <ul className={styles.items}>{group.map(item => <li key={item.id}>
-          <button className={styles.open} type="button" onClick={() => onOpen(item)}>
+        {group.length ? <ul className={styles.items} data-compact={compact || undefined}>{visible.map(item => <li key={item.id}>
+          <button className={styles.open} type="button" onClick={() => onOpen(item)}
+            title={compact ? item.label + " · " + new Date(item.occurredAt).toLocaleString() : undefined}>
             <span className={styles.itemText}>
               <b className={kind === "gitlab" && item.target.kind === "gitlab" && item.target.filePath ? styles.path : undefined}>{item.label}</b>
-              <small>{item.detail}</small>
+              <small className={compact ? styles.srOnly : undefined}>{item.detail}</small>
             </span>
+            {compact && <time className={styles.age} dateTime={new Date(item.occurredAt).toISOString()} aria-hidden="true">{ageLabel(item.occurredAt)}</time>}
             {item.kind === "gitlab" && <span className={styles.count} aria-label={item.count + " unread comments"}>{item.count}</span>}
-            <Glyph name="arrow" size={13} />
+            {!compact && <Glyph name="arrow" size={13} />}
           </button>
           {item.kind === "agent" && <button className={styles.reviewed} type="button"
             aria-label={"Mark " + item.label + " as reviewed"} title="Mark as reviewed" onClick={() => onAcknowledge(item)}>
-            <Glyph name="check" size={13} /><span>Reviewed</span>
+            <Glyph name="check" size={13} />
           </button>}
-        </li>)}</ul> : <p className={styles.empty}>{detail.empty}</p>}
+        </li>)}
+          {(hidden > 0 || (expanded && group.length > VISIBLE_ITEMS)) && <li className={styles.moreRow}>
+            <button className={styles.more} type="button" aria-expanded={expanded}
+              onClick={() => setExpandedKinds(current => {
+                const next = new Set(current);
+                if (next.has(kind)) next.delete(kind); else next.add(kind);
+                return next;
+              })}>
+              {expanded ? "Show fewer" : "Show " + hidden + " more"}
+            </button>
+          </li>}
+        </ul> : <p className={styles.empty}>{detail.empty}</p>}
       </details>;
     })}
     <div className={styles.footer}>
       {!!sourceEntries.length && <details className={styles.status}>
-        <summary>{refreshing ? "Checking status…" : updatedLabel(updated)}{failures.length ? " · Stale" : ""}</summary>
+        <summary>{updatedLabel(updated)}{stale ? " · Stale" : ""}</summary>
         <ul>{sourceEntries.map(([kind, source]) => <li key={kind}>
           <b>{sourceNames[kind]}</b><span>{updatedLabel(source.updatedAt)}</span>
           {(source.error || source.detail) && <p>{source.error || source.detail}</p>}

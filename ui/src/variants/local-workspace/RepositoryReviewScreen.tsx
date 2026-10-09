@@ -639,6 +639,23 @@ export function RepositoryReviewScreen({
   const mrAiFindingCount = managedTarget
     ? mergeRequestAiReview(aiReview, managedTarget.worktreeRepositoryId, managedTarget.iid)?.review.findings.length ?? 0
     : 0;
+  const [openingMergeRequest, setOpeningMergeRequest] = useState(false);
+  const openMergeRequestInGitlab = async () => {
+    if (!managedTarget || openingMergeRequest) return;
+    const { repositoryId: providerRepositoryId, iid } = managedTarget;
+    setOpeningMergeRequest(true);
+    try {
+      const result = await client.openGitlabMergeRequest(providerRepositoryId, iid);
+      if (!result.accepted || result.repositoryId !== providerRepositoryId || result.iid !== iid) {
+        throw new Error("Received a different merge request link.");
+      }
+      onNotice?.(`${managedTarget.label} · GitLab opened`);
+    } catch (cause) {
+      onNotice?.(`${managedTarget.label} · ${cause instanceof Error ? cause.message : "Could not open this merge request."}`, "error");
+    } finally {
+      setOpeningMergeRequest(false);
+    }
+  };
   const mrIdentityContent = managedTarget ? (
     <div
       className={styles.mrIdentity}
@@ -646,7 +663,21 @@ export function RepositoryReviewScreen({
       data-ui="repository-review.mr-identity"
       data-ui-label="Merge request identity"
     >
-      <h2 title={mrTitle}>{mrTitle}</h2>
+      <h2>
+        <button
+          className={styles.mrTitleLink}
+          data-ui="repository-review.mr-title-link"
+          data-ui-label="MR title link"
+          disabled={openingMergeRequest}
+          onClick={() => void openMergeRequestInGitlab()}
+          role="link"
+          title={`Open !${managedTarget.iid} in GitLab`}
+          type="button"
+        >
+          <span>{mrTitle}</span>
+          <Glyph name="external" size={12} />
+        </button>
+      </h2>
       <div className={styles.mrMetadata}>
         {mrStatus && <span className={styles.mrStatus} data-status={mrStatus}>{mrStatus === "open" ? "Open" : mrStatus === "merged" ? "Merged" : "Closed"}</span>}
         <span className={styles.mrLabel} title={managedTarget.label}>{managedTarget.label}</span>
@@ -911,7 +942,7 @@ export function RepositoryReviewScreen({
           )}
         </div>
       )}
-      <div className={styles.codeContent} hidden={changeMode !== "code"} role={gitlabConversations ? "tabpanel" : undefined} id={`${changeViewId}-code-panel`} aria-labelledby={gitlabConversations ? `${changeViewId}-code-tab` : undefined}>
+      <div className={styles.codeContent} data-ai-review-open={(showAiReview && Boolean(workspaceKey)) || undefined} hidden={changeMode !== "code"} role={gitlabConversations ? "tabpanel" : undefined} id={`${changeViewId}-code-panel`} aria-labelledby={gitlabConversations ? `${changeViewId}-code-tab` : undefined}>
       {managedTarget && gitlabConversations ? <CodeReviewPublishProvider value={mrPublishValue}>
       {showAiReview && workspaceKey && (
         <div className={styles.aiReviewSlot}>

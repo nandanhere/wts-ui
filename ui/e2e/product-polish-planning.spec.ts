@@ -71,6 +71,7 @@ for (const width of [1440, 375]) {
       const original = fixture.documents.get(documentIdForPath(reportingPlan))!;
       const savedContents = "# Reporting plan\n\nThe export totals now include retry checks.\n";
       await page.getByRole("button", { name: "Edit", exact: true }).click();
+      await page.getByRole("group", { name: "Edit mode" }).getByRole("button", { name: "Source", exact: true }).click();
       await page.getByRole("textbox", { name: `Edit ${reportingPlan}`, exact: true }).fill(savedContents);
       await page.getByRole("button", { name: "Save", exact: true }).click();
       await expect(page.getByText("The export totals now include retry checks.", { exact: true })).toBeVisible();

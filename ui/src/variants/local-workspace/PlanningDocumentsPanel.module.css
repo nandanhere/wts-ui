@@ -1012,7 +1012,7 @@
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 10px 14px;
+  padding: 12px 16px;
   background: var(--wts-surface);
   border-bottom: 1px solid var(--wts-line);
 }
@@ -1026,7 +1026,7 @@
 
 .feedbackHeader strong {
   color: var(--wts-ink);
-  font-size: 12px;
+  font-size: 13px;
 }
 
 .feedbackHeader div span {
@@ -1050,11 +1050,11 @@
 
 .feedbackComposer {
   display: flex;
-  padding: 12px;
+  padding: 16px;
   background: var(--wts-surface);
   border-bottom: 1px solid var(--wts-line);
   flex-direction: column;
-  gap: 8px;
+  gap: 10px;
 }
 
 .feedbackTarget {
@@ -1119,7 +1119,7 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
+  gap: 12px;
 }
 
 .composerFooter > span {
@@ -1168,16 +1168,16 @@
 
 .threadSections {
   display: flex;
-  padding: 12px;
+  padding: 16px;
   flex-direction: column;
-  gap: 18px;
+  gap: 24px;
 }
 
 .threadSections > section {
   display: flex;
   min-width: 0;
   flex-direction: column;
-  gap: 7px;
+  gap: 10px;
 }
 
 .threadSectionHeader {
@@ -1204,7 +1204,7 @@
 .threadList {
   display: flex;
   flex-direction: column;
-  gap: 7px;
+  gap: 8px;
 }
 
 .feedbackThread {
@@ -1320,7 +1320,7 @@
 
 .emptyThreads {
   margin: 0;
-  padding: 8px;
+  padding: 0;
   color: var(--wts-faint);
   background: transparent;
   font-size: 12px;
@@ -1577,4 +1577,172 @@
   .documentList { max-height: 240px; overflow: auto; flex-direction: column; scroll-snap-type: none; }
   .documentRow { min-width: 0; max-width: none; flex-shrink: 0; }
   .folderButton { min-height: 32px; }
+}
+
+.richEditor {
+  display: flex;
+  min-height: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+}
+
+.richToolbar {
+  position: sticky;
+  z-index: 1;
+  top: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 10px;
+  background: color-mix(in srgb, var(--wts-surface) 92%, transparent);
+  border-bottom: 1px solid var(--wts-line);
+  backdrop-filter: blur(6px);
+}
+
+.richToolbarGroup {
+  display: inline-flex;
+  gap: 2px;
+  padding-right: 6px;
+  border-right: 1px solid var(--wts-line);
+}
+
+.richToolbarGroup:last-child {
+  padding-right: 0;
+  border-right: 0;
+}
+
+.richToolbarButton {
+  display: inline-grid;
+  min-width: 28px;
+  height: 26px;
+  place-items: center;
+  padding: 0 6px;
+  color: var(--wts-muted);
+  background: transparent;
+  border: 0;
+  border-radius: 5px;
+  font: 650 12px/1 var(--wts-font-sans);
+  cursor: pointer;
+  transition: color 120ms ease-out, background 120ms ease-out;
+}
+
+.richToolbarButton[data-action="bold"] {
+  font-weight: 800;
+}
+
+.richToolbarButton[data-action="italic"] {
+  font-style: italic;
+  font-family: Georgia, serif;
+}
+
+.richToolbarButton[data-action="code"],
+.richToolbarButton[data-action="code-block"] {
+  font-family: var(--wts-font-mono);
+  font-size: 12px;
+}
+
+.richToolbarButton:hover {
+  color: var(--wts-ink);
+  background: var(--wts-surface-muted);
+}
+
+.richToolbarButton[aria-pressed="true"] {
+  color: var(--wts-ink);
+  background: color-mix(in srgb, var(--wts-blue) 18%, transparent);
+}
+
+.richToolbarButton:focus-visible {
+  outline: none;
+  box-shadow: var(--wts-focus-ring);
+}
+
+.richNotice {
+  margin: 0;
+  padding: 8px 14px;
+  color: var(--wts-muted);
+  background: var(--wts-surface-subtle);
+  border-bottom: 1px solid var(--wts-line);
+  font-size: 12px;
+}
+
+.richScroll {
+  min-height: 0;
+  flex: 1 1 auto;
+}
+
+.richLoading {
+  padding: 32px;
+  color: var(--wts-faint);
+  font-size: 13px;
+}
+
+.previewView.richDocument {
+  min-height: 360px;
+  max-width: none;
+  margin: 0;
+  overflow: visible;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  outline: none;
+  caret-color: var(--wts-blue);
+  cursor: text;
+}
+
+.richDocument:focus-visible {
+  box-shadow: none;
+}
+
+.richDocument ul[data-type="taskList"] {
+  padding-left: 4px;
+  list-style: none;
+}
+
+.richDocument ul[data-type="taskList"] li {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.richDocument ul[data-type="taskList"] li > label {
+  flex: 0 0 auto;
+  padding-top: 2px;
+}
+
+.richDocument ul[data-type="taskList"] li > label input {
+  margin: 0;
+}
+
+.richDocument ul[data-type="taskList"] li > div {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.richDocument .tableWrapper {
+  overflow-x: auto;
+  margin: 0 0 16px;
+}
+
+.richDocument .tableWrapper table {
+  margin: 0;
+}
+
+.richDocument td p,
+.richDocument th p {
+  margin: 0;
+}
+
+.richDocument .selectedCell {
+  background: color-mix(in srgb, var(--wts-blue) 14%, transparent);
+}
+
+.richDocument .column-resize-handle {
+  display: none;
+}
+
+.editorShell[data-edit-mode="markdown"] footer {
+  position: sticky;
+  bottom: 0;
 }

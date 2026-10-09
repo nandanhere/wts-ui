@@ -27,6 +27,7 @@ import {
   type WorkspaceView,
 } from "../../lib/wtsClient";
 import { useVisiblePolling } from "../../lib/useVisiblePolling";
+import { baseBranchValue, orderBaseBranches } from "../../lib/branchOrder";
 import { SelectMenu } from "../../components/SelectMenu";
 import { useDialogFocusReturn } from "../../components/useDialogFocusReturn";
 import { Glyph } from "./Glyph";
@@ -994,7 +995,8 @@ export function NewWorkspaceDialog({
         changed = true;
         const selectedBaseAvailable =
           catalogRepository.availableBranches?.some(
-            (branch) => branch.name === repository.base,
+            (branch, _index, branches) =>
+              baseBranchValue(branch, branches) === repository.base,
           ) ?? false;
         return {
           ...repository,
@@ -4425,10 +4427,13 @@ export function NewWorkspaceDialog({
                       : repo.repositoryId
                         ? "No supported GitHub or GitLab origin is available."
                         : "This repository has no trusted catalog identity.";
-                    const knownBranches =
-                      catalogRepository?.availableBranches ?? [];
+                    const knownBranches = orderBaseBranches(
+                      catalogRepository?.availableBranches ?? [],
+                      catalogRepository?.defaultBranch?.name,
+                    );
                     const selectedBaseAvailable = knownBranches.some(
-                      (branch) => branch.name === repo.base,
+                      (branch) =>
+                        baseBranchValue(branch, knownBranches) === repo.base,
                     );
                     const baseOptions = selectedBaseAvailable
                       ? knownBranches
@@ -4528,7 +4533,7 @@ export function NewWorkspaceDialog({
                                 {baseOptions.map((branch) => (
                                   <option
                                     key={`${branch.fullRef}:${branch.name}`}
-                                    value={branch.name}
+                                    value={baseBranchValue(branch, knownBranches)}
                                   >
                                     {branch.name}
                                     {!selectedBaseAvailable &&
@@ -5149,43 +5154,15 @@ export function NewWorkspaceDialog({
                     </RadioGroup>
                     {planningEnabled && (
                       <div className={styles.planningSettings}>
-                        <label>
-                          <span>Folder</span>
-                          <SelectMenu
-                            aria-label="Planning folder"
-                            value={planningFolder}
-                            onChange={(value) =>
-                              setPlanningFolder(
-                                value as WorkspacePlanningSelection["folder"],
-                              )
-                            }
-                          >
-                            <option value="plansAndKanban">
-                              plans-and-kanban
-                            </option>
-                            <option value="plans">plans</option>
-                          </SelectMenu>
-                        </label>
-                        <label>
-                          <span>Starter</span>
-                          <SelectMenu
-                            aria-label="Planning starter"
-                            value={planningFormat}
-                            onChange={(value) =>
-                              setPlanningFormat(
-                                value as WorkspacePlanningSelection["format"],
-                              )
-                            }
-                          >
-                            <option value="kanban">
-                              Plan, findings &amp; Kanban
-                            </option>
-                            <option value="notes">Plan &amp; findings</option>
-                          </SelectMenu>
-                        </label>
                         <p>
-                          These files are created one time. They remain editable
-                          user content and are never silently removed.
+                          The workspace gets{" "}
+                          {planningFormat === "notes"
+                            ? "a plan and findings"
+                            : "a plan, findings, and a Kanban board"}{" "}
+                          in the{" "}
+                          <code>{planningFolder === "plans" ? "plans" : "plans-and-kanban"}</code>{" "}
+                          folder. These files are created one time. You can edit
+                          them. They are not removed later.
                         </p>
                       </div>
                     )}

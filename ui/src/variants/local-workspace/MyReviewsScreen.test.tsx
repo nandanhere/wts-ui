@@ -233,6 +233,42 @@ describe("My reviews", () => {
     expect(fake.openGitlabMergeRequest).toHaveBeenCalledWith("repo_apex_api", 9);
   });
 
+  it("moves merged and closed merge requests to the Archive tab", async () => {
+    const user = userEvent.setup();
+    const base = {
+      repositoryId: "repo_beacon", repository: "devtools/beacon", authorLogin: "dave",
+      sourceBranch: "feature", targetBranch: "develop", draft: false,
+    };
+    const fake = fakeWorkspaceClient({
+      gitlabReviewInbox: {
+        schemaVersion: 1,
+        state: "fresh",
+        reviews: [
+          { ...base, id: "1", number: 13, title: "Open review", updatedAt: "2026-10-07T09:00:00Z", reviewState: "requested", status: "open" },
+          { ...base, id: "2", number: 35, title: "Merged change", updatedAt: "2026-09-22T05:17:00Z", reviewState: "approved", status: "merged" },
+          { ...base, id: "3", number: 36, title: "Closed change", updatedAt: "2026-09-21T05:17:00Z", reviewState: "requested", status: "closed" },
+        ],
+        fetchedAtUnixMs: 1_787_029_200_000,
+        detail: "GitLab returned current review requests and approved merge requests.",
+      },
+    });
+
+    render(<App initialPath="/reviews" workspaceClient={fake.client} />);
+
+    expect(await screen.findByRole("heading", { name: "Open review" }, { timeout: 5_000 })).toBeVisible();
+    expect(screen.queryByRole("heading", { name: "Merged change" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Closed change" })).not.toBeInTheDocument();
+    expect(screen.getByText("1 pending · 0 approved")).toBeVisible();
+    expect(screen.getByLabelText("1 assigned reviews")).toBeVisible();
+    expect(screen.getByRole("tab", { name: "Open 1" })).toHaveAttribute("aria-selected", "true");
+
+    await user.click(screen.getByRole("tab", { name: "Archive 2" }));
+    expect(screen.getByRole("heading", { name: "Merged change" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Closed change" })).toBeVisible();
+    expect(screen.queryByRole("heading", { name: "Open review" })).not.toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: "Open MR" })).toHaveLength(2);
+  });
+
   it("shows the empty and authentication-required states", async () => {
     const empty = fakeWorkspaceClient();
     const emptyRender = render(<App initialPath="/reviews" workspaceClient={empty.client} />);
@@ -307,5 +343,39 @@ describe("My reviews", () => {
     await user.click(screen.getByRole("button", { name: "Try again" }));
     expect(await screen.findByRole("heading", { name: "Keep retry keys stable" })).toBeVisible();
     expect(fake.getGithubReviewInbox).toHaveBeenCalledTimes(2);
+  });
+
+  it("links a merge request to the workspace the user opened for it", async () => {
+    const user = userEvent.setup();
+    const fake = fakeWorkspaceClient();
+    const gitlab = (number: number, title: string) => ({
+      id: "gl-" + number, repositoryId: "repo_apex", repository: "devtools/apex-go-sdk", number, title,
+      authorLogin: "dave.11", sourceBranch: "feature", targetBranch: "develop", updatedAt: "2026-10-07T09:00:00Z",
+      draft: false, reviewState: "requested" as const, status: "open" as const,
+    });
+    fake.getGitlabReviewInbox.mockResolvedValue({
+      schemaVersion: 1, state: "fresh", fetchedAtUnixMs: 1, detail: "Ready",
+      reviews: [gitlab(13, "Client context"), gitlab(14, "No workspace yet")],
+    });
+    const onOpenWorkspace = vi.fn();
+    function Harness() {
+      const { refresh, ...inbox } = useGithubReviewInbox(fake.client);
+      return (
+        <MyReviewsScreen
+          client={fake.client}
+          {...inbox}
+          onOpenIntegrations={() => {}}
+          onOpenWorkspace={onOpenWorkspace}
+          onRefresh={refresh}
+          workspaceForReview={(review) =>
+            review.number === 13 ? { id: "ws_13", title: "Review devtools/apex-go-sdk !13" } : undefined}
+        />
+      );
+    }
+    render(<Harness />);
+    await screen.findByRole("heading", { name: "Client context" });
+    await user.click(screen.getByRole("button", { name: "Open workspace Review devtools/apex-go-sdk !13" }));
+    expect(onOpenWorkspace).toHaveBeenCalledWith("ws_13");
+    expect(screen.getAllByRole("button", { name: /^Open workspace/ })).toHaveLength(1);
   });
 });

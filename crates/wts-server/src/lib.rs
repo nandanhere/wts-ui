@@ -742,6 +742,7 @@ pub trait MvpBackend: RegistryBackend {
         expected_effect_digest: &str,
         idempotency_key: &str,
         delete_protected_paths: bool,
+        backup_folder: Option<&Path>,
     ) -> Result<Self::Removal, MvpFailure>;
     fn run_agent(
         &self,
@@ -1656,12 +1657,14 @@ impl MvpBackend for LocalWtsService {
         expected_effect_digest: &str,
         idempotency_key: &str,
         delete_protected_paths: bool,
+        backup_folder: Option<&Path>,
     ) -> Result<Self::Removal, MvpFailure> {
-        self.remove_workspace(
+        self.remove_workspace_with_backup(
             workspace_id,
             expected_effect_digest,
             idempotency_key,
             delete_protected_paths,
+            backup_folder,
         )
         .map_err(map_local_mvp_error)
     }
@@ -4232,6 +4235,8 @@ struct RemoveWorkspaceRequest {
     effect_digest: String,
     #[serde(default)]
     delete_protected_paths: bool,
+    #[serde(default)]
+    backup_folder: Option<String>,
 }
 
 async fn remove_workspace<R: MvpBackend>(
@@ -4247,12 +4252,19 @@ async fn remove_workspace<R: MvpBackend>(
 
     let idempotency_key = idempotency_key.to_owned();
     let backend = Arc::clone(&state.registry);
+    let backup_path = request
+        .backup_folder
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(PathBuf::from);
     run_mvp_operation(&state.admission, OperationClass::Heavy, move || {
         backend.remove(
             workspace_id,
             &request.effect_digest,
             &idempotency_key,
             request.delete_protected_paths,
+            backup_path.as_deref(),
         )
     })
     .await
@@ -8199,6 +8211,7 @@ mod tests {
             expected_effect_digest: &str,
             idempotency_key: &str,
             _delete_protected_paths: bool,
+            _backup_folder: Option<&Path>,
         ) -> Result<Self::Removal, MvpFailure> {
             if self
                 .removal_preflight

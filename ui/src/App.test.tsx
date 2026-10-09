@@ -280,7 +280,7 @@ describe("unified WTS routes", () => {
     expect(
       screen.getByText("Orders retries create duplicate captures"),
     ).toBeVisible();
-    expect(screen.getByRole("navigation", { name: "WTS sections" })).toBeVisible();
+    expect(screen.getByRole("navigation", { name: "App sections" })).toBeVisible();
     expect(screen.getByRole("button", { name: "Open Spaces" })).toBeVisible();
     const topBar = screen.getByRole("button", { name: "Open Spaces" }).parentElement;
     expect(topBar?.querySelector('[data-ui="wts.home"]')).toBeInTheDocument();

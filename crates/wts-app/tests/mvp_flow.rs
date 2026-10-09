@@ -2140,6 +2140,8 @@ fn prepares_and_opens_a_verified_gitlab_merge_request_draft() {
     let guide = fs::read_to_string(Path::new(&materialized.workspace_display_path).join("WTS.md"))
         .expect("read agent guide");
     assert!(guide.contains("WTS_CHANGE_REQUEST_PROPOSAL:"));
+    assert!(guide.contains("<!-- WTS_CHANGE_REQUEST_PROPOSAL: <JSON> -->"));
+    assert!(guide.contains("Do not show the JSON in a code block."));
     assert!(guide.contains("Use this schema: `{\"schemaVersion\":1"));
     assert!(!guide.contains("Use this schema: `{{"));
     assert!(guide.contains("Do not add every linked issue."));

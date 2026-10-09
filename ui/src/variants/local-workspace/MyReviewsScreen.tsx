@@ -79,6 +79,13 @@ function reviewDate(value: string) {
   }).format(new Date(value));
 }
 
+export type MyReviewsTab = "open" | "archive";
+
+/** Merged and closed merge requests need no more action, so they go to the archive. */
+export function isArchivedReview(review: GithubReview | GitlabReview) {
+  return "status" in review && (review.status === "merged" || review.status === "closed");
+}
+
 export function MyReviewsScreen({
   client,
   error,
@@ -87,6 +94,8 @@ export function MyReviewsScreen({
   onOpenIntegrations,
   onRefresh,
   state,
+  workspaceForReview,
+  onOpenWorkspace,
 }: {
   client: WorkspaceClient;
   error: string;
@@ -95,9 +104,13 @@ export function MyReviewsScreen({
   onOpenIntegrations: () => void;
   onRefresh: () => void;
   state: MyReviewsLoadState;
+  /** Returns the saved workspace for a GitLab MR, when one exists. */
+  workspaceForReview?: (review: { repository: string; number: number }) => { id: string; title: string } | undefined;
+  onOpenWorkspace?: (workspaceId: string) => void;
 }) {
   const [opening, setOpening] = useState<string | null>(null);
   const [openError, setOpenError] = useState("");
+  const [tab, setTab] = useState<MyReviewsTab>("open");
 
   type AssignedReview =
     | { provider: "github"; review: GithubReview }
@@ -115,12 +128,15 @@ export function MyReviewsScreen({
   ].sort((left, right) =>
     right.review.updatedAt.localeCompare(left.review.updatedAt),
   );
-  const pendingCount = assignedReviews.filter(
+  const openReviews = assignedReviews.filter((item) => !isArchivedReview(item.review));
+  const archivedReviews = assignedReviews.filter((item) => isArchivedReview(item.review));
+  const visibleReviews = tab === "archive" ? archivedReviews : openReviews;
+  const pendingCount = openReviews.filter(
     (item) =>
       item.provider === "github" ||
       (item.review.reviewState !== "approved" && item.review.status === "open"),
   ).length;
-  const approvedCount = assignedReviews.filter(
+  const approvedCount = openReviews.filter(
     (item) => item.provider === "gitlab" && item.review.reviewState === "approved",
   ).length;
 
@@ -273,15 +289,39 @@ export function MyReviewsScreen({
               data-ui-label="Assigned review list"
             >
               <div className={styles.listHeader}>
-                <span>{pendingCount} pending · {approvedCount} approved</span>
-                <span>Current provider data</span>
+                <div className={styles.tabs} role="tablist" aria-label="Review lists"
+                  data-ui="reviews.tabs" data-ui-label="Review tabs">
+                  {([
+                    ["open", "Open", openReviews.length],
+                    ["archive", "Archive", archivedReviews.length],
+                  ] as const).map(([id, label, count]) => (
+                    <button key={id} type="button" role="tab" className={styles.tab}
+                      aria-label={`${label} ${count}`}
+                      aria-selected={tab === id} onClick={() => setTab(id)}>
+                      {label}<span className={styles.tabCount}>{count}</span>
+                    </button>
+                  ))}
+                </div>
+                <span>
+                  {tab === "open"
+                    ? `${pendingCount} pending · ${approvedCount} approved`
+                    : "Merged and closed merge requests"}
+                </span>
               </div>
-              {assignedReviews.map((item) => {
+              {!visibleReviews.length && (
+                <p className={styles.tabEmpty}>
+                  {tab === "archive"
+                    ? "No merged or closed merge requests."
+                    : "No open reviews. Merged and closed merge requests are in Archive."}
+                </p>
+              )}
+              {visibleReviews.map((item) => {
                 const { provider, review } = item;
                 const stale =
                   provider === "github"
                     ? inbox?.state === "stale"
                     : gitlabInbox?.state === "stale";
+                const workspace = provider === "gitlab" ? workspaceForReview?.(review) : undefined;
                 return (
                 <article
                   className={styles.review}
@@ -320,19 +360,36 @@ export function MyReviewsScreen({
                       <span>Updated {reviewDate(review.updatedAt)}</span>
                     </div>
                   </div>
-                  <button
-                    className={styles.reviewAction}
-                    disabled={opening !== null}
-                    onClick={() => void openReview(item)}
-                    type="button"
-                  >
-                    {opening === review.id
-                      ? "Opening…"
-                      : provider === "gitlab" && review.reviewState === "approved"
-                        ? "Open MR"
-                        : "Review"}
-                    <Glyph name="external" size={13} />
-                  </button>
+                  <div className={styles.reviewActions}>
+                    {workspace && onOpenWorkspace && (
+                      <button
+                        aria-label={`Open workspace ${workspace.title}`}
+                        className={styles.reviewAction}
+                        data-ui="reviews.open-workspace"
+                        data-ui-label="Open review workspace"
+                        onClick={() => onOpenWorkspace(workspace.id)}
+                        title={workspace.title}
+                        type="button"
+                      >
+                        <Glyph name="folder" size={13} />
+                        Workspace
+                      </button>
+                    )}
+                    <button
+                      className={styles.reviewAction}
+                      disabled={opening !== null}
+                      onClick={() => void openReview(item)}
+                      type="button"
+                    >
+                      {opening === review.id
+                        ? "Opening…"
+                        : provider === "gitlab" &&
+                            (review.reviewState === "approved" || isArchivedReview(review))
+                          ? "Open MR"
+                          : "Review"}
+                      <Glyph name="external" size={13} />
+                    </button>
+                  </div>
                 </article>
                 );
               })}

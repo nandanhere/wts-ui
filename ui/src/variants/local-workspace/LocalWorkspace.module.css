@@ -91,6 +91,7 @@
 
 .chromeStart {
   display: flex;
+  align-self: stretch;
   align-items: center;
   gap: 14px;
   min-width: 0;
@@ -179,62 +180,79 @@
 
 .appNavigation {
   display: flex;
-  align-items: center;
-  gap: 2px;
-  padding: 3px;
-  background: var(--wts-surface-muted);
-  border: 1px solid var(--wts-line);
-  border-radius: 9px;
+  align-self: stretch;
+  align-items: stretch;
+  gap: 4px;
+  padding-left: 14px;
+  border-left: 1px solid var(--wts-line);
 }
 
 .chromeNavButton {
+  position: relative;
   display: inline-flex;
-  min-height: 30px;
   align-items: center;
-  gap: 7px;
-  padding: 0 11px;
+  gap: 6px;
+  padding: 0 10px;
   color: var(--wts-muted);
   background: transparent;
-  border-radius: 6px;
-  font-size: 12.5px;
+  border-radius: 0;
+  font-size: 13px;
   font-weight: 600;
   white-space: nowrap;
   cursor: pointer;
   transition: color 120ms ease, background-color 120ms ease;
 }
 
+.chromeNavButton::after {
+  position: absolute;
+  right: 8px;
+  bottom: -1px;
+  left: 8px;
+  height: 2px;
+  background: transparent;
+  border-radius: 2px 2px 0 0;
+  content: "";
+  transition: background-color 120ms ease;
+}
+
 .reviewBadge,
 .navCount {
-  min-width: 18px;
-  padding: 1px 5px;
-  color: var(--wts-on-accent);
-  background: var(--wts-accent, var(--wts-blue));
+  min-width: 17px;
+  padding: 0 5px;
+  color: var(--wts-ink);
+  background: var(--wts-surface-hover);
   border-radius: 99px;
-  font-size: 11px;
+  font-size: 12px;
   font-variant-numeric: tabular-nums;
   line-height: 16px;
   text-align: center;
 }
 
+.reviewBadge {
+  color: var(--wts-blue);
+  background: color-mix(in srgb, var(--wts-blue) 18%, transparent);
+}
+
 .navCount[data-tone="working"] {
-  color: #052e16;
-  background: var(--wts-green);
+  color: var(--wts-green);
+  background: color-mix(in srgb, var(--wts-green) 16%, transparent);
 }
 
 .navCount[data-tone="attention"] {
-  color: #2d1b00;
-  background: var(--wts-amber);
+  color: var(--wts-amber);
+  background: color-mix(in srgb, var(--wts-amber) 18%, transparent);
 }
 
 .chromeNavButton:hover {
   color: var(--wts-ink);
-  background: var(--wts-surface-hover);
 }
 
 .chromeNavButton[aria-current="page"] {
   color: var(--wts-ink);
-  background: var(--wts-surface);
-  box-shadow: 0 0 0 1px var(--wts-line-strong), var(--wts-shadow-sm);
+}
+
+.chromeNavButton[aria-current="page"]::after {
+  background: var(--wts-blue);
 }
 
 .chromeNavButton[aria-current="page"] svg {
@@ -243,7 +261,7 @@
 
 .chromeNavButton:focus-visible {
   outline: none;
-  box-shadow: var(--wts-focus-ring);
+  box-shadow: inset var(--wts-focus-ring);
 }
 
 .statusBadge {
@@ -1748,6 +1766,63 @@
   box-shadow: var(--wts-focus-ring);
 }
 
+.cardPrimaryAction,
+.cardMenuButton {
+  display: inline-flex;
+  min-height: 28px;
+  align-items: center;
+  justify-content: center;
+  color: var(--wts-muted);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 650;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.cardPrimaryAction {
+  gap: 6px;
+  padding: 0 10px;
+}
+
+.cardPrimaryAction[data-tone="action"] {
+  margin-left: -6px;
+  padding: 0 6px;
+  color: var(--blue);
+  background: transparent;
+  border-color: transparent;
+}
+
+.cardPrimaryAction[data-tone="action"][data-hovered] {
+  background: var(--blue-soft);
+}
+
+.cardPrimaryAction[data-tone="quiet"] {
+  color: var(--wts-ink);
+  border-color: var(--line-strong);
+}
+
+.cardMenuButton {
+  width: 28px;
+  margin-left: auto;
+  padding: 0;
+}
+
+.cardPrimaryAction[data-tone="quiet"][data-hovered],
+.cardMenuButton[data-hovered] {
+  color: var(--wts-ink);
+  background: var(--wts-surface-muted);
+}
+
+.cardPrimaryAction[data-focus-visible],
+.cardMenuButton[data-focus-visible] {
+  outline: none;
+  box-shadow: var(--wts-focus-ring);
+}
+
 .cardMoveButton {
   color: var(--wts-muted);
 }
@@ -1985,6 +2060,52 @@
   margin-right: 6px;
   color: var(--wts-faint);
   content: "·";
+}
+
+.cardReview {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+  margin: 6px 0 2px;
+}
+
+.cardReview .cardDelivery {
+  margin: 0;
+}
+
+.cardReviewTitle {
+  display: -webkit-box;
+  overflow: hidden;
+  margin: 0;
+  color: var(--wts-text);
+  font-size: 12px;
+  line-height: 1.4;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.cardReviewBranches {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 5px;
+  color: var(--wts-muted);
+}
+
+.cardReviewBranches code {
+  overflow: hidden;
+  min-width: 0;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cardReviewBranches code:first-child {
+  flex: 0 1 auto;
+}
+
+.cardReviewBranches code:last-child {
+  flex: 0 0 auto;
 }
 
 .cardDelivery span {
@@ -2891,8 +3012,12 @@
   flex-direction: column;
 }
 
+.field + .field {
+  margin-top: 20px;
+}
+
 .field label {
-  margin-bottom: 5px;
+  margin-bottom: 8px;
   color: var(--wts-text);
   font-size: 12px;
   font-weight: 600;
@@ -2939,6 +3064,38 @@
 
 .inputWithIcon [data-select-trigger][data-disabled] {
   color: var(--wts-faint);
+  cursor: not-allowed;
+}
+
+/* A small action that sits inside a field, such as Clone in the URL field. */
+.inlineFieldButton {
+  flex: 0 0 auto;
+  height: 28px;
+  margin-right: -5px;
+  padding: 0 12px;
+  color: var(--wts-ink);
+  background: var(--wts-surface-muted);
+  border: 1px solid var(--wts-line);
+  border-radius: 4px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.inlineFieldButton[data-hovered] {
+  color: var(--wts-blue);
+  border-color: var(--wts-line-strong);
+}
+
+.inlineFieldButton[data-focus-visible] {
+  outline: none;
+  box-shadow: var(--wts-focus-ring);
+}
+
+.inlineFieldButton[data-disabled] {
+  color: var(--wts-faint);
+  background: transparent;
   cursor: not-allowed;
 }
 
@@ -5018,6 +5175,9 @@
 
 .compactSelect {
   display: grid;
+  min-width: 0;
+  /* A long branch name truncates in the select box. Without a zero minimum, the column grows to the full name. */
+  grid-template-columns: minmax(0, 1fr);
   gap: 4px;
   color: var(--wts-faint);
   font-size: 12px;
@@ -6051,34 +6211,11 @@
 .planningSettings {
   display: grid;
   grid-column: 2;
-  grid-template-columns: minmax(150px, 0.85fr) minmax(180px, 1.15fr);
-  gap: 8px;
   padding-top: 2px;
 }
 
-.planningSettings label {
-  display: grid;
-  gap: 4px;
-  color: var(--wts-muted);
-  font-size: 12px;
-  font-weight: 600;
-}
-
-.planningSettings [data-select-trigger] {
-  width: 100%;
-  min-width: 0;
-  height: 34px;
-  padding: 0 28px 0 9px;
+.planningSettings code {
   color: var(--wts-ink);
-  background: var(--wts-surface);
-  border: 1px solid var(--wts-line);
-  border-radius: 5px;
-  font: inherit;
-  font-size: 12px;
-}
-
-.planningSettings p {
-  grid-column: 1 / -1;
 }
 
 .manifestGrid h3 {
@@ -7204,6 +7341,7 @@
 .removalBlocker p { margin: 0 0 8px; line-height: 1.5; }
 .removalRecoveryActions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 12px 0; }
 .removalRecoveryActions code { min-width: 0; flex: 1 1 100%; color: var(--wts-muted); font-size: 12px; overflow-wrap: anywhere; user-select: all; }
+.removalRecoveryActions .secondaryButton { height: 32px; min-height: 0; padding: 0 12px; box-shadow: none; }
 .removalFacts { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 4px 12px; margin: 8px 0; font-size: 12px; }
 .removalFacts dt { color: var(--wts-faint); }
 .removalFacts dd { margin: 0; overflow-wrap: anywhere; }
@@ -7649,13 +7787,25 @@
 }
 
 .removalFooter > span {
+  flex: 1 1 auto;
+  min-width: 0;
+  max-width: 320px;
   color: var(--wts-faint);
   font-size: 12px;
+  line-height: 1.45;
 }
 
 .removalFooter > div {
   display: flex;
+  flex: 0 0 auto;
+  align-items: center;
   gap: 8px;
+}
+
+.removalFooter :is(.secondaryButton, .dangerButton, .primaryButton) {
+  height: var(--wts-control-height);
+  min-height: 0;
+  white-space: nowrap;
 }
 
 .dangerButton {
@@ -7672,6 +7822,7 @@
   box-shadow: 0 1px 1px rgba(9, 30, 66, 0.12);
   font-size: 12px;
   font-weight: 700;
+  white-space: nowrap;
   cursor: pointer;
 }
 
@@ -8025,7 +8176,8 @@
   padding-bottom: 210px;
 }
 
-.tabViewport [role="tabpanel"] {
+/* Only the workspace tab panels fill the viewport. Nested tab panels keep their own flex size. */
+.tabViewport > [role="tabpanel"] {
   min-height: 100%;
   outline: none;
 }
@@ -8033,11 +8185,11 @@
 .overviewGrid {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  gap: 10px;
+  gap: 16px;
   max-width: 1080px;
   min-height: 100%;
   margin: 0 auto;
-  padding: 14px 16px 24px;
+  padding: 20px 24px 32px;
 }
 
 .reviewWorkspaceCallout {
@@ -8310,16 +8462,16 @@
 .mainColumn {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 16px;
 }
 
 .workspaceReadyBar {
   display: grid;
   grid-template-columns: 30px minmax(0, 1fr);
   align-items: center;
-  gap: 10px;
-  min-height: 52px;
-  padding: 8px 10px;
+  gap: 14px;
+  min-height: 60px;
+  padding: 12px 16px;
   background: var(--wts-surface);
   border: 1px solid var(--wts-line-strong);
   border-radius: var(--wts-radius-md);
@@ -8347,13 +8499,13 @@
 .workspaceReadyFacts > div {
   display: grid;
   min-width: 0;
-  gap: 1px;
-  padding: 1px 12px;
+  gap: 4px;
+  padding: 2px 16px;
   border-left: 1px solid var(--wts-line);
 }
 
 .workspaceReadyFacts > div:first-child {
-  padding-left: 2px;
+  padding-left: 0;
   border-left: 0;
 }
 
@@ -8378,7 +8530,7 @@
 .workspaceReadyFacts code {
   color: var(--wts-text);
   font:
-    10px/1.4 "SFMono-Regular",
+    12px/1.4 "SFMono-Regular",
     Consolas,
     monospace;
 }
@@ -9007,8 +9159,8 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  min-height: 44px;
-  padding: 7px 11px;
+  min-height: 52px;
+  padding: 12px 16px;
   border-bottom: 1px solid var(--wts-line);
 }
 
@@ -9026,9 +9178,9 @@
 }
 
 .panelHeading h2 {
-  margin: 1px 0 0;
+  margin: 2px 0 0;
   color: var(--wts-ink);
-  font-size: 12px;
+  font-size: 14px;
   font-weight: 600;
 }
 
@@ -10551,8 +10703,8 @@
 }
 
 .repoTableHeader {
-  min-height: 27px;
-  padding: 0 11px;
+  min-height: 32px;
+  padding: 0 16px;
   color: var(--wts-faint);
   background: var(--wts-surface-subtle);
   border-bottom: 1px solid var(--wts-line);
@@ -10562,8 +10714,8 @@
 }
 
 .repoTableRow {
-  min-height: 38px;
-  padding: 8px 11px;
+  min-height: 44px;
+  padding: 12px 16px;
   align-items: start;
   color: var(--wts-muted);
   border-bottom: 1px solid var(--wts-line);
@@ -13236,7 +13388,7 @@
   .brandHome { grid-column: 1; grid-row: 1; justify-self: start; }
   .brandHome b { display: inline; }
   .chromeTools { grid-column: 2; grid-row: 1; gap: 2px; }
-  .appNavigation { grid-column: 1 / -1; grid-row: 2; width: 100%; min-width: 0; justify-self: stretch; }
+  .appNavigation { grid-column: 1 / -1; grid-row: 2; width: 100%; min-width: 0; justify-self: stretch; padding-left: 0; border-left: 0; }
   .chromeNavButton { flex: 1; justify-content: center; padding-inline: 6px; }
   .quickHint { display: inline-flex; width: 30px; min-width: 30px; height: 30px; padding: 0; justify-content: center; }
   .quickHint kbd { display: none; }

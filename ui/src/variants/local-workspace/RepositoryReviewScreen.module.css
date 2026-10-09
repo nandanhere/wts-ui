@@ -505,12 +505,28 @@
   border-bottom: 1px solid var(--wts-line);
 }
 
-/* Keep the diff in view: the MR review card scrolls inside itself. */
+/*
+ * With the AI review open, the code view scrolls as one page. The review shows at its full
+ * height. The diff below it keeps the full height of the view, so its own panes still scroll.
+ */
+.codeContent[data-ai-review-open] {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+.codeContent[data-ai-review-open] > * {
+  flex-shrink: 0;
+}
+
 .codeContent > .aiReviewSlot {
   flex: 0 0 auto;
-  max-height: min(42vh, 380px);
-  overflow-y: auto;
   padding: 8px 16px;
+}
+
+.codeContent[data-ai-review-open] > .aiReviewSlot ~ :not(.reviewPrompt, .reviewUpdate, .warning) {
+  flex: 0 0 100%;
+  min-height: 0;
 }
 
 .aiReviewCount {
@@ -545,6 +561,61 @@
   line-height: 1.3;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.mrTitleLink {
+  display: inline-flex;
+  max-width: 100%;
+  align-items: center;
+  gap: 6px;
+  padding: 0;
+  color: inherit;
+  background: transparent;
+  border: 0;
+  border-radius: 4px;
+  font: inherit;
+  letter-spacing: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.mrTitleLink span {
+  overflow: hidden;
+  min-width: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mrTitleLink svg {
+  flex: 0 0 auto;
+  color: var(--wts-faint);
+  opacity: 0;
+  transition: opacity var(--wts-motion-fast, 120ms);
+}
+
+.mrTitleLink:hover,
+.mrTitleLink:focus-visible {
+  color: var(--wts-blue);
+}
+
+.mrTitleLink:hover span {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.mrTitleLink:hover svg,
+.mrTitleLink:focus-visible svg {
+  color: var(--wts-blue);
+  opacity: 1;
+}
+
+.mrTitleLink:focus-visible {
+  outline: none;
+  box-shadow: var(--wts-focus-ring);
+}
+
+.mrTitleLink:disabled {
+  cursor: wait;
 }
 
 .mrLabel {

@@ -59,6 +59,66 @@ describe("AgentSessionsPanel", () => {
     localStorage.clear();
   });
 
+  it("shows your time before slow Jira tickets load", async () => {
+    const start = new Date().setHours(0, 0, 0, 0);
+    const fresh = savedInterval(start, Date.now(), "Fresh work").review;
+    fresh.totalActiveSeconds = 2 * 60 * 60;
+    fresh.sessions[0]!.durationSeconds = 2 * 60 * 60;
+    const fake = fakeWorkspaceClient({ activityWatchDailyReview: fresh, activityWatchStatus: { state: "running", installation: "detected", endpoint: "http://127.0.0.1:5600", capabilities: ["dailyReview"], detail: "Ready" } });
+    fake.listActiveJiraIssues.mockImplementation(() => new Promise(() => {}));
+    render(<AgentSessionsPanel client={fake.client} workspaceLabels={{}} />);
+    const kpis = await screen.findByRole("region", { name: /summary$/ }).catch(() => document.body);
+    await waitFor(() => expect(within(kpis as HTMLElement).getByText("2h")).toBeVisible());
+    expect(screen.queryByText("Reading ActivityWatch…")).not.toBeInTheDocument();
+  });
+
+  it("keeps the last numbers on screen while a refresh reads ActivityWatch", async () => {
+    const user = userEvent.setup();
+    const start = new Date().setHours(0, 0, 0, 0);
+    const cached = savedInterval(start, Date.now(), "Cached work");
+    cached.review.totalActiveSeconds = 3 * 60 * 60;
+    cached.review.sessions[0]!.durationSeconds = 3 * 60 * 60;
+    saveActivityWatchReviewSnapshot({ schemaVersion: 1, dateKey: new Date().toLocaleDateString("en-CA"), builtAtUnixMs: Date.now(), review: cached.review, jiraIssues: cached.jiraIssues, assignments: {} });
+    const fake = fakeWorkspaceClient({ activityWatchStatus: { state: "running", installation: "detected", endpoint: "http://127.0.0.1:5600", capabilities: ["dailyReview"], detail: "Ready" } });
+    fake.getActivityWatchDailyReview.mockImplementation(() => new Promise(() => {}));
+    render(<AgentSessionsPanel client={fake.client} workspaceLabels={{}} />);
+    await screen.findByText("ActivityWatch · Connected");
+    await user.click(screen.getByRole("button", { name: "Refresh" }));
+    expect(await screen.findByRole("button", { name: "Reading ActivityWatch…" })).toBeDisabled();
+    expect(screen.getByText("3h")).toBeVisible();
+    expect(screen.getByText(/from ActivityWatch · updating…/)).toBeVisible();
+    expect(screen.queryByText("Calculating the total…")).not.toBeInTheDocument();
+  });
+
+  it("rebuilds a stale Today review from ActivityWatch on open", async () => {
+    const start = new Date().setHours(0, 0, 0, 0);
+    const builtAt = Date.now() - 4 * 60 * 60 * 1_000;
+    const cached = savedInterval(start, builtAt, "Morning work only");
+    saveActivityWatchReviewSnapshot({ schemaVersion: 1, dateKey: new Date().toLocaleDateString("en-CA"), builtAtUnixMs: builtAt, review: cached.review, jiraIssues: cached.jiraIssues, assignments: {} });
+    const fresh = savedInterval(start, Date.now(), "Afternoon work").review;
+    const fake = fakeWorkspaceClient({ activityWatchDailyReview: fresh, activityWatchStatus: { state: "running", installation: "detected", endpoint: "http://127.0.0.1:5600", capabilities: ["dailyReview"], detail: "Ready" } });
+    render(<AgentSessionsPanel client={fake.client} workspaceLabels={{}} />);
+    await waitFor(() => expect(fake.getActivityWatchDailyReview).toHaveBeenCalledOnce());
+    expect(await screen.findByText("Afternoon work")).toBeVisible();
+  });
+
+  it("rebuilds Today every few minutes while it stays open", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const start = new Date().setHours(0, 0, 0, 0);
+      const cached = savedInterval(start, Date.now(), "Fresh work");
+      saveActivityWatchReviewSnapshot({ schemaVersion: 1, dateKey: new Date().toLocaleDateString("en-CA"), builtAtUnixMs: Date.now(), review: cached.review, jiraIssues: cached.jiraIssues, assignments: {} });
+      const fake = fakeWorkspaceClient({ activityWatchDailyReview: cached.review, activityWatchStatus: { state: "running", installation: "detected", endpoint: "http://127.0.0.1:5600", capabilities: ["dailyReview"], detail: "Ready" } });
+      render(<AgentSessionsPanel client={fake.client} workspaceLabels={{}} />);
+      await screen.findByText("ActivityWatch · Connected");
+      expect(fake.getActivityWatchDailyReview).not.toHaveBeenCalled();
+      await act(async () => { vi.advanceTimersByTime(5 * 60_000 + 1); });
+      await waitFor(() => expect(fake.getActivityWatchDailyReview).toHaveBeenCalledOnce());
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("reuses the board session read across ten immediate returns to My time", async () => {
     const fake = fakeWorkspaceClient();
     await loadAgentSessions(fake.client);
@@ -112,12 +172,14 @@ describe("AgentSessionsPanel", () => {
     fake.listActiveJiraIssues.mockRejectedValue(new Error("Jira connection failed."));
     render(<AgentSessionsPanel client={fake.client} workspaceLabels={{}} />);
     await screen.findByText("ActivityWatch · Connected");
+    await user.click(screen.getByRole("button", { name: "Periods (1)" }));
     const summaries = screen.getByRole("listbox", { name: "Recent automatic summaries" });
-    await user.click(within(summaries).getAllByRole("option")[1]!);
-    expect(within(summaries).getAllByRole("option")[1]).toHaveAttribute("aria-selected", "true");
+    await user.click(within(summaries).getAllByRole("option")[0]!);
+    expect(within(summaries).getAllByRole("option")[0]).toHaveAttribute("aria-selected", "true");
     await user.click(screen.getByRole("button", { name: "Refresh" }));
     await screen.findByText("Jira connection failed.");
-    expect(within(summaries).getAllByRole("option")[0]).toHaveAttribute("aria-selected", "true");
+    const days = screen.getByRole("listbox", { name: "Days" });
+    expect(within(days).getAllByRole("option")[0]).toHaveAttribute("aria-selected", "true");
   });
 
   it("retries only Jira after a failed refresh and retains reviewed assignments", async () => {
@@ -934,27 +996,158 @@ describe("AgentSessionsPanel", () => {
     const firstView = render(
       <AgentSessionsPanel client={fake.client} workspaceLabels={{}} />,
     );
+    // Days show first. The saved 4-hour periods open on request.
+    expect(screen.queryByRole("listbox", { name: "Recent automatic summaries" })).not.toBeInTheDocument();
+    await user.click(await screen.findByRole("button", { name: "Periods (2)" }));
     const summaries = await screen.findByRole("listbox", {
       name: "Recent automatic summaries",
     });
     const options = within(summaries).getAllByRole("option");
-    expect(options).toHaveLength(3);
-    expect(options[1]).toHaveAttribute("aria-selected", "false");
+    expect(options).toHaveLength(2);
+    expect(options[0]).toHaveAttribute("aria-selected", "false");
 
-    options[1].focus();
+    options[0].focus();
     await user.keyboard("{ArrowRight}");
-    expect(options[2]).toHaveFocus();
-    expect(options[2]).toHaveAttribute("aria-selected", "true");
+    expect(options[1]).toHaveFocus();
+    expect(options[1]).toHaveAttribute("aria-selected", "true");
     expect(screen.getByText("Reviewed the first interval")).toBeVisible();
     expect(screen.queryByText("Reviewed the second interval")).not.toBeInTheDocument();
 
     firstView.unmount();
     render(<AgentSessionsPanel client={fake.client} workspaceLabels={{}} />);
+    await user.click(await screen.findByRole("button", { name: "Periods (2)" }));
     const restoredSummaries = await screen.findByRole("listbox", {
       name: "Recent automatic summaries",
     });
     expect(restoredSummaries).toBeVisible();
-    expect(within(restoredSummaries).getAllByRole("option")).toHaveLength(3);
+    expect(within(restoredSummaries).getAllByRole("option")).toHaveLength(2);
+  });
+
+  it("lists days first and reads a whole earlier day from ActivityWatch", async () => {
+    const user = userEvent.setup();
+    const fake = fakeWorkspaceClient({
+      activityWatchStatus: { state: "running", installation: "detected", endpoint: "http://127.0.0.1:5600", capabilities: ["dailyReview"], detail: "Ready" },
+      activityWatchDailyReview: { schemaVersion: 1, startedAtUnixMs: Date.now() - 60_000, endedAtUnixMs: Date.now(), totalActiveSeconds: 0, sessions: [], detail: "Today" },
+    });
+    render(<AgentSessionsPanel client={fake.client} workspaceLabels={{}} />);
+    const days = await screen.findByRole("listbox", { name: "Days" });
+    const options = within(days).getAllByRole("option");
+    expect(options).toHaveLength(7);
+    expect(options[0]).toHaveTextContent("Today");
+    expect(options[0]).toHaveAttribute("aria-selected", "true");
+    expect(options[1]).toHaveTextContent("Yesterday");
+
+    const yesterday = new Date();
+    yesterday.setHours(0, 0, 0, 0);
+    yesterday.setDate(yesterday.getDate() - 1);
+    const end = new Date(yesterday);
+    end.setDate(end.getDate() + 1);
+    fake.getActivityWatchDailyReview.mockResolvedValueOnce({
+      schemaVersion: 1, startedAtUnixMs: yesterday.getTime(), endedAtUnixMs: end.getTime(), totalActiveSeconds: 1_800, detail: "Yesterday",
+      sessions: [{ id: "y1", kind: "coding", startedAtUnixMs: yesterday.getTime() + 9 * 3_600_000, endedAtUnixMs: yesterday.getTime() + 9.5 * 3_600_000, durationSeconds: 1_800, description: "Coding work", activityEvidence: "Yesterday's coding block", application: "Code", sourceEventCount: 1 }],
+    });
+    await user.click(options[1]);
+    expect(await screen.findByText("Yesterday's coding block")).toBeVisible();
+    expect(fake.getActivityWatchDailyReview).toHaveBeenLastCalledWith(yesterday.getTime(), end.getTime());
+    expect(options[1]).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("reads a finished day from ActivityWatch once, then shows it from the cache", async () => {
+    const user = userEvent.setup();
+    const start = new Date().setHours(0, 0, 0, 0);
+    const today = savedInterval(start, Date.now(), "Today work");
+    saveActivityWatchReviewSnapshot({ schemaVersion: 1, dateKey: new Date().toLocaleDateString("en-CA"), builtAtUnixMs: Date.now(), review: today.review, jiraIssues: today.jiraIssues, assignments: {} });
+    const fake = fakeWorkspaceClient({ activityWatchStatus: { state: "running", installation: "detected", endpoint: "http://127.0.0.1:5600", capabilities: ["dailyReview"], detail: "Ready" } });
+    const yesterday = new Date(start);
+    yesterday.setDate(yesterday.getDate() - 1);
+    fake.getActivityWatchDailyReview.mockResolvedValue({
+      schemaVersion: 1, startedAtUnixMs: yesterday.getTime(), endedAtUnixMs: start, totalActiveSeconds: 1_800, detail: "Yesterday",
+      sessions: [{ id: "y1", kind: "coding", startedAtUnixMs: yesterday.getTime() + 9 * 3_600_000, endedAtUnixMs: yesterday.getTime() + 9.5 * 3_600_000, durationSeconds: 1_800, description: "Coding work", activityEvidence: "Cached coding block", application: "Code", sourceEventCount: 1 }],
+    });
+    const view = render(<AgentSessionsPanel client={fake.client} workspaceLabels={{}} />);
+    const days = await screen.findByRole("listbox", { name: "Days" });
+    await user.click(within(days).getAllByRole("option")[1]!);
+    expect(await screen.findByText("Cached coding block")).toBeVisible();
+    expect(fake.getActivityWatchDailyReview).toHaveBeenCalledTimes(1);
+
+    await user.click(within(days).getAllByRole("option")[0]!);
+    await user.click(within(days).getAllByRole("option")[1]!);
+    expect(await screen.findByText("Cached coding block")).toBeVisible();
+    view.unmount();
+    render(<AgentSessionsPanel client={fake.client} workspaceLabels={{}} />);
+    await user.click(within(await screen.findByRole("listbox", { name: "Days" })).getAllByRole("option")[1]!);
+    expect(await screen.findByText("Cached coding block")).toBeVisible();
+    expect(fake.getActivityWatchDailyReview).toHaveBeenCalledTimes(1);
+  });
+
+  it("groups the time summary into one card and moves settings under the title", async () => {
+    const start = Date.now() - 60 * 60_000;
+    const fake = fakeWorkspaceClient({
+      activityWatchStatus: { state: "running", installation: "detected", endpoint: "http://127.0.0.1:5600", capabilities: ["dailyReview"], detail: "Ready" },
+      activityWatchDailyReview: {
+        schemaVersion: 1,
+        startedAtUnixMs: start,
+        endedAtUnixMs: Date.now(),
+        totalActiveSeconds: 25 * 60,
+        sessions: [{ id: "code", kind: "coding", startedAtUnixMs: start, endedAtUnixMs: start + 25 * 60_000, durationSeconds: 25 * 60, description: "Coding work", application: "Visual Studio Code", sourceEventCount: 2 }],
+        detail: "Sanitized local activity.",
+      },
+      activeJiraIssues: { schemaVersion: 1, issues: [], detail: "None" },
+    });
+    render(<AgentSessionsPanel client={fake.client} workspaceLabels={{}} />);
+    await screen.findByText("ActivityWatch · Connected");
+    await screen.findByRole("button", { name: "Refresh" });
+
+    const header = screen.getByRole("heading", { name: "My time", level: 2 }).closest("header") as HTMLElement;
+    expect(within(header).getByRole("combobox", { name: "Automatic summary interval" })).toBeVisible();
+    expect(within(header).getByRole("button", { name: /notification/i })).toBeVisible();
+    const toolbar = screen.getByRole("toolbar", { name: "My time actions" });
+    expect(within(toolbar).queryByRole("button", { name: /notification/i })).not.toBeInTheDocument();
+
+    const tiles = document.querySelectorAll('[data-ui="activity.kpis"] > article');
+    expect(tiles).toHaveLength(3);
+    expect(screen.queryByText("Sum of active time")).not.toBeInTheDocument();
+    const total = document.querySelector('[data-ui="activity.total"]') as HTMLElement;
+    expect(total).toHaveTextContent(/Total\s*25m/);
+    expect(total).toHaveTextContent("25m you + 0m agents");
+  });
+
+  it("suggests one Jira ticket for related unassigned blocks and assigns them together", async () => {
+    const user = userEvent.setup();
+    const start = Date.now() - 3 * 60 * 60_000;
+    const block = (id: string, minute: number, evidence: string) => ({
+      id, kind: "browser" as const, startedAtUnixMs: start + minute * 60_000, endedAtUnixMs: start + (minute + 5) * 60_000,
+      durationSeconds: 300, description: "Browser research", activityEvidence: evidence, application: "Google Chrome", sourceEventCount: 1,
+    });
+    const fake = fakeWorkspaceClient({
+      activityWatchStatus: { state: "running", installation: "detected", endpoint: "http://127.0.0.1:5600", capabilities: ["dailyReview"], detail: "Ready" },
+      activityWatchDailyReview: {
+        schemaVersion: 1, startedAtUnixMs: start, endedAtUnixMs: Date.now(), totalActiveSeconds: 900,
+        sessions: [block("a", 0, "LLDP JSON parsing notes"), block("b", 40, "Fragrance forum thread"), block("c", 80, "VLAN provisioning LLDP examples")],
+        detail: "Sanitized local activity.",
+      },
+      activeJiraIssues: { schemaVersion: 1, issues: [{ issueKey: "DEVTOOLS-7510", summary: "Parse LLDP JSON for provisioning VLAN", status: "Open" }], detail: "One" },
+    });
+    render(<AgentSessionsPanel client={fake.client} workspaceLabels={{}} />);
+    const groups = await screen.findByRole("region", { name: "Suggested Jira groups" });
+    expect(within(groups).getByText(/DEVTOOLS-7510 · Parse LLDP JSON/)).toBeVisible();
+    expect(within(groups).getByText(/2 blocks · 10m/)).toBeVisible();
+    expect(within(groups).queryByText(/Fragrance/)).not.toBeInTheDocument();
+    // The group lists its own blocks, and a heading separates the full list, so no other block reads as a member.
+    await user.click(within(groups).getByText("Show the 2 blocks"));
+    const members = within(groups).getByRole("list", { name: "Blocks suggested for DEVTOOLS-7510" });
+    expect(within(members).getAllByRole("listitem").map((item) => item.textContent)).toEqual([
+      expect.stringContaining("LLDP JSON parsing notes"),
+      expect.stringContaining("VLAN provisioning LLDP examples"),
+    ]);
+    expect(screen.getByRole("heading", { name: "All blocks" })).toBeVisible();
+    expect(groups).toHaveTextContent("Nothing goes to Jira");
+
+    await user.click(within(groups).getByRole("button", { name: "Set Jira to DEVTOOLS-7510 on 2 blocks" }));
+    expect(screen.queryByRole("region", { name: "Suggested Jira groups" })).not.toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Jira ticket for LLDP JSON parsing notes" })).toHaveTextContent("DEVTOOLS-7510");
+    expect(screen.getByRole("combobox", { name: "Jira ticket for VLAN provisioning LLDP examples" })).toHaveTextContent("DEVTOOLS-7510");
+    expect(screen.getByRole("combobox", { name: "Jira ticket for Fragrance forum thread" })).toHaveTextContent("Unassigned");
   });
 
   it("shows agent work beside user time and states the multiplier", async () => {

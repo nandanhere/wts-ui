@@ -35,9 +35,13 @@ export const CommandPalette = memo(function CommandPalette({
   onActiveCommandIndexChange,
   inputRef,
   returnFocusRef,
-  matchingCommandItems,
+  matchingCommandItems: unorderedItems,
   commandGroups,
 }: CommandPaletteProps) {
+  // The keyboard follows the visible order: group by group, so the first result is the first row on screen.
+  const matchingCommandItems = commandGroups.flatMap((group) =>
+    unorderedItems.filter((item) => item.group === group),
+  );
   return (
     <Dialog.Root
       open={open}

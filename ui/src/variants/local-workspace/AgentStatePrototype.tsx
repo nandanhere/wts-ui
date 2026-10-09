@@ -95,6 +95,34 @@ function observationActivityLabel(
   return "No recent activity detail";
 }
 
+/** A VS Code session that works or waits for the user. It shows in full. */
+function isObservedCurrent(session: ObservedAgentSession) {
+  return session.status === "working" || Boolean(session.needsInput);
+}
+
+/** A background task that runs or waits for the user. It shows in full. */
+function isManagedCurrent(session: AgentSession) {
+  return isManagedActive(session) || Boolean(session.needsInput);
+}
+
+/** Removes Markdown emphasis marks from agent text. */
+function plainUpdate(text: string) {
+  return text.replace(/\*\*([^*]+)\*\*/g, "$1").replace(/`([^`]+)`/g, "$1");
+}
+
+function previewLine(text: string) {
+  const line = text.split("\n").find((item) => item.trim()) ?? text;
+  return plainUpdate(line).replace(/^[-#>*\s]+/, "").trim();
+}
+
+function dayTimeLabel(unixMs: number) {
+  const date = new Date(unixMs);
+  const today = new Date();
+  return date.toDateString() === today.toDateString()
+    ? date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+    : date.toLocaleDateString([], { day: "numeric", month: "short" });
+}
+
 export function AgentStatePrototype({
   client,
   workspaceId,
@@ -116,6 +144,8 @@ export function AgentStatePrototype({
   const [prompt, setPrompt] = useState(
     "Read WTS.md, work on the workspace goal, and report the result.",
   );
+  const [startedHere, setStartedHere] = useState<ReadonlySet<string>>(() => new Set());
+  const [openEarlier, setOpenEarlier] = useState<ReadonlySet<string>>(() => new Set());
   const [submittedTask, setSubmittedTask] = useState<string | null>(null);
   const [busy, setBusy] = useState<"idle" | "loading" | "starting" | "stopping">(
     "loading",
@@ -192,6 +222,7 @@ export function AgentStatePrototype({
       });
       if (generation !== generationRef.current) return;
       setSubmittedTask(task);
+      setStartedHere((current) => new Set(current).add(next.sessionId));
       setSessions((current) => [
         next,
         ...current.filter((item) => item.sessionId !== next.sessionId),
@@ -246,69 +277,33 @@ export function AgentStatePrototype({
     sessions.filter((item) => isManagedActive(item)).length +
     observedSessions.filter((item) => item.status === "working").length;
 
-  return (
-    <section
-      aria-label="Agent sessions"
-      className={styles.panel}
-      data-ui="agent-state.panel"
-      data-ui-label="Agent state panel"
-    >
-      <div
-        className={styles.heading}
-        data-ui="agent-state.header"
-        data-ui-label="Agent state header"
-      >
-        <div>
-          <h2>Agent sessions</h2>
-          <span>{activeCount} active</span>
-        </div>
-        <button
-          disabled={busy !== "idle"}
-          onClick={() => void refresh(true, true)}
-          type="button"
-        >
-          Refresh
-        </button>
-      </div>
+  const renderObserved = (observed: ObservedAgentSession) => (
+                <article className={styles.sessionCard} key={`observed-${observed.sessionId}`}>
+                  <div className={styles.sessionSummary}>
+                    <span
+                      className={styles.stateDot}
+                      data-state={observed.needsInput ? "interrupted" : observed.status}
+                    />
+                    <div>
+                      <strong>{observationStatusLabel(observed)}</strong>
+                      <small>{observed.provider === "copilot" ? "GitHub Copilot" : "Codex"} · VS Code · {observed.needsInput?.detail ?? observationActivityLabel(observed.activity)}</small>
+                    </div>
+                    <time>{heartbeatLabel(observed.lastEventAtUnixMs)}</time>
+                  </div>
+                  <dl className={styles.metadata}>
+                    <div><dt>Model</dt><dd>{observed.model ?? `Selected by ${observed.provider === "copilot" ? "Copilot" : "Codex"}`}</dd></div>
+                    <div><dt>Started</dt><dd>{heartbeatLabel(observed.startedAtUnixMs)}</dd></div>
+                  </dl>
+                  {observed.latestUpdate && (
+                    <div className={styles.latestUpdate}>
+                      <span>{observed.updateKind === "completion" ? "Final update" : "Latest update"}</span>
+                      <p>{plainUpdate(observed.latestUpdate)}</p>
+                    </div>
+                  )}
+                </article>
+  );
 
-      <div
-        className={styles.sessionList}
-        aria-busy={busy === "loading" || undefined}
-        data-ui="agent-state.sessions"
-        data-ui-label="Live agent sessions"
-      >
-        {busy === "loading" && sessions.length === 0 && observedSessions.length === 0 ? (
-          <p className={styles.empty}>Checking for agent sessions…</p>
-        ) : sessions.length === 0 && observedSessions.length === 0 ? (
-          <p className={styles.empty}>No agent session is visible in this workspace.</p>
-        ) : (
-          <>
-            {observedSessions.map((observed) => (
-              <article className={styles.sessionCard} key={`observed-${observed.sessionId}`}>
-                <div className={styles.sessionSummary}>
-                  <span
-                    className={styles.stateDot}
-                    data-state={observed.needsInput ? "interrupted" : observed.status}
-                  />
-                  <div>
-                    <strong>{observationStatusLabel(observed)}</strong>
-                    <small>{observed.provider === "copilot" ? "GitHub Copilot" : "Codex"} · VS Code · {observed.needsInput?.detail ?? observationActivityLabel(observed.activity)}</small>
-                  </div>
-                  <time>{heartbeatLabel(observed.lastEventAtUnixMs)}</time>
-                </div>
-                <dl className={styles.metadata}>
-                  <div><dt>Model</dt><dd>{observed.model ?? `Selected by ${observed.provider === "copilot" ? "Copilot" : "Codex"}`}</dd></div>
-                  <div><dt>Started</dt><dd>{heartbeatLabel(observed.startedAtUnixMs)}</dd></div>
-                </dl>
-                {observed.latestUpdate && (
-                  <div className={styles.latestUpdate}>
-                    <span>{observed.updateKind === "completion" ? "Final update" : "Latest update"}</span>
-                    <p>{observed.latestUpdate}</p>
-                  </div>
-                )}
-              </article>
-            ))}
-            {sessions.map((managed) => {
+  const renderManaged = (managed: AgentSession) => {
               const detail = sessionDetails[managed.sessionId];
               const visibleEvents = detail?.events.slice(-5) ?? [];
               return (
@@ -360,7 +355,118 @@ export function AgentStatePrototype({
                 )}
               </article>
               );
-            })}
+  };
+
+  const toggleEarlier = (key: string, open: boolean) =>
+    setOpenEarlier((current) => {
+      if (current.has(key) === open) return current;
+      const next = new Set(current);
+      if (open) next.add(key);
+      else next.delete(key);
+      return next;
+    });
+
+  const currentObserved = observedSessions.filter(isObservedCurrent);
+  const earlierObserved = observedSessions
+    .filter((item) => !isObservedCurrent(item))
+    .sort((left, right) => right.lastEventAtUnixMs - left.lastEventAtUnixMs);
+  // A task started from this panel stays in full, so its result shows after it ends.
+  const showsInFull = (item: AgentSession) => isManagedCurrent(item) || startedHere.has(item.sessionId);
+  const currentManaged = sessions.filter(showsInFull);
+  const earlierManaged = sessions.filter((item) => !showsInFull(item));
+  const earlierCount = earlierObserved.length + earlierManaged.length;
+
+  return (
+    <section
+      aria-label="Agent sessions"
+      className={styles.panel}
+      data-ui="agent-state.panel"
+      data-ui-label="Agent state panel"
+    >
+      <div
+        className={styles.heading}
+        data-ui="agent-state.header"
+        data-ui-label="Agent state header"
+      >
+        <div>
+          <h2>Agent sessions</h2>
+          <span>{activeCount} active</span>
+        </div>
+        <button
+          disabled={busy !== "idle"}
+          onClick={() => void refresh(true, true)}
+          type="button"
+        >
+          Refresh
+        </button>
+      </div>
+
+      <div
+        className={styles.sessionList}
+        aria-busy={busy === "loading" || undefined}
+        data-ui="agent-state.sessions"
+        data-ui-label="Live agent sessions"
+      >
+        {busy === "loading" && sessions.length === 0 && observedSessions.length === 0 ? (
+          <p className={styles.empty}>Checking for agent sessions…</p>
+        ) : sessions.length === 0 && observedSessions.length === 0 ? (
+          <p className={styles.empty}>No agent session is visible in this workspace.</p>
+        ) : (
+          <>
+            {currentObserved.map(renderObserved)}
+            {currentManaged.map(renderManaged)}
+            {currentObserved.length + currentManaged.length === 0 && (
+              <p className={styles.empty}>No agent works or needs you now.</p>
+            )}
+            {earlierCount > 0 && (
+              <details
+                className={styles.earlier}
+                data-ui="agent-state.earlier"
+                data-ui-label="Earlier agent sessions"
+              >
+                <summary>
+                  Earlier sessions <span>{earlierCount}</span>
+                </summary>
+                <ul className={styles.earlierList}>
+                  {earlierObserved.map((observed) => (
+                    <li key={`observed-${observed.sessionId}`}>
+                      <details
+                        className={styles.earlierRow}
+                        onToggle={(event) => toggleEarlier(`observed-${observed.sessionId}`, event.currentTarget.open)}
+                      >
+                        <summary>
+                          <span className={styles.stateDot} data-state={observed.status} />
+                          <strong>{observationStatusLabel(observed)}</strong>
+                          <span className={styles.earlierPreview}>
+                            {observed.latestUpdate ? previewLine(observed.latestUpdate) : observed.model ?? "No update"}
+                          </span>
+                          <time>{dayTimeLabel(observed.lastEventAtUnixMs)}</time>
+                        </summary>
+                        {openEarlier.has(`observed-${observed.sessionId}`) && renderObserved(observed)}
+                      </details>
+                    </li>
+                  ))}
+                  {earlierManaged.map((managed) => (
+                    <li key={managed.sessionId}>
+                      <details
+                        className={styles.earlierRow}
+                        onToggle={(event) => toggleEarlier(managed.sessionId, event.currentTarget.open)}
+                      >
+                        <summary>
+                          <span className={styles.stateDot} data-state={managed.status} />
+                          <strong>{sessionStatusLabel(managed)}</strong>
+                          <span className={styles.earlierPreview}>
+                            {previewLine(sessionDetails[managed.sessionId]?.task ?? sessionDetail(managed))}
+                          </span>
+                          <time>{dayTimeLabel(managed.endedAtUnixMs ?? managed.lastHeartbeatAtUnixMs)}</time>
+                        </summary>
+                        {openEarlier.has(managed.sessionId) && renderManaged(managed)}
+                      </details>
+                    </li>
+                  ))}
+                </ul>
+              </details>
+            )}
           </>
         )}
       </div>
@@ -410,3 +516,6 @@ export function AgentStatePrototype({
     </section>
   );
 }
+
+
+

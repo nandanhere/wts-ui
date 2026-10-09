@@ -5,7 +5,7 @@ import { invalidateAgentSessions, loadAgentSessions } from "../../lib/agentSessi
 import type { AgentMrLinkProposal } from "../../lib/wtsClient";
 import { returnToFeedbackSelection } from "../../lib/agentFeedbackNavigation";
 import { getWorkspaceAttentionStore, type WorkspaceAttentionItem } from "./workspaceAttention";
-import { ConnectedWorkspaceAttentionCard, ConnectedBoardAttentionStatus } from "./WorkspaceAttentionCard";
+import { ConnectedWorkspaceAttentionCard, ConnectedBoardAttentionStatus, workspacesWithAttention, type AttentionFilter } from "./WorkspaceAttentionCard";
 import { nativePreviewAllowsCommand, NATIVE_PREVIEW_READ_ONLY_MESSAGE } from "../../lib/nativePreview";
 import { highlightFeedbackSelection, resolveFeedbackSelectionOrigin, RETURN_FEEDBACK_SELECTION_EVENT, type FeedbackSelectionReturn } from "../../lib/agentFeedbackNavigation";
 import { loadWorkspaceGitlabMergeRequests, invalidateWorkspaceGitlabMergeRequests } from "./gitlabMergeRequestDiscovery";
@@ -85,6 +85,7 @@ import {
 } from "../../lib/wtsClient";
 import { useTheme } from "../../theme";
 import { useVisiblePolling } from "../../lib/useVisiblePolling";
+import { baseBranchValue } from "../../lib/branchOrder";
 import { useWorkspaceGitlabDiscussions } from "./gitlabDiscussions";
 import { reviewSession } from "./workingChangesState";
 import {
@@ -125,18 +126,20 @@ import { RecoveryCopyButton } from "./RecoveryCopyButton";
 import { canAssertDestructiveWorkspaceRemoval } from "./workspaceRemoval";
 import { WorkspaceChangeRequestDialog } from "./WorkspaceChangeRequestDialog";
 import { CommandPalette } from "./CommandPalette";
-import { MyReviewsScreen, useGithubReviewInbox } from "./MyReviewsScreen";
+import { isArchivedReview, MyReviewsScreen, useGithubReviewInbox } from "./MyReviewsScreen";
 import { AppUpdateScreen, useAppUpdate } from "./AppUpdateScreen";
 import {
   resolveWorkspaceCardAction,
   useWorkspaceCardClickPreference,
 } from "./workspaceCardPreference";
-import { sendDesktopNotification } from "./desktopNotifications";
+import { useWorkspaceBackupPreference } from "./workspaceBackupPreference";
+import { sendDesktopNotification, subscribeNotificationOpen } from "./desktopNotifications";
 import { loadTimeReviewSchedule } from "./timeReviewSchedule";
 import {
   laneForWorkflowState,
   gitlabReviewForWorkspace,
   gitlabReviewTargetForWorkspace,
+  workspaceIdForGitlabReview,
   markWorkspaceWorkflowSignalHandled,
   suggestedWorkflowState,
   suggestedWorkflowStateForGitlabReview,
@@ -1116,8 +1119,7 @@ function AddWorkspaceRepositoryDialog({
             <form className={styles.sourceForm} onSubmit={(event) => { event.preventDefault(); void review(); }}>
               <div className={styles.field}>
                 <Label>Repository</Label>
-                <div className={styles.inputWithIcon}>
-                  <Glyph name="folder" size={16} />
+                <div data-ui="workspace.add-repository-select" data-ui-label="Repository to add">
                   <SelectMenu
                     aria-label="Repository to add"
                     disabled={availableRepositories.length === 0 || state !== "idle"}
@@ -1165,7 +1167,7 @@ function AddWorkspaceRepositoryDialog({
                     value={remoteUrl}
                   />
                   <Button
-                    className={styles.secondaryButton}
+                    className={styles.inlineFieldButton}
                     isDisabled={!remoteUrl.trim() || cloning || state !== "idle"}
                     onPress={() => void cloneFromUrl()}
                   >
@@ -1194,8 +1196,8 @@ function AddWorkspaceRepositoryDialog({
                     {(selectedRepository?.availableBranches?.length
                       ? selectedRepository.availableBranches
                       : selectedRepository ? [selectedRepository.defaultBranch] : []
-                    ).map((branch) => (
-                      <option key={branch.fullRef} value={branch.name}>
+                    ).map((branch, _index, branches) => (
+                      <option key={branch.fullRef} value={baseBranchValue(branch, branches)}>
                         {branch.name} · {"remote" in branch && branch.remote ? "remote" : "local"} · {branch.commitOid.slice(0, 8)}
                       </option>
                     ))}
@@ -1572,22 +1574,25 @@ function BaseReferenceRecovery({
   onReviseBase: (baseRef: string) => void;
 }) {
   const branches = useMemo(
-    () =>
-      [...(repository?.availableBranches ?? [])]
-        .filter((branch) => branch.name !== requestedBaseRef)
+    () => {
+      const available = repository?.availableBranches ?? [];
+      return available
+        .map((branch) => ({ ...branch, value: baseBranchValue(branch, available) }))
+        .filter((branch) => branch.value !== requestedBaseRef)
         .sort(
           (left, right) =>
             Number(right.remote) - Number(left.remote) ||
             left.name.localeCompare(right.name),
-        ),
+        );
+    },
     [repository, requestedBaseRef],
   );
   const [selectedBaseRef, setSelectedBaseRef] = useState("");
 
   useEffect(() => {
-    if (branches.some((branch) => branch.name === selectedBaseRef)) return;
+    if (branches.some((branch) => branch.value === selectedBaseRef)) return;
     setSelectedBaseRef(
-      branches.find((branch) => branch.remote)?.name ?? branches[0]?.name ?? "",
+      branches.find((branch) => branch.remote)?.value ?? branches[0]?.value ?? "",
     );
   }, [branches, selectedBaseRef]);
 
@@ -1611,7 +1616,7 @@ function BaseReferenceRecovery({
               <option value="">Refresh to discover branches</option>
             ) : (
               branches.map((branch) => (
-                <option key={branch.fullRef} value={branch.name}>
+                <option key={branch.fullRef} value={branch.value}>
                   {branch.name}
                   {branch.remote ? " · origin" : " · local"}
                 </option>
@@ -4808,6 +4813,7 @@ export function LocalWorkspace({
   const { resolvedTheme, toggleTheme } = useTheme();
   const { preference: workspaceCardClickPreference } =
     useWorkspaceCardClickPreference();
+  const { backupPath: workspaceBackupFolder } = useWorkspaceBackupPreference();
   const materializationCache = useMemo(
     () => materializationCacheFor(client),
     [client],
@@ -4821,7 +4827,7 @@ export function LocalWorkspace({
   const myReviews = useGithubReviewInbox(client);
   const assignedReviewCount =
     (myReviews.inbox?.reviews.length ?? 0) +
-    (myReviews.gitlabInbox?.reviews.length ?? 0);
+    (myReviews.gitlabInbox?.reviews.filter((review) => !isArchivedReview(review)).length ?? 0);
   const appUpdate = useAppUpdate(client);
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const agentNavigationWorkspacesRef = useRef(workspaces);
@@ -4854,6 +4860,11 @@ export function LocalWorkspace({
     (left, right) => Object.keys(left).length === Object.keys(right).length && Object.entries(left).every(([id, inbox]) =>
       right[id]?.state === inbox.state && JSON.stringify(right[id]?.mergeRequests) === JSON.stringify(inbox.mergeRequests)));
   const workspaceGitlabInboxes = useMemo(() => new Map(Object.entries(attentionInboxes)), [attentionInboxes]);
+  const [attentionFilter, setAttentionFilter] = useState<AttentionFilter>(null);
+  const attentionFilterKey = useWorkspaceAttention(attentionStore,
+    snapshot => attentionFilter ? [...workspacesWithAttention(snapshot.items, attentionFilter)].sort().join("\n") : null);
+  const attentionFilterIds = useMemo(() => attentionFilterKey === null ? null : new Set(attentionFilterKey.split("\n").filter(Boolean)),
+    [attentionFilterKey]);
   const attentionClientRef = useRef(client);
   attentionClientRef.current = client;
   const [verificationSelection, setVerificationSelection] = useState<VerificationAttentionSelection>();
@@ -5019,6 +5030,8 @@ export function LocalWorkspace({
   } | null>(null);
   const workspaceActionGenerationRef = useRef(0);
   const setupRecoveryPendingRef = useRef(new Set<string>());
+  // WTS reviews and creates each saved plan one time without a click. A failed or blocked attempt waits for the user.
+  const automaticSetupAttemptsRef = useRef(new Set<string>());
   const removalGenerationRef = useRef(0);
   const removalKeyRef = useRef<{
     digest: string;
@@ -5223,6 +5236,7 @@ export function LocalWorkspace({
                 notification.title,
                 notification.body,
                 `wts-workspace-${workspaceId}`,
+                { path: `/sessions/${encodeURIComponent(workspaceId)}` },
               ).then((sent) => {
                 pendingWorkspaceNotificationsRef.current.delete(
                   notificationKey,
@@ -5288,6 +5302,9 @@ export function LocalWorkspace({
                       verificationNotification.title,
                       verificationNotification.body,
                       `wts-verification-${workspaceId}`,
+                      {
+                        path: `/sessions/${encodeURIComponent(workspaceId)}/verification`,
+                      },
                     );
                   }
                   if (result.verification === "failed") {
@@ -5883,7 +5900,8 @@ export function LocalWorkspace({
       .filter((workspace) => {
         const agent = workspaceAgents.get(workspace.id);
         const matchesFilter =
-          filter === "all" || workspaceOverviewLane(workspace, agent) === filter;
+          (filter === "all" || workspaceOverviewLane(workspace, agent) === filter) &&
+          (!attentionFilterIds || attentionFilterIds.has(workspace.id));
         const searchableWorkspace = [
           workspace.key,
           workspace.title,
@@ -5960,6 +5978,7 @@ export function LocalWorkspace({
         return compareWorkspaceRecency(left, right);
       });
   }, [
+    attentionFilterIds,
     filter,
     reconciledLegacyBoardOrder,
     repositoryCatalog,
@@ -5988,6 +6007,7 @@ export function LocalWorkspace({
     [assignedGitlabReviews, workspaces],
   );
   const visibleAssignedGitlabReviews = useMemo(() => {
+    if (attentionFilterIds) return [];
     if (filter !== "all" && filter !== "planned") return [];
     const terms = search.trim().toLocaleLowerCase().split(/\s+/).filter(Boolean);
     if (!terms.length) return unmatchedAssignedGitlabReviews;
@@ -6003,7 +6023,7 @@ export function LocalWorkspace({
         .toLocaleLowerCase();
       return terms.every((term) => searchable.includes(term));
     });
-  }, [filter, search, unmatchedAssignedGitlabReviews]);
+  }, [attentionFilterIds, filter, search, unmatchedAssignedGitlabReviews]);
   const workspaceCounts = useMemo(
     () => {
       const counts = workspaces.reduce(
@@ -6055,6 +6075,7 @@ export function LocalWorkspace({
     filter === "all" ? [...WORKSPACE_LANE_ORDER] : [filter];
   const visibleDeferredWorkspaceCreations = useMemo(() => {
     const terms = search.trim().toLocaleLowerCase();
+    if (attentionFilterIds) return [];
     return deferredWorkspaceCreations.filter(
       (task) =>
         (filter === "all" || workspaceCreationLane(task) === filter) &&
@@ -6063,7 +6084,7 @@ export function LocalWorkspace({
             .toLocaleLowerCase()
             .includes(terms)),
     );
-  }, [deferredWorkspaceCreations, filter, search]);
+  }, [attentionFilterIds, deferredWorkspaceCreations, filter, search]);
 
   useEffect(() => {
     const handleWorkspaceShortcut = (event: KeyboardEvent) => {
@@ -6929,6 +6950,19 @@ export function LocalWorkspace({
     }
   };
 
+  const openGitlabReviewTarget = async (review: GitlabReviewTarget) => {
+    const label = `${review.repository} !${review.number}`;
+    try {
+      const result = await client.openGitlabMergeRequest(review.repositoryId, review.number);
+      if (!result.accepted || result.repositoryId !== review.repositoryId || result.iid !== review.number) {
+        throw new Error("Received a different merge-request handoff.");
+      }
+      setNotice(`${label} · GitLab opened`);
+    } catch (error) {
+      setNotice(`${label} · ${error instanceof Error ? error.message : "Could not open this merge request."}`, "error");
+    }
+  };
+
   const openWorkspaceGitlabMergeRequest = async (
     mergeRequest: GitlabMergeRequest,
   ) => {
@@ -7106,6 +7140,8 @@ export function LocalWorkspace({
     return () =>
       window.removeEventListener("popstate", handleHistoryNavigation);
   }, [materializationCache, navigationCache, workspaces]);
+
+  useEffect(() => subscribeNotificationOpen(), []);
 
   useEffect(() => {
     let generation = 0;
@@ -7332,10 +7368,10 @@ export function LocalWorkspace({
       );
       setResumedWorkspaceCreationId("");
     }
-    setNotice(`${workspace.key} plan saved · no setup effects have run`);
+    setNotice(`${workspace.key} plan saved · Setup check started`);
   };
 
-  const reviewWorkspaceSetup = async (repositoryIdToRefresh?: string) => {
+  const reviewWorkspaceSetup = async (repositoryIdToRefresh?: string, createWhenReady = false) => {
     if (!selectedWorkspace || workspaceCommandState !== "idle") return;
     const workspaceId = selectedWorkspace.id;
     const workspaceKey = selectedWorkspace.key;
@@ -7370,6 +7406,10 @@ export function LocalWorkspace({
         throw new Error("Received setup effects for another workspace.");
       }
       setWorkspacePreflight(preflight);
+      if (createWhenReady && preflight.ready && !preflight.setupRecovery) {
+        await materializeSelectedWorkspace(preflight);
+        return;
+      }
       setWorkspaceActionState(preflight.ready ? "ready" : "blocked");
       setNotice(
         preflight.ready
@@ -7423,18 +7463,19 @@ export function LocalWorkspace({
     }
   };
 
-  const materializeSelectedWorkspace = async () => {
+  const materializeSelectedWorkspace = async (reviewed?: WorkspacePreflight) => {
+    const preflight = reviewed ?? workspacePreflight;
     if (
       !selectedWorkspace ||
-      !workspacePreflight?.ready ||
-      Boolean(workspacePreflight.setupRecovery) ||
+      !preflight?.ready ||
+      Boolean(preflight.setupRecovery) ||
       workspaceCommandState !== "idle"
     ) {
       return;
     }
     const workspaceId = selectedWorkspace.id;
     const workspaceKey = selectedWorkspace.key;
-    const digest = workspacePreflight.effectDigest;
+    const digest = preflight.effectDigest;
     if (
       !materializationKeyRef.current ||
       materializationKeyRef.current.digest !== digest
@@ -7485,6 +7526,28 @@ export function LocalWorkspace({
       setNotice(`${workspaceKey} was not created`, "error");
     }
   };
+
+  const automaticSetupWorkspaceId =
+    view === "workbench" &&
+    selectedWorkspace &&
+    selectedWorkspaceIsReady &&
+    selectedWorkspace.lifecycleState === "notMaterialized" &&
+    workspaceActionState === "idle" &&
+    workspaceCommandState === "idle" &&
+    !workspaceEvidenceRefreshing &&
+    !workspaceMaterialization &&
+    !workspacePreflight &&
+    !workspaceActionError &&
+    !automaticSetupAttemptsRef.current.has(selectedWorkspace.id) &&
+    nativePreviewAllowsCommand("materialize_workspace")
+      ? selectedWorkspace.id
+      : "";
+  useEffect(() => {
+    if (!automaticSetupWorkspaceId) return;
+    automaticSetupAttemptsRef.current.add(automaticSetupWorkspaceId);
+    void reviewWorkspaceSetup(undefined, true);
+    // The attempt set allows one automatic setup for each workspace.
+  }, [automaticSetupWorkspaceId]);
 
   const openSelectedWorkspaceInVscode = async (): Promise<boolean> => {
     if (
@@ -8261,6 +8324,7 @@ export function LocalWorkspace({
         digest,
         removalKeyRef.current.key,
         deleteProtectedPaths,
+        workspaceBackupFolder,
       );
       if (generation !== removalGenerationRef.current) return;
       if (result.workspaceId !== workspaceId) {
@@ -8287,7 +8351,9 @@ export function LocalWorkspace({
       setRemovalOpen(false);
       setView("board");
       setNotice(
-        `${workspaceKey} removed · ${result.retainedBranches.length} local branch${result.retainedBranches.length === 1 ? "" : "es"} retained`,
+        result.backupPath
+          ? `${workspaceKey} removed · backed up to ${result.backupPath} · ${result.retainedBranches.length} local branch${result.retainedBranches.length === 1 ? "" : "es"} retained`
+          : `${workspaceKey} removed · ${result.retainedBranches.length} local branch${result.retainedBranches.length === 1 ? "" : "es"} retained`,
       );
     } catch (error) {
       if (generation !== removalGenerationRef.current) return;
@@ -8562,7 +8628,8 @@ export function LocalWorkspace({
         </div>
       </div>
 
-      {registryState === "ready" && workspaces.length > 0 && <ConnectedBoardAttentionStatus store={attentionStore} onRefresh={() => refreshAttention(true)} />}
+      {registryState === "ready" && workspaces.length > 0 && <ConnectedBoardAttentionStatus store={attentionStore} onRefresh={() => refreshAttention(true)}
+        filter={attentionFilter} onFilter={setAttentionFilter} />}
       {registryState === "loading" ? (
         <div className={styles.registryState}>
           <div
@@ -8719,7 +8786,7 @@ export function LocalWorkspace({
                       }
                       agent={workspaceAgents.get(workspace.id)}
                       attention={<ConnectedWorkspaceAttentionCard store={attentionStore} workspaceId={workspace.id} workspaceLabel={workspace.key}
-                        onOpen={openAttentionItem} onRefresh={() => refreshAttention(true)} />}
+                        onOpen={openAttentionItem} />}
                       mergeRequests={
                         workspaceGitlabInboxes.get(workspace.id)?.mergeRequests
                       }
@@ -8729,6 +8796,14 @@ export function LocalWorkspace({
                       )}
                       onOpenMergeRequest={(mergeRequest) =>
                         void openWorkspaceGitlabMergeRequest(mergeRequest)
+                      }
+                      reviewTarget={gitlabReviewTargetForWorkspace(
+                        workspace,
+                        myReviews.gitlabInbox?.reviews ?? [],
+                        workspaceGitlabInboxes.get(workspace.id)?.mergeRequests,
+                      )}
+                      onOpenGitlabReview={(review) =>
+                        void openGitlabReviewTarget(review)
                       }
                       pin={
                         workspace.workflowPersisted
@@ -9254,7 +9329,7 @@ export function LocalWorkspace({
                 onReconcile={() => void reindexSelectedWorkspaceGraph()}
                 onSyncRepository={syncSelectedWorkspaceRepository}
                 onAlignRepository={alignSelectedWorkspaceRepository}
-                onMaterialize={materializeSelectedWorkspace}
+                onMaterialize={() => void materializeSelectedWorkspace()}
                 onReviewChanges={openRepositoryReview}
                 onOpenWorkspace={() => void openSelectedWorkspacePreferred()}
                 onNotice={setNotice}
@@ -9547,6 +9622,12 @@ export function LocalWorkspace({
       onOpenIntegrations={() => setSetupOpen(true)}
       onRefresh={myReviews.refresh}
       state={myReviews.state}
+      onOpenWorkspace={openWorkspace}
+      workspaceForReview={(review) => {
+        const id = workspaceIdForGitlabReview(workspaces, review);
+        const match = id ? workspaces.find((workspace) => workspace.id === id) : undefined;
+        return match ? { id: match.id, title: match.title ?? match.key } : undefined;
+      }}
     />
   );
 
@@ -9574,7 +9655,8 @@ export function LocalWorkspace({
     | "Workspaces"
     | "Navigate"
     | "Current workspace"
-    | "Actions";
+    | "Actions"
+    | "Agent sessions";
   type CommandItem = {
     id: string;
     group: CommandGroup;
@@ -9775,13 +9857,12 @@ export function LocalWorkspace({
   const matchingSessionItems: CommandItem[] = normalizedCommandQuery ? fleetCards.filter(card =>
     [card.providerLabel, card.model, card.task, workspaces.find(workspace => workspace.id === card.workspaceId)?.title]
       .join(" ").toLocaleLowerCase().includes(normalizedCommandQuery)
-  ).slice(0, 20).map(card => ({
-    id: "session-" + card.id, group: "Navigate", label: card.providerLabel + " · " + (workspaces.find(workspace => workspace.id === card.workspaceId)?.title ?? "Agent session"),
+  ).slice(0, 6).map(card => ({
+    id: "session-" + card.id, group: "Agent sessions", label: card.providerLabel + " · " + (workspaces.find(workspace => workspace.id === card.workspaceId)?.title ?? "Agent session"),
     description: card.healthLabel + " · " + card.task.slice(0, 120), keywords: "agent session", icon: "terminal",
     run: () => { closeCommandPalette(); openAgentFleet(); },
   })) : [];
   const matchingCommandItems = [
-    ...matchingSessionItems,
     ...matchingWorkspaceItems,
     ...commandItems.filter((item) =>
       normalizedCommandQuery
@@ -9790,6 +9871,7 @@ export function LocalWorkspace({
             .includes(normalizedCommandQuery)
         : true,
     ),
+    ...matchingSessionItems,
   ];
   const activeCommandIndex = Math.min(
     commandActiveIndex,
@@ -9800,6 +9882,7 @@ export function LocalWorkspace({
     "Navigate",
     "Current workspace",
     "Actions",
+    "Agent sessions",
   ];
 
   return (
@@ -9830,7 +9913,7 @@ export function LocalWorkspace({
               <b>WTS</b>
             </Button>
             <nav
-              aria-label="WTS sections"
+              aria-label="App sections"
               className={styles.appNavigation}
               data-ui="wts.navigation"
               data-ui-label="WTS navigation"
@@ -9876,7 +9959,7 @@ export function LocalWorkspace({
                 onClick={openTimeReview}
                 type="button"
               >
-                <Glyph name="file" size={14} />
+                <Glyph name="clock" size={14} />
                 My time
               </button>
               <button
@@ -9885,7 +9968,7 @@ export function LocalWorkspace({
                 onClick={openMyReviews}
                 type="button"
               >
-                <Glyph name="code" size={14} />
+                <Glyph name="review" size={14} />
                 My reviews
                 {assignedReviewCount > 0 && (
                   <span
@@ -10110,6 +10193,7 @@ export function LocalWorkspace({
           preflight={removalPreflight}
           state={removalState}
           error={removalError}
+          backupFolder={workspaceBackupFolder || undefined}
           onRetry={() => void loadRemovalPreflight()}
           onRegisterChanges={() => void registerChangesForRemoval()}
           onReviewChanges={removalPreflight?.kind === "materializedWorkspace" ? () => {
