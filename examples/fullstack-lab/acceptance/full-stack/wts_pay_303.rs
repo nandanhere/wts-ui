@@ -1,4 +1,4 @@
-use wts_checkout_api::order_payload;
+use wts_orders_api::order_payload;
 
 #[test]
 fn pay_303_exposes_an_integer_cent_contract() {

@@ -90,9 +90,9 @@ GitLab approval is the completion signal. WTS does not require a comment because
 
 ```text
 ┌──────────────── Ready · 3 ────────────────┐
-│ GITLAB REVIEW              beacon · !36     │
+│ GITLAB REVIEW              beacon · !36   │
 │ Validate the evaluation flow              │
-│ By sam · 3 comments  [Create workspace]│
+│ By sam · 3 comments  [Create workspace]   │
 ├───────────────────────────────────────────┤
 │ Existing saved workspace card             │
 └───────────────────────────────────────────┘

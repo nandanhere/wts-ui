@@ -15,19 +15,9 @@ The [finding register](PRD.md) links each defect to its behavior or boundary tes
 
 ## Comparison images
 
-These images use the same full App and deterministic HTTP fixtures. They do not show live provider responses.
-
-| Surface | Before | After |
-| --- | --- | --- |
-| Workspace navigation | [Before](evidence/workspace-before.png) | [After](evidence/workspace-after.png) |
-| Conversations | [Before](evidence/conversations-before.png) | [After](evidence/conversations-after.png) |
-| Agent feedback | [Before](evidence/feedback-before.png) | [After](evidence/feedback-after.png) |
-| Narrow Plans | [Before](evidence/narrow-plans-before.png) | [After](evidence/narrow-plans-after.png) |
-| Empty Services | [Before](evidence/empty-services-before.png) | [After](evidence/empty-services-after.png) |
-| Medium header | [Before](evidence/medium-header-before.png) | [After](evidence/medium-header-after.png) |
-| Narrow MR | [Before](evidence/narrow-mr-before.png) | [After](evidence/narrow-mr-after.png) |
-
-Final dark-theme images: [Conversations](evidence/conversations-dark-after.png), [Feedback](evidence/feedback-dark-after.png), and [Plans](evidence/plans-dark-after.png).
+The before/after screenshots were removed during an identifier scrub because
+they rendered the old fixture names. The text evidence files in `evidence/`
+remain. Re-run the product-polish tour specs to regenerate images.
 
 ## Responsiveness
 

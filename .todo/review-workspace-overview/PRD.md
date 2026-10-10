@@ -26,19 +26,19 @@ The Review tab replaces the generic Workspace tab for a matched GitLab review wo
 
 ```text
 ┌──────────────────────────────────────────────────────────────────────┐
-│ Review  Plans  Changes  Verify                                      │
+│ Review  Plans  Changes  Verify                                       │
 ├──────────────────────────────────────────────────────────────────────┤
 │ GITLAB MR !22                                      MERGED            │
 │ Fix health endpoint fallback                                         │
 │ GitLab merged this change. No review action remains.                 │
-│ devtools/netboot-verify · erin.brooks                              │
+│ devtools/netboot-verify · erin.brooks                                │
 │                                   [Open in GitLab] [View changes]     │
 ├──────────────────────────────────────────────────────────────────────┤
 │ Linked work                                                          │
-│ DEVTOOLS-6349 · From merge request metadata                           │
+│ DEVTOOLS-6349 · From merge request metadata                          │
 ├──────────────────────────────────────────────────────────────────────┤
 │ Review scope                                                         │
-│ netboot-verify   fix/health-endpoint-fallback → main   62 changed files │
+│ netboot-verify fix/health-endpoint-fallback → main  62 changed files │
 │                                                    [View changes]     │
 └──────────────────────────────────────────────────────────────────────┘
 ```

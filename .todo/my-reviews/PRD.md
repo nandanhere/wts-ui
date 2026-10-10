@@ -194,17 +194,17 @@ The count includes unique pull requests, not workspace mappings.
 │ orders-api                                                              │
 │                                                                           │
 │ #184  Prevent duplicate captures                              [Review →]  │
-│ Nadia Ellis · Review requested · main ← fix/capture                          │
-│ Orders reliability · Updated 8 minutes ago                              │
+│ Nadia Ellis · Review requested · main ← fix/capture                       │
+│ Orders reliability · Updated 8 minutes ago                                │
 │                                                                           │
-│ #179  Add retry telemetry                                      DRAFT       │
-│ Owen Hale · Review requested · main ← retry-metrics          [Review →]  │
-│ Orders reliability · Updated yesterday                                  │
+│ #179  Add retry telemetry                                      DRAFT      │
+│ Owen Hale · Review requested · main ← retry-metrics          [Review →]   │
+│ Orders reliability · Updated yesterday                                    │
 ├───────────────────────────────────────────────────────────────────────────┤
 │ ledger-worker                                                             │
 │                                                                           │
-│ #72  Bound the payout retry loop                         [Review →]   │
-│ Dave Brooks · Review requested · release/26 ← retry-bound                    │
+│ #72  Bound the payout retry loop                         [Review →]       │
+│ Dave Brooks · Review requested · release/26 ← retry-bound                 │
 │ Ledger repair · Billing hardening · Updated 2 days ago                    │
 └───────────────────────────────────────────────────────────────────────────┘
 ```

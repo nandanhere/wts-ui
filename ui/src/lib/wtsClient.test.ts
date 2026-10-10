@@ -2639,7 +2639,7 @@ describe("HTTP workspace client", () => {
     ).resolves.toEqual(result);
 
     expect(fetchMock.mock.calls[1]).toEqual([
-      "/api/v1/repositories/repo%2Fcheckout%20api%3F/open/base",
+      "/api/v1/repositories/repo%2Forders%20api%3F/open/base",
       {
         method: "POST",
         headers: {

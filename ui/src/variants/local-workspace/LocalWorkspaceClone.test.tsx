@@ -43,7 +43,7 @@ async function startBackgroundClone(options: { branch?: string; shallow?: boolea
       evidence: [],
       includedByDefault: true,
     }, {
-      candidateId: "candidate_checkout_worker",
+      candidateId: "candidate_orders_worker",
       serviceId: "orders-worker",
       displayName: "Orders Worker",
       repositoryId: local.id,
