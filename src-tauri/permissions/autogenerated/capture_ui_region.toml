@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-capture-ui-region"
+description = "Enables the capture_ui_region command without any pre-configured scope."
+commands.allow = ["capture_ui_region"]
+
+[[permission]]
+identifier = "deny-capture-ui-region"
+description = "Denies the capture_ui_region command without any pre-configured scope."
+commands.deny = ["capture_ui_region"]

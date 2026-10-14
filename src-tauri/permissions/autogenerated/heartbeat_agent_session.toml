@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-heartbeat-agent-session"
+description = "Enables the heartbeat_agent_session command without any pre-configured scope."
+commands.allow = ["heartbeat_agent_session"]
+
+[[permission]]
+identifier = "deny-heartbeat-agent-session"
+description = "Denies the heartbeat_agent_session command without any pre-configured scope."
+commands.deny = ["heartbeat_agent_session"]

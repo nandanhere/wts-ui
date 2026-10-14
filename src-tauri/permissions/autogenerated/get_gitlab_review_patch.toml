@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-get-gitlab-review-patch"
+description = "Enables the get_gitlab_review_patch command without any pre-configured scope."
+commands.allow = ["get_gitlab_review_patch"]
+
+[[permission]]
+identifier = "deny-get-gitlab-review-patch"
+description = "Denies the get_gitlab_review_patch command without any pre-configured scope."
+commands.deny = ["get_gitlab_review_patch"]

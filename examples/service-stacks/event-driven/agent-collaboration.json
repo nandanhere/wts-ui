@@ -1,0 +1,60 @@
+{
+  "schemaVersion": 1,
+  "scenarioId": "ORDER-203",
+  "title": "Carry a currency through the event-driven order view",
+  "execution": "parallel-then-integrate",
+  "acceptanceInjections": [
+    {
+      "repository": "command-api",
+      "source": "collaboration/acceptance/command-currency.test.mjs",
+      "target": "test/currency.test.mjs"
+    },
+    {
+      "repository": "projector",
+      "source": "collaboration/acceptance/projector-currency.test.mjs",
+      "target": "test/currency.test.mjs"
+    },
+    {
+      "repository": "read-api",
+      "source": "collaboration/acceptance/read-currency.test.mjs",
+      "target": "test/currency.test.mjs"
+    }
+  ],
+  "workstreams": [
+    {
+      "id": "command-event-contract",
+      "repository": "command-api",
+      "brief": "collaboration/command.md",
+      "allowedPaths": ["src/order.mjs"],
+      "verification": {
+        "executable": "npm",
+        "arguments": ["test", "--silent"]
+      }
+    },
+    {
+      "id": "projection-contract",
+      "repository": "projector",
+      "brief": "collaboration/projector.md",
+      "allowedPaths": ["src/projection.mjs"],
+      "verification": {
+        "executable": "npm",
+        "arguments": ["test", "--silent"]
+      }
+    },
+    {
+      "id": "query-contract",
+      "repository": "read-api",
+      "brief": "collaboration/read-api.md",
+      "allowedPaths": ["src/public-order.mjs"],
+      "verification": {
+        "executable": "npm",
+        "arguments": ["test", "--silent"]
+      }
+    }
+  ],
+  "integration": {
+    "brief": "collaboration/integration.md",
+    "executable": "node",
+    "arguments": ["collaboration/smoke.mjs"]
+  }
+}

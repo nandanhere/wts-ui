@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-cancel-workspace-verification"
+description = "Enables the cancel_workspace_verification command without any pre-configured scope."
+commands.allow = ["cancel_workspace_verification"]
+
+[[permission]]
+identifier = "deny-cancel-workspace-verification"
+description = "Denies the cancel_workspace_verification command without any pre-configured scope."
+commands.deny = ["cancel_workspace_verification"]

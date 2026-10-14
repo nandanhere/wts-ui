@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-follow-workspace-agent"
+description = "Enables the follow_workspace_agent command without any pre-configured scope."
+commands.allow = ["follow_workspace_agent"]
+
+[[permission]]
+identifier = "deny-follow-workspace-agent"
+description = "Denies the follow_workspace_agent command without any pre-configured scope."
+commands.deny = ["follow_workspace_agent"]

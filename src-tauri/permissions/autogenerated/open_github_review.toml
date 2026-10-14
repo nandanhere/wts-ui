@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-open-github-review"
+description = "Enables the open_github_review command without any pre-configured scope."
+commands.allow = ["open_github_review"]
+
+[[permission]]
+identifier = "deny-open-github-review"
+description = "Denies the open_github_review command without any pre-configured scope."
+commands.deny = ["open_github_review"]

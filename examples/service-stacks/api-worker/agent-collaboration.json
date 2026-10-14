@@ -1,0 +1,45 @@
+{
+  "schemaVersion": 1,
+  "scenarioId": "JOBS-202",
+  "title": "Add a square operation to the asynchronous job contract",
+  "execution": "parallel-then-integrate",
+  "acceptanceInjections": [
+    {
+      "repository": "api",
+      "source": "collaboration/acceptance/api-square.test.mjs",
+      "target": "test/square-operation.test.mjs"
+    },
+    {
+      "repository": "worker",
+      "source": "collaboration/acceptance/worker-square.test.mjs",
+      "target": "test/square-operation.test.mjs"
+    }
+  ],
+  "workstreams": [
+    {
+      "id": "api-operation-contract",
+      "repository": "api",
+      "brief": "collaboration/api.md",
+      "allowedPaths": ["src/job.mjs"],
+      "verification": {
+        "executable": "npm",
+        "arguments": ["test", "--silent"]
+      }
+    },
+    {
+      "id": "worker-operation-contract",
+      "repository": "worker",
+      "brief": "collaboration/worker.md",
+      "allowedPaths": ["src/processor.mjs"],
+      "verification": {
+        "executable": "npm",
+        "arguments": ["test", "--silent"]
+      }
+    }
+  ],
+  "integration": {
+    "brief": "collaboration/integration.md",
+    "executable": "node",
+    "arguments": ["collaboration/smoke.mjs"]
+  }
+}

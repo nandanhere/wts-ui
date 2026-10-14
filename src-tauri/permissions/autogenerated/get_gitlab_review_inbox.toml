@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-get-gitlab-review-inbox"
+description = "Enables the get_gitlab_review_inbox command without any pre-configured scope."
+commands.allow = ["get_gitlab_review_inbox"]
+
+[[permission]]
+identifier = "deny-get-gitlab-review-inbox"
+description = "Denies the get_gitlab_review_inbox command without any pre-configured scope."
+commands.deny = ["get_gitlab_review_inbox"]

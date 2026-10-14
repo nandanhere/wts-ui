@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-list-workspace-work-item-links"
+description = "Enables the list_workspace_work_item_links command without any pre-configured scope."
+commands.allow = ["list_workspace_work_item_links"]
+
+[[permission]]
+identifier = "deny-list-workspace-work-item-links"
+description = "Denies the list_workspace_work_item_links command without any pre-configured scope."
+commands.deny = ["list_workspace_work_item_links"]

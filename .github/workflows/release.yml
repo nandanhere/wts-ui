@@ -1,0 +1,112 @@
+name: Release WTS
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing semantic version tag, for example v0.6.1"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: wts-release-${{ github.event.release.tag_name || inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  macos-arm64:
+    name: Build macOS Apple Silicon release
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - name: Check out release ref
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - name: Resolve release version
+        id: version
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          tag="${INPUT_TAG:-$REF_NAME}"
+          case "$tag" in
+            v[0-9]*.[0-9]*.[0-9]*) ;;
+            *) echo "Expected a tag such as v0.6.1, got $tag" >&2; exit 1 ;;
+          esac
+          version="${tag#v}"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Use Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.13.1
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            ui/package-lock.json
+
+      - name: Use Rust 1.95
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.95.0
+          targets: aarch64-apple-darwin
+
+      - name: Cache Rust builds
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install pinned dependencies
+        run: |
+          npm ci
+          npm ci --prefix ui
+
+      - name: Stamp Tauri bundle version
+        env:
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          node - <<'NODE'
+          const fs = require('node:fs');
+          const path = 'src-tauri/tauri.conf.json';
+          const config = JSON.parse(fs.readFileSync(path, 'utf8'));
+          config.version = process.env.RELEASE_VERSION;
+          fs.writeFileSync(path, `${JSON.stringify(config, null, 2)}\n`);
+          NODE
+
+      - name: Build signed-ready macOS bundles
+        run: |
+          npm exec -- tauri build \
+            --target aarch64-apple-darwin \
+            --bundles app,dmg
+
+      - name: Verify release artifacts
+        env:
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          shopt -s nullglob
+          artifacts=(
+            target/aarch64-apple-darwin/release/bundle/macos/*.app
+            target/aarch64-apple-darwin/release/bundle/dmg/*.dmg
+          )
+          [ "${#artifacts[@]}" -gt 0 ] || { echo "No macOS artifacts produced" >&2; exit 1; }
+          printf '%s\n' "${artifacts[@]}"
+          for app in target/aarch64-apple-darwin/release/bundle/macos/*.app; do
+            ditto -c -k --sequesterRsrc --keepParent "$app" "${app%.app}.app.zip"
+          done
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: WTS ${{ steps.version.outputs.tag }}
+          generate_release_notes: true
+          files: |
+            target/aarch64-apple-darwin/release/bundle/macos/*.app
+            target/aarch64-apple-darwin/release/bundle/macos/*.app.zip
+            target/aarch64-apple-darwin/release/bundle/dmg/*.dmg

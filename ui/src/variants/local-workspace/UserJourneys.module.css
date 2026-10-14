@@ -1,0 +1,559 @@
+.section {
+  overflow: hidden;
+  background: var(--wts-surface);
+  border: 1px solid var(--wts-line);
+  border-radius: 8px;
+  box-shadow: var(--wts-shadow-sm);
+}
+
+.section button {
+  color: inherit;
+  font: inherit;
+}
+
+.header {
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr);
+  gap: 12px;
+  align-items: center;
+  padding: 15px 18px 13px;
+  background: var(--wts-surface-subtle);
+  border-bottom: 1px solid var(--wts-line);
+}
+
+.icon {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  color: var(--wts-blue);
+  background: var(--wts-blue-soft);
+  border: 1px solid color-mix(in srgb, var(--wts-blue) 42%, var(--wts-line));
+  border-radius: 7px;
+  place-items: center;
+}
+
+.icon svg {
+  width: 18px;
+  height: 18px;
+}
+
+.heading {
+  min-width: 0;
+}
+
+.eyebrow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.eyebrow > span {
+  margin-right: 2px;
+  color: var(--wts-faint);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+}
+
+.eyebrow i {
+  padding: 2px 6px;
+  color: var(--wts-text);
+  background: var(--wts-surface-muted);
+  border: 1px solid var(--wts-line);
+  border-radius: 999px;
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.heading h3 {
+  margin: 2px 0 1px;
+  color: var(--wts-ink);
+  font-size: 15px;
+}
+
+.heading p {
+  margin: 0;
+  color: var(--wts-muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.journey {
+  position: relative;
+  display: grid;
+  grid-template-columns: 24px minmax(240px, 1fr) minmax(150px, auto) auto;
+  gap: 11px;
+  align-items: center;
+  min-height: 68px;
+  padding: 10px 18px 12px;
+}
+
+.stateIcon {
+  display: grid;
+  width: 20px;
+  height: 20px;
+  color: var(--wts-faint);
+  border: 1.5px solid var(--wts-line-strong);
+  border-radius: 50%;
+  place-items: center;
+}
+
+.stateIcon svg {
+  width: 13px;
+  height: 13px;
+}
+
+.stateIcon > span {
+  width: 5px;
+  height: 5px;
+  background: var(--wts-line-strong);
+  border-radius: 50%;
+}
+
+.section[data-state="passed"] .stateIcon {
+  color: var(--wts-on-accent);
+  background: var(--wts-green);
+  border-color: var(--wts-green-line);
+}
+
+.section[data-state="failed"] .stateIcon,
+.section[data-state="timedOut"] .stateIcon,
+.section[data-state="cancelled"] .stateIcon {
+  color: var(--wts-red);
+  background: var(--wts-red-soft);
+  border-color: var(--wts-red-line);
+}
+
+.section[data-state="running"] .stateIcon {
+  color: var(--wts-blue);
+  background: var(--wts-blue-soft);
+  border-color: color-mix(in srgb, var(--wts-blue) 42%, var(--wts-line));
+}
+
+.stateIcon > i,
+.runButton > i {
+  width: 12px;
+  height: 12px;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: journeySpin 760ms linear infinite;
+}
+
+.identity,
+.result {
+  display: grid;
+  min-width: 0;
+}
+
+.identity b {
+  color: var(--wts-ink);
+  font-size: 12px;
+}
+
+.identity small {
+  overflow: hidden;
+  color: var(--wts-faint);
+  font-size: 12px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.result {
+  justify-items: end;
+}
+
+.result b {
+  color: var(--wts-muted);
+  font-size: 12px;
+}
+
+.section[data-state="passed"] .result b {
+  color: var(--wts-green);
+}
+
+.section[data-state="failed"] .result b,
+.section[data-state="timedOut"] .result b,
+.section[data-state="cancelled"] .result b {
+  color: var(--wts-red);
+}
+
+.section[data-state="running"] .result b {
+  color: var(--wts-blue);
+}
+
+.result small {
+  color: var(--wts-faint);
+  font-size: 12px;
+}
+
+.runButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-width: 82px;
+  min-height: 32px;
+  padding: 0 11px;
+  color: var(--wts-ink);
+  background: var(--wts-surface);
+  border: 1px solid var(--wts-line-strong);
+  border-radius: 5px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.runButton:hover:not(:disabled) {
+  color: var(--wts-blue);
+  background: var(--wts-surface-subtle);
+  border-color: var(--wts-line-strong);
+}
+
+.runButton:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.runButton:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+.runButton svg,
+.inlineError svg,
+.handoff button svg {
+  width: 14px;
+  height: 14px;
+}
+
+.runButton:focus-visible,
+.inlineError button:focus-visible,
+.handoff button:focus-visible,
+.evidence summary:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--wts-blue) 42%, var(--wts-line));
+  outline-offset: 2px;
+}
+
+.timeline {
+  position: absolute;
+  right: 18px;
+  bottom: 0;
+  left: 53px;
+  height: 2px;
+  overflow: hidden;
+  background: var(--wts-surface-muted);
+}
+
+.timeline span {
+  display: block;
+  min-width: 0;
+  height: 100%;
+  background: var(--wts-blue);
+  transition: width 180ms ease;
+}
+
+.section[data-state="passed"] .timeline span {
+  background: var(--wts-green);
+}
+
+.section[data-state="failed"] .timeline span,
+.section[data-state="timedOut"] .timeline span,
+.section[data-state="cancelled"] .timeline span {
+  background: var(--wts-red);
+}
+
+.section[data-state="running"] .timeline span {
+  min-width: 26%;
+  animation: journeyProgress 1.25s ease-in-out infinite;
+}
+
+.boundary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0;
+  padding: 8px 18px;
+  color: var(--wts-amber);
+  background: var(--wts-amber-soft);
+  border-top: 1px solid var(--wts-amber-line);
+  font-size: 12px;
+}
+
+.boundary button {
+  flex: 0 0 auto;
+  padding: 3px 7px;
+  color: inherit;
+  background: transparent;
+  border: 1px solid currentColor;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.boundary button:hover:not(:disabled),
+.inlineError button:hover:not(:disabled),
+.handoff button:hover:not(:disabled) {
+  background: var(--wts-surface-subtle);
+}
+
+.boundary button:active:not(:disabled),
+.inlineError button:active:not(:disabled),
+.handoff button:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+.loading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 18px;
+  color: var(--wts-muted);
+  background: var(--wts-surface-subtle);
+  border-top: 1px solid var(--wts-line);
+  font-size: 12px;
+}
+
+.loading i {
+  width: 8px;
+  height: 8px;
+  background: var(--wts-blue);
+  border-radius: 50%;
+  animation: journeyBreathe 1.2s ease-in-out infinite;
+}
+
+.inlineError {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 18px;
+  color: var(--wts-red);
+  background: var(--wts-red-soft);
+  border-top: 1px solid var(--wts-red-line);
+  font-size: 12px;
+}
+
+.inlineError > span {
+  flex: 1;
+}
+
+.inlineError button,
+.handoff button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 7px;
+  color: inherit;
+  background: transparent;
+  border: 1px solid currentColor;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.handoff button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.evidence {
+  border-top: 1px solid var(--wts-line);
+}
+
+.evidence summary {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) 16px;
+  gap: 9px;
+  align-items: center;
+  min-height: 35px;
+  padding: 5px 18px;
+  color: var(--wts-muted);
+  cursor: pointer;
+  list-style: none;
+}
+
+.evidence summary::-webkit-details-marker {
+  display: none;
+}
+
+.evidence summary:hover {
+  background: var(--wts-surface-subtle);
+}
+
+.evidence summary:active {
+  background: var(--wts-surface-muted);
+}
+
+.evidence summary > span {
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.evidence summary small {
+  overflow: hidden;
+  color: var(--wts-faint);
+  font-size: 12px;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.evidence summary > i {
+  color: var(--wts-faint);
+  font-size: 17px;
+  font-style: normal;
+  transform: rotate(90deg);
+  transition: transform 120ms ease;
+}
+
+.evidence[open] summary > i {
+  transform: rotate(-90deg);
+}
+
+.evidence > div {
+  padding: 0 18px 12px 53px;
+}
+
+.evidence dl {
+  display: grid;
+  grid-template-columns: minmax(110px, 0.8fr) minmax(150px, 1fr) minmax(220px, 2fr);
+  gap: 12px;
+  margin: 0;
+  padding: 10px;
+  background: var(--wts-surface-subtle);
+  border: 1px solid var(--wts-line);
+  border-radius: 5px;
+}
+
+.evidence dl span {
+  min-width: 0;
+}
+
+.evidence dt {
+  margin-bottom: 2px;
+  color: var(--wts-faint);
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.evidence dd {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  color: var(--wts-blue);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.evidence code {
+  font-size: 12px;
+}
+
+.handoff {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 8px;
+  padding: 9px 10px;
+  color: var(--wts-red);
+  background: var(--wts-surface-subtle);
+  border: 1px solid var(--wts-red-line);
+  border-radius: 5px;
+}
+
+.handoff > span {
+  display: grid;
+  flex: 1;
+  min-width: 0;
+}
+
+.handoff b {
+  font-size: 12px;
+}
+
+.handoff small {
+  overflow: hidden;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@keyframes journeySpin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes journeyProgress {
+  from {
+    transform: translateX(-105%);
+  }
+  to {
+    transform: translateX(385%);
+  }
+}
+
+@keyframes journeyBreathe {
+  50% {
+    opacity: 0.45;
+  }
+}
+
+@media (max-width: 760px) {
+  .journey {
+    grid-template-columns: 24px minmax(0, 1fr) auto;
+  }
+
+  .result {
+    grid-column: 2;
+    justify-items: start;
+  }
+
+  .runButton {
+    grid-column: 3;
+    grid-row: 1 / span 2;
+  }
+
+  .identity small {
+    white-space: normal;
+  }
+
+  .evidence > div {
+    padding-left: 18px;
+  }
+
+  .evidence dl {
+    grid-template-columns: 1fr;
+  }
+
+  .handoff {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .stateIcon > i,
+  .runButton > i,
+  .section[data-state="running"] .timeline span,
+  .loading i {
+    animation: none;
+  }
+
+  .timeline span,
+  .evidence summary > i {
+    transition: none;
+  }
+
+  .section button,
+  .section summary {
+    transition: none;
+  }
+}

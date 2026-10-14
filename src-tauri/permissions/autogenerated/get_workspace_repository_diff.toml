@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-get-workspace-repository-diff"
+description = "Enables the get_workspace_repository_diff command without any pre-configured scope."
+commands.allow = ["get_workspace_repository_diff"]
+
+[[permission]]
+identifier = "deny-get-workspace-repository-diff"
+description = "Denies the get_workspace_repository_diff command without any pre-configured scope."
+commands.deny = ["get_workspace_repository_diff"]

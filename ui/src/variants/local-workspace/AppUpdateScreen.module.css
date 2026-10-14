@@ -1,0 +1,187 @@
+.page {
+  height: calc(100dvh - var(--workspace-chrome-height));
+  overflow: auto;
+  padding: 32px clamp(20px, 6vw, 72px);
+  background: var(--wts-canvas);
+}
+
+.page.embedded {
+  height: auto;
+  min-height: 100%;
+  padding: 22px;
+  background: transparent;
+}
+
+.embedded .header,
+.embedded .statusCard {
+  max-width: none;
+}
+
+.embedded .header {
+  align-items: center;
+  margin-bottom: 16px;
+}
+
+.embedded .header h1 {
+  margin-top: 0;
+}
+
+.embedded .statusCard {
+  min-height: 0;
+}
+
+.header {
+  display: flex;
+  max-width: 880px;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 24px;
+  margin: 0 auto 20px;
+}
+
+.header small,
+.statusCopy > small {
+  color: var(--wts-faint);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: .05em;
+  text-transform: uppercase;
+}
+
+.header h1 {
+  margin: 3px 0 2px;
+  color: var(--wts-ink);
+  font-size: 24px;
+  line-height: 1.2;
+}
+
+.header p,
+.statusCopy p {
+  margin: 0;
+  color: var(--wts-muted);
+}
+
+.statusCard {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  max-width: 880px;
+  min-height: 180px;
+  align-items: start;
+  gap: 16px;
+  margin: 0 auto;
+  padding: 22px;
+  background: var(--wts-surface);
+  border: 1px solid var(--wts-line);
+  border-radius: var(--wts-radius-lg);
+  box-shadow: var(--wts-shadow-sm);
+}
+
+.statusCard[data-state="error"] {
+  border-color: var(--wts-red-line);
+}
+
+.statusIcon {
+  display: grid;
+  width: 38px;
+  height: 38px;
+  color: var(--wts-blue);
+  background: var(--wts-blue-soft);
+  border-radius: 50%;
+  place-items: center;
+}
+
+.statusCard[data-state="error"] .statusIcon {
+  color: var(--wts-red);
+  background: var(--wts-red-soft);
+}
+
+.statusCopy h2 {
+  margin: 5px 0 7px;
+  color: var(--wts-ink);
+  font-size: 18px;
+}
+
+.notes {
+  margin-top: 14px !important;
+  padding-top: 12px;
+  border-top: 1px solid var(--wts-line);
+  white-space: pre-wrap;
+}
+
+.actions {
+  display: flex;
+  gap: 8px;
+}
+
+.primaryButton,
+.secondaryButton {
+  display: inline-flex;
+  min-height: 34px;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 0 13px;
+  border-radius: var(--wts-radius-sm);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.primaryButton {
+  color: var(--wts-on-primary);
+  background: var(--wts-blue);
+}
+
+.secondaryButton {
+  color: var(--wts-ink);
+  background: var(--wts-surface);
+  border: 1px solid var(--wts-line-strong);
+}
+
+.primaryButton:disabled,
+.secondaryButton:disabled {
+  cursor: not-allowed;
+  opacity: .55;
+}
+
+.primaryButton:focus-visible,
+.secondaryButton:focus-visible {
+  outline: none;
+  box-shadow: var(--wts-focus-ring);
+}
+
+.progress {
+  display: grid;
+  gap: 6px;
+  margin-top: 16px;
+}
+
+.progress progress {
+  width: min(100%, 420px);
+  height: 7px;
+  accent-color: var(--wts-blue);
+}
+
+.progress small {
+  color: var(--wts-faint);
+  font-size: 12px;
+}
+
+@media (max-width: 720px) {
+  .header,
+  .statusCard {
+    align-items: stretch;
+  }
+
+  .header {
+    flex-direction: column;
+  }
+
+  .statusCard {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .actions {
+    grid-column: 1 / -1;
+  }
+}

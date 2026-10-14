@@ -1,0 +1,29 @@
+#[tauri::command]
+async fn preflight_agent_conversation_publication(
+    conversation_id: Uuid,
+    state: tauri::State<'_, LocalWtsService>,
+) -> Result<wts_app::AgentConversationPublicationPreflight, WorkspaceCommandError> {
+    let service = state.inner().clone();
+    run_blocking_command(move || {
+        service
+            .preflight_agent_conversation_publication(conversation_id)
+            .map_err(local_wts_command_error)
+    })
+    .await
+}
+
+#[tauri::command]
+async fn publish_agent_conversation_branch(
+    conversation_id: Uuid,
+    effect_digest: String,
+    state: tauri::State<'_, LocalWtsService>,
+) -> Result<wts_app::AgentConversationBranchPublicationResult, WorkspaceCommandError> {
+    let service = state.inner().clone();
+    run_blocking_command(move || {
+        service
+            .publish_agent_conversation_branch(conversation_id, &effect_digest)
+            .map_err(local_wts_command_error)
+    })
+    .await
+}
+

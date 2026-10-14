@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-list-agent-work-sets"
+description = "Enables the list_agent_work_sets command without any pre-configured scope."
+commands.allow = ["list_agent_work_sets"]
+
+[[permission]]
+identifier = "deny-list-agent-work-sets"
+description = "Denies the list_agent_work_sets command without any pre-configured scope."
+commands.deny = ["list_agent_work_sets"]

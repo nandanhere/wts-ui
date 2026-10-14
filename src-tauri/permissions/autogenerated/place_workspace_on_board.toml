@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-place-workspace-on-board"
+description = "Enables the place_workspace_on_board command without any pre-configured scope."
+commands.allow = ["place_workspace_on_board"]
+
+[[permission]]
+identifier = "deny-place-workspace-on-board"
+description = "Denies the place_workspace_on_board command without any pre-configured scope."
+commands.deny = ["place_workspace_on_board"]

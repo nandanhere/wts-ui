@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-relaunch-updated-app"
+description = "Enables the relaunch_updated_app command without any pre-configured scope."
+commands.allow = ["relaunch_updated_app"]
+
+[[permission]]
+identifier = "deny-relaunch-updated-app"
+description = "Denies the relaunch_updated_app command without any pre-configured scope."
+commands.deny = ["relaunch_updated_app"]

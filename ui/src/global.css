@@ -1,0 +1,163 @@
+:root {
+  color-scheme: light;
+  --wts-font-sans:
+    "Inter Variable", "Inter", -apple-system, BlinkMacSystemFont, "SF Pro Text",
+    "Segoe UI", sans-serif;
+  --wts-font-mono:
+    "JetBrains Mono Variable", "JetBrains Mono", "Fira Code", "SF Mono", "SFMono-Regular", Menlo, Monaco, "Cascadia Code", Consolas,
+    "Liberation Mono", monospace;
+  --wts-ink: #17233a;
+  --wts-text: #344563;
+  --wts-muted: #5f6f86;
+  --wts-faint: #718096;
+  --wts-line: #d8dee8;
+  --wts-line-strong: #bec8d6;
+  --wts-surface: #ffffff;
+  --wts-surface-subtle: #f7f9fb;
+  --wts-surface-muted: #eef1f5;
+  --wts-surface-hover: #e8edf4;
+  --wts-canvas: #f2f4f7;
+  --wts-strong-surface: #172b4d;
+  --wts-on-accent: #ffffff;
+  --wts-on-primary: #ffffff;
+  --wts-blue: #0b63ce;
+  --wts-blue-dark: #084f9f;
+  --wts-blue-soft: #eaf2fc;
+  --wts-accent: #2563eb;
+  --wts-green: #157a55;
+  --wts-green-soft: #e8f5ef;
+  --wts-green-line: #b8dfcd;
+  --wts-amber: #8a5700;
+  --wts-amber-soft: #fff3d6;
+  --wts-amber-line: #ead39e;
+  --wts-red: #b9382f;
+  --wts-red-soft: #fff0ee;
+  --wts-red-line: #ebcac6;
+  --wts-chrome: rgba(255, 255, 255, 0.92);
+  --wts-chrome-highlight: rgba(255, 255, 255, 0.9);
+  --wts-selection-ink: #10223e;
+  --wts-selection: #bfd9fa;
+  --wts-focus-ring: 0 0 0 3px rgba(11, 99, 206, 0.2);
+  --wts-radius-sm: 6px;
+  --wts-radius-md: 9px;
+  --wts-radius-lg: 12px;
+  --wts-shadow-sm: 0 1px 2px rgba(20, 33, 54, 0.07);
+  --wts-shadow-md:
+    0 14px 38px rgba(20, 33, 54, 0.14),
+    0 2px 7px rgba(20, 33, 54, 0.08);
+  --wts-control-height: 44px;
+  --wts-control-height-compact: 44px;
+  --wts-control-active: translateY(1px);
+  --wts-motion-fast: 120ms;
+  --wts-motion-panel: 180ms;
+  --wts-motion-exit: 100ms;
+  --wts-ease-out: cubic-bezier(0.2, 0, 0, 1);
+  font-feature-settings: "cv11", "ss01";
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+html[data-theme="dark"] {
+  color-scheme: dark;
+  --wts-ink: #f1f5f9;
+  --wts-text: #cbd5e1;
+  --wts-muted: #a3b1c6;
+  --wts-faint: #8b9ab0;
+  --wts-line: #2a3649;
+  --wts-line-strong: #3d4b61;
+  --wts-surface: #111827;
+  --wts-surface-subtle: #172133;
+  --wts-surface-muted: #1e293b;
+  --wts-surface-hover: #253349;
+  --wts-canvas: #090d16;
+  --wts-strong-surface: #1e293b;
+  --wts-on-accent: #f8fbff;
+  --wts-on-primary: #051021;
+  --wts-blue: #5b9cf8;
+  --wts-blue-dark: #8bbcff;
+  --wts-blue-soft: #13254a;
+  --wts-accent: #3b82f6;
+  --wts-green: #4ade80;
+  --wts-green-soft: #0f2a1c;
+  --wts-green-line: #1f5b3a;
+  --wts-amber: #fbbf24;
+  --wts-amber-soft: #2d2410;
+  --wts-amber-line: #6b531c;
+  --wts-red: #f87171;
+  --wts-red-soft: #2f1518;
+  --wts-red-line: #6f2a2e;
+  --wts-chrome: rgba(9, 13, 22, 0.88);
+  --wts-chrome-highlight: rgba(255, 255, 255, 0.04);
+  --wts-selection-ink: #eef6ff;
+  --wts-selection: #1d4ed8;
+  --wts-focus-ring: 0 0 0 3px rgba(59, 130, 246, 0.45);
+  --wts-shadow-sm: 0 1px 0 rgba(255, 255, 255, 0.03) inset, 0 1px 2px rgba(0, 0, 0, 0.35);
+  --wts-shadow-md: 0 0 0 1px rgba(148, 163, 184, 0.08), 0 16px 40px rgba(0, 0, 0, 0.45);
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+  margin: 0;
+}
+
+body {
+  min-width: 320px;
+  color: var(--wts-ink);
+  background: var(--wts-canvas);
+  font-family: var(--wts-font-sans);
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+::selection {
+  color: var(--wts-selection-ink);
+  background: var(--wts-selection);
+}
+
+/* Fade dialogs without moving their controls. Radix retains closing dialogs. */
+[data-ui][role="dialog"][data-state="open"] {
+  animation: wtsPanelIn var(--wts-motion-panel) var(--wts-ease-out);
+}
+
+[data-ui][role="dialog"][data-state="closed"] {
+  animation: wtsPanelOut var(--wts-motion-exit) ease-in forwards;
+  pointer-events: none;
+}
+
+@keyframes wtsPanelIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes wtsPanelOut {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+
+/* Include portals and feedback controls outside the workspace shell. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-delay: 0ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    transition-delay: 0ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+[data-feedback-reveal="true"] {
+  outline: 2px solid var(--wts-blue);
+  outline-offset: -2px;
+}

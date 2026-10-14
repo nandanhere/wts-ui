@@ -1,0 +1,29 @@
+[package]
+name = "wts-app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Trusted local orchestration service for WTS"
+
+[dependencies]
+base64 = "0.22"
+png = "0.17"
+hex.workspace = true
+json5 = "0.4"
+libc = "0.2"
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+toml = "0.9"
+tracing.workspace = true
+url.workspace = true
+uuid.workspace = true
+wts-core = { path = "../wts-core" }
+wts-git = { path = "../wts-git" }
+wts-integrations = { path = "../wts-integrations" }
+wts-store = { path = "../wts-store" }
+
+[dev-dependencies]
+tempfile = "3"

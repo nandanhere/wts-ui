@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-transition-workspace-workflow"
+description = "Enables the transition_workspace_workflow command without any pre-configured scope."
+commands.allow = ["transition_workspace_workflow"]
+
+[[permission]]
+identifier = "deny-transition-workspace-workflow"
+description = "Denies the transition_workspace_workflow command without any pre-configured scope."
+commands.deny = ["transition_workspace_workflow"]

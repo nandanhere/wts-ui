@@ -1,0 +1,6 @@
+
+Running 1 test using 1 worker
+
+  ✓  1 [chromium] › e2e/product-polish.spec.ts:120:1 › medium viewport keeps workspace and Plans controls readable (7.2s)
+
+  1 passed (32.5s)

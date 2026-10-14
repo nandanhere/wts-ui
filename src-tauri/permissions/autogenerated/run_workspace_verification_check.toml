@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-run-workspace-verification-check"
+description = "Enables the run_workspace_verification_check command without any pre-configured scope."
+commands.allow = ["run_workspace_verification_check"]
+
+[[permission]]
+identifier = "deny-run-workspace-verification-check"
+description = "Denies the run_workspace_verification_check command without any pre-configured scope."
+commands.deny = ["run_workspace_verification_check"]

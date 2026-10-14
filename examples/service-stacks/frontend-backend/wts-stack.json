@@ -1,0 +1,46 @@
+{
+  "schemaVersion": 1,
+  "id": "frontend-backend",
+  "description": "A browser-facing frontend with a JSON backend dependency.",
+  "ports": [
+    {
+      "id": "backend",
+      "environment": "BACKEND_PORT",
+      "offset": 0
+    },
+    {
+      "id": "frontend",
+      "environment": "FRONTEND_PORT",
+      "offset": 1
+    }
+  ],
+  "processes": [
+    {
+      "id": "backend",
+      "workingDirectory": "backend",
+      "executable": "node",
+      "arguments": ["src/server.mjs"],
+      "dependencies": [],
+      "health": {
+        "port": "backend",
+        "path": "/health"
+      }
+    },
+    {
+      "id": "frontend",
+      "workingDirectory": "frontend",
+      "executable": "node",
+      "arguments": ["src/server.mjs"],
+      "dependencies": ["backend"],
+      "health": {
+        "port": "frontend",
+        "path": "/health"
+      }
+    }
+  ],
+  "smoke": {
+    "workingDirectory": ".",
+    "executable": "node",
+    "arguments": ["smoke.mjs"]
+  }
+}

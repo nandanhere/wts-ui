@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-list-active-jira-issues"
+description = "Enables the list_active_jira_issues command without any pre-configured scope."
+commands.allow = ["list_active_jira_issues"]
+
+[[permission]]
+identifier = "deny-list-active-jira-issues"
+description = "Denies the list_active_jira_issues command without any pre-configured scope."
+commands.deny = ["list_active_jira_issues"]

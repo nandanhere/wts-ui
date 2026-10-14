@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-import-open-project-work-package"
+description = "Enables the import_open_project_work_package command without any pre-configured scope."
+commands.allow = ["import_open_project_work_package"]
+
+[[permission]]
+identifier = "deny-import-open-project-work-package"
+description = "Denies the import_open_project_work_package command without any pre-configured scope."
+commands.deny = ["import_open_project_work_package"]

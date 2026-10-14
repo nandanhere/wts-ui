@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-list-agent-conversations"
+description = "Enables the list_agent_conversations command without any pre-configured scope."
+commands.allow = ["list_agent_conversations"]
+
+[[permission]]
+identifier = "deny-list-agent-conversations"
+description = "Denies the list_agent_conversations command without any pre-configured scope."
+commands.deny = ["list_agent_conversations"]

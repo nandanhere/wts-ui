@@ -1,0 +1,45 @@
+{
+  "schemaVersion": 1,
+  "scenarioId": "GREETING-201",
+  "title": "Add a formal greeting contract across frontend and backend",
+  "execution": "parallel-then-integrate",
+  "acceptanceInjections": [
+    {
+      "repository": "backend",
+      "source": "collaboration/acceptance/backend-formal.test.mjs",
+      "target": "test/formal-greeting.test.mjs"
+    },
+    {
+      "repository": "frontend",
+      "source": "collaboration/acceptance/frontend-formal.test.mjs",
+      "target": "test/formal-greeting.test.mjs"
+    }
+  ],
+  "workstreams": [
+    {
+      "id": "backend-contract",
+      "repository": "backend",
+      "brief": "collaboration/backend.md",
+      "allowedPaths": ["src/greeting.mjs", "src/server.mjs"],
+      "verification": {
+        "executable": "npm",
+        "arguments": ["test", "--silent"]
+      }
+    },
+    {
+      "id": "frontend-contract",
+      "repository": "frontend",
+      "brief": "collaboration/frontend.md",
+      "allowedPaths": ["src/client.mjs", "src/server.mjs"],
+      "verification": {
+        "executable": "npm",
+        "arguments": ["test", "--silent"]
+      }
+    }
+  ],
+  "integration": {
+    "brief": "collaboration/integration.md",
+    "executable": "node",
+    "arguments": ["collaboration/smoke.mjs"]
+  }
+}

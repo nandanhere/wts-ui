@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-resolve-workspace-review-thread"
+description = "Enables the resolve_workspace_review_thread command without any pre-configured scope."
+commands.allow = ["resolve_workspace_review_thread"]
+
+[[permission]]
+identifier = "deny-resolve-workspace-review-thread"
+description = "Denies the resolve_workspace_review_thread command without any pre-configured scope."
+commands.deny = ["resolve_workspace_review_thread"]

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-clone-repository"
+description = "Enables the clone_repository command without any pre-configured scope."
+commands.allow = ["clone_repository"]
+
+[[permission]]
+identifier = "deny-clone-repository"
+description = "Denies the clone_repository command without any pre-configured scope."
+commands.deny = ["clone_repository"]

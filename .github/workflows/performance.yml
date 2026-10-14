@@ -1,0 +1,28 @@
+name: WTS performance
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 3 * * 6"
+
+permissions:
+  contents: read
+
+jobs:
+  apple-silicon-profile:
+    name: Bounded Apple Silicon profiling matrix
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.95.0
+      - name: Run sequential bounded matrix
+        run: bash scripts/profile-matrix.sh
+      - name: Upload profile reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: wts-apple-silicon-profiles-${{ github.run_id }}
+          path: target/profiles/macos-arm64
+          retention-days: 14

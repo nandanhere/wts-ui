@@ -1,0 +1,8 @@
+{
+  "name": "wts-fixture-order-read-api",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test"
+  }
+}

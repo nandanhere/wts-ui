@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-link-workspace-gitlab-merge-request"
+description = "Enables the link_workspace_gitlab_merge_request command without any pre-configured scope."
+commands.allow = ["link_workspace_gitlab_merge_request"]
+
+[[permission]]
+identifier = "deny-link-workspace-gitlab-merge-request"
+description = "Denies the link_workspace_gitlab_merge_request command without any pre-configured scope."
+commands.deny = ["link_workspace_gitlab_merge_request"]

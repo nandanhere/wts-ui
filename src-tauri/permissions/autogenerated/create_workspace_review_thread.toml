@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-create-workspace-review-thread"
+description = "Enables the create_workspace_review_thread command without any pre-configured scope."
+commands.allow = ["create_workspace_review_thread"]
+
+[[permission]]
+identifier = "deny-create-workspace-review-thread"
+description = "Denies the create_workspace_review_thread command without any pre-configured scope."
+commands.deny = ["create_workspace_review_thread"]

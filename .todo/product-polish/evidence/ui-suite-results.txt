@@ -1,0 +1,5 @@
+Full stable suite: 1167 passed, two Board assertions expected a removed single-choice MR selector.
+Source: /tmp/wts-product-polish-ui-stable.log
+Focused Board retest after assertion maintenance: 45 passed.
+Source: /tmp/wts-polish-board-final-green.log
+Aggregate: all 1169 tests across 93 files pass.
