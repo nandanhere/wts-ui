@@ -11,6 +11,7 @@ mod jira_mcp;
 mod model;
 mod open_project;
 mod probe;
+mod process_group;
 mod time_review;
 
 pub use activity_watch::{

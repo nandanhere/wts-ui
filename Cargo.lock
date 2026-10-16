@@ -5438,6 +5438,7 @@ name = "wts-integrations"
 version = "0.1.0"
 dependencies = [
  "json5",
+ "libc",
  "reqwest",
  "serde",
  "serde_json",

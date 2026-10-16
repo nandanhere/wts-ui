@@ -219,7 +219,27 @@ fn read_bounded_file(path: &Path, max_bytes: u64) -> std::io::Result<Vec<u8>> {
             "file is outside the allowed bounds",
         ));
     }
-    fs::read(path)
+    // Read through one open handle with a hard cap so a file that grows
+    // or is swapped after the metadata check cannot bypass the bound.
+    let mut file = fs::File::open(path)?;
+    let handle_metadata = file.metadata()?;
+    if !handle_metadata.is_file() || handle_metadata.len() > max_bytes {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "file is outside the allowed bounds",
+        ));
+    }
+    let mut bytes = Vec::new();
+    std::io::Read::by_ref(&mut file)
+        .take(max_bytes.saturating_add(1))
+        .read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > max_bytes {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "file is outside the allowed bounds",
+        ));
+    }
+    Ok(bytes)
 }
 const NODE_BINARY_ENV: &str = "WTS_BROWSER_NODE";
 
@@ -11848,8 +11868,9 @@ mod tests {
         has_npm_test_script, is_workspace_code_file, jira_keys_in_text, load_code_review_snapshots,
         map_change_request_publish_error, materialization_matches_repository_plans,
         merge_observed_repository_recommendations, patch_contains_changed_line,
-        planning_starter_files, repository_recommendations, should_record_graph_failure,
-        utc_date_for_unix_ms, validate_runtime_selection, workspace_jira_link_preview,
+        planning_starter_files, read_bounded_file, repository_recommendations,
+        should_record_graph_failure, utc_date_for_unix_ms, validate_runtime_selection,
+        workspace_jira_link_preview,
     };
     use crate::{
         GraphWorkspaceStatus, MaterializedWorktree, RepositoryBranchSummary,
@@ -11860,6 +11881,16 @@ mod tests {
     };
     use std::{cell::RefCell, fs};
     use uuid::Uuid;
+
+    #[test]
+    fn read_bounded_file_enforces_the_cap_on_the_bytes_read() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("evidence.bin");
+        fs::write(&path, vec![b'x'; 64]).unwrap();
+        assert_eq!(read_bounded_file(&path, 64).unwrap().len(), 64);
+        let error = read_bounded_file(&path, 63).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+    }
 
     #[cfg(unix)]
     #[test]

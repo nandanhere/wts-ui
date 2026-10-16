@@ -254,6 +254,12 @@ fn read_repository_metadata(supplied: &Path) -> Result<RepositoryMetadata, GitEr
             "--git-common-dir",
         ],
     )?;
+    // Capture the failure before success_text consumes the output.
+    let failure = if output.status.success() {
+        None
+    } else {
+        Some(output.command_error(GitOperation::InspectRepository))
+    };
     let text = output.success_text(GitOperation::InspectRepository)?;
     let mut lines = text.lines();
     let inside = lines.next();
@@ -265,8 +271,8 @@ fn read_repository_metadata(supplied: &Path) -> Result<RepositoryMetadata, GitEr
     if inside == Some("false") {
         return Err(GitError::NotAWorktree);
     }
-    if !output.status.success() {
-        return Err(output.command_error(GitOperation::InspectRepository));
+    if let Some(error) = failure {
+        return Err(error);
     }
     if inside != Some("true") {
         return Err(GitError::InvalidRepositoryMetadata);

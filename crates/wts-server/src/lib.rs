@@ -24,6 +24,7 @@ use std::{
     net::SocketAddr,
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
+    time::Instant,
 };
 use subtle::ConstantTimeEq;
 use thiserror::Error;
@@ -2340,6 +2341,14 @@ struct DurableJobSnapshot {
 struct DurableJobRecord {
     snapshot: DurableJobSnapshot,
     cancellation: Arc<AtomicBool>,
+    terminal_at: Option<Instant>,
+}
+
+fn is_terminal(state: DurableJobState) -> bool {
+    matches!(
+        state,
+        DurableJobState::Completed | DurableJobState::Failed | DurableJobState::Cancelled
+    )
 }
 
 #[derive(Default)]
@@ -2350,6 +2359,22 @@ struct DurableJobRegistry {
 impl DurableJobRegistry {
     fn start(&self, kind: &str) -> Option<Uuid> {
         let mut jobs = self.jobs.lock().ok()?;
+        if jobs.len() >= MAX_DURABLE_JOBS {
+            // Evict the oldest terminal jobs so finished work cannot
+            // permanently block new durable jobs. Active jobs are kept.
+            let mut terminal: Vec<(Instant, Uuid)> = jobs
+                .iter()
+                .filter(|(_, job)| is_terminal(job.snapshot.state))
+                .map(|(id, job)| (job.terminal_at.unwrap_or(Instant::now()), *id))
+                .collect();
+            terminal.sort_by_key(|(at, _)| *at);
+            for (_, id) in terminal {
+                if jobs.len() < MAX_DURABLE_JOBS {
+                    break;
+                }
+                jobs.remove(&id);
+            }
+        }
         if jobs.len() >= MAX_DURABLE_JOBS {
             return None;
         }
@@ -2366,6 +2391,7 @@ impl DurableJobRegistry {
                     error: None,
                 },
                 cancellation: Arc::new(AtomicBool::new(false)),
+                terminal_at: None,
             },
         );
         Some(job_id)
@@ -2394,6 +2420,7 @@ impl DurableJobRegistry {
         if matches!(job.snapshot.state, DurableJobState::Queued) {
             job.snapshot.state = DurableJobState::Cancelled;
             job.snapshot.detail = Some("The operation was cancelled before it started.".into());
+            job.terminal_at = Some(Instant::now());
         }
         Some(job.snapshot.clone())
     }
@@ -2405,6 +2432,9 @@ impl DurableJobRegistry {
         if let Ok(mut jobs) = self.jobs.lock() {
             if let Some(job) = jobs.get_mut(&job_id) {
                 update(&mut job.snapshot);
+                if is_terminal(job.snapshot.state) && job.terminal_at.is_none() {
+                    job.terminal_at = Some(Instant::now());
+                }
             }
         }
     }
@@ -6684,6 +6714,31 @@ mod tests {
         let cancelled = registry.cancel(job_id).expect("cancelled job");
         assert!(cancellation.load(Ordering::Acquire));
         assert_eq!(cancelled.state, DurableJobState::Running);
+    }
+
+    #[test]
+    fn durable_jobs_evict_terminal_jobs_when_the_registry_is_full() {
+        let registry = DurableJobRegistry::default();
+        for _ in 0..MAX_DURABLE_JOBS {
+            let job_id = registry.start("verification").expect("job slot");
+            registry.update(job_id, |job| {
+                job.state = DurableJobState::Completed;
+            });
+        }
+        // All slots hold terminal jobs: a new job must still be accepted.
+        assert!(registry.start("verification").is_some());
+    }
+
+    #[test]
+    fn durable_jobs_reject_new_jobs_only_when_active_jobs_fill_the_registry() {
+        let registry = DurableJobRegistry::default();
+        for _ in 0..MAX_DURABLE_JOBS {
+            let job_id = registry.start("verification").expect("job slot");
+            registry.update(job_id, |job| {
+                job.state = DurableJobState::Running;
+            });
+        }
+        assert!(registry.start("verification").is_none());
     }
     use axum::{
         body::{Body, to_bytes},

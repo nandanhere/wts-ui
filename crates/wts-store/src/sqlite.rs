@@ -325,7 +325,7 @@ impl WorkspaceStore {
             .into_iter()
             .map(|raw| {
                 let decoded = decode_projection(raw)?;
-                self.view(decoded.record, decoded.lifecycle)
+                self.view(&connection, decoded.record, decoded.lifecycle)
             })
             .collect::<Result<Vec<_>, _>>()?;
         Ok(WorkspaceList {
@@ -338,7 +338,7 @@ impl WorkspaceStore {
     pub fn get(&self, workspace_id: Uuid) -> Result<Option<WorkspaceView>, WorkspaceStoreError> {
         let connection = self.connection()?;
         load_projection(&connection, &workspace_id.to_string())?
-            .map(|decoded| self.view(decoded.record, decoded.lifecycle))
+            .map(|decoded| self.view(&connection, decoded.record, decoded.lifecycle))
             .transpose()
     }
 
@@ -1129,7 +1129,7 @@ impl WorkspaceStore {
             ],
         )?;
         transaction.commit()?;
-        self.view(decoded.record, decoded.lifecycle)
+        self.view(&connection, decoded.record, decoded.lifecycle)
     }
 
     pub fn add_repository(
@@ -1197,7 +1197,7 @@ impl WorkspaceStore {
             )?;
         }
         transaction.commit()?;
-        self.view(decoded.record, decoded.lifecycle)
+        self.view(&connection, decoded.record, decoded.lifecycle)
     }
 
     pub fn remove_repository(
@@ -1241,7 +1241,7 @@ impl WorkspaceStore {
             )?;
         }
         transaction.commit()?;
-        self.view(decoded.record, decoded.lifecycle)
+        self.view(&connection, decoded.record, decoded.lifecycle)
     }
 
     /// Returns an already-created workspace for this exact idempotent request.
@@ -1281,7 +1281,7 @@ impl WorkspaceStore {
             )
         })?;
         Ok(Some(CreateWorkspaceResult {
-            workspace: self.view(decoded.record, decoded.lifecycle)?,
+            workspace: self.view(&connection, decoded.record, decoded.lifecycle)?,
             replayed: true,
         }))
     }
@@ -1319,7 +1319,7 @@ impl WorkspaceStore {
             })?;
             transaction.commit()?;
             return Ok(CreateWorkspaceResult {
-                workspace: self.view(decoded.record, decoded.lifecycle)?,
+                workspace: self.view(&connection, decoded.record, decoded.lifecycle)?,
                 replayed: true,
             });
         }
@@ -1452,7 +1452,7 @@ impl WorkspaceStore {
         transaction.commit()?;
 
         Ok(CreateWorkspaceResult {
-            workspace: self.view(record, lifecycle)?,
+            workspace: self.view(&connection, record, lifecycle)?,
             replayed: false,
         })
     }
@@ -1610,115 +1610,35 @@ impl WorkspaceStore {
         set_private_file_permissions(&self.inner.database_path)?;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let version: i64 = transaction.query_row("PRAGMA user_version", [], |row| row.get(0))?;
-        match version {
-            0 => {
-                transaction.execute_batch(include_str!("../migrations/0001.sql"))?;
-                transaction.execute_batch(include_str!("../migrations/0002.sql"))?;
-                transaction.execute_batch(include_str!("../migrations/0003.sql"))?;
-                transaction.execute_batch(include_str!("../migrations/0004.sql"))?;
-                transaction.execute_batch(include_str!("../migrations/0005.sql"))?;
-                transaction.execute_batch(include_str!("../migrations/0006.sql"))?;
-                transaction.execute_batch(include_str!("../migrations/0007.sql"))?;
-                transaction.execute_batch(include_str!("../migrations/0008.sql"))?;
-                transaction.execute_batch(include_str!("../migrations/0009.sql"))?;
-                transaction.execute_batch(include_str!("../migrations/0010.sql"))?;
-                transaction.execute_batch(include_str!("../migrations/0011.sql"))?;
-                transaction.pragma_update(None, "user_version", STORE_SCHEMA_VERSION)?;
-            }
-            1 => {
-                transaction.execute_batch(include_str!("../migrations/0002.sql"))?;
-                transaction.execute_batch(include_str!("../migrations/0003.sql"))?;
-                transaction.execute_batch(include_str!("../migrations/0004.sql"))?;
-                transaction.execute_batch(include_str!("../migrations/0005.sql"))?;
-                transaction.execute_batch(include_str!("../migrations/0006.sql"))?;
-                transaction.execute_batch(include_str!("../migrations/0007.sql"))?;
-                transaction.execute_batch(include_str!("../migrations/0008.sql"))?;
-                transaction.execute_batch(include_str!("../migrations/0009.sql"))?;
-                transaction.execute_batch(include_str!("../migrations/0010.sql"))?;
-                transaction.execute_batch(include_str!("../migrations/0011.sql"))?;
-                transaction.pragma_update(None, "user_version", STORE_SCHEMA_VERSION)?;
-            }
-            2 => {
-                transaction.execute_batch(include_str!("../migrations/0003.sql"))?;
-                transaction.execute_batch(include_str!("../migrations/0004.sql"))?;
-                transaction.execute_batch(include_str!("../migrations/0005.sql"))?;
-                transaction.execute_batch(include_str!("../migrations/0006.sql"))?;
-                transaction.execute_batch(include_str!("../migrations/0007.sql"))?;
-                transaction.execute_batch(include_str!("../migrations/0008.sql"))?;
-                transaction.execute_batch(include_str!("../migrations/0009.sql"))?;
-                transaction.execute_batch(include_str!("../migrations/0010.sql"))?;
-                transaction.execute_batch(include_str!("../migrations/0011.sql"))?;
-                transaction.pragma_update(None, "user_version", STORE_SCHEMA_VERSION)?;
-            }
-            3 => {
-                transaction.execute_batch(include_str!("../migrations/0004.sql"))?;
-                transaction.execute_batch(include_str!("../migrations/0005.sql"))?;
-                transaction.execute_batch(include_str!("../migrations/0006.sql"))?;
-                transaction.execute_batch(include_str!("../migrations/0007.sql"))?;
-                transaction.execute_batch(include_str!("../migrations/0008.sql"))?;
-                transaction.execute_batch(include_str!("../migrations/0009.sql"))?;
-                transaction.execute_batch(include_str!("../migrations/0010.sql"))?;
-                transaction.execute_batch(include_str!("../migrations/0011.sql"))?;
-                transaction.pragma_update(None, "user_version", STORE_SCHEMA_VERSION)?;
-            }
-            4 => {
-                transaction.execute_batch(include_str!("../migrations/0005.sql"))?;
-                transaction.execute_batch(include_str!("../migrations/0006.sql"))?;
-                transaction.execute_batch(include_str!("../migrations/0007.sql"))?;
-                transaction.execute_batch(include_str!("../migrations/0008.sql"))?;
-                transaction.execute_batch(include_str!("../migrations/0009.sql"))?;
-                transaction.execute_batch(include_str!("../migrations/0010.sql"))?;
-                transaction.execute_batch(include_str!("../migrations/0011.sql"))?;
-                transaction.pragma_update(None, "user_version", STORE_SCHEMA_VERSION)?;
-            }
-            5 => {
-                transaction.execute_batch(include_str!("../migrations/0006.sql"))?;
-                transaction.execute_batch(include_str!("../migrations/0007.sql"))?;
-                transaction.execute_batch(include_str!("../migrations/0008.sql"))?;
-                transaction.execute_batch(include_str!("../migrations/0009.sql"))?;
-                transaction.execute_batch(include_str!("../migrations/0010.sql"))?;
-                transaction.execute_batch(include_str!("../migrations/0011.sql"))?;
-                transaction.pragma_update(None, "user_version", STORE_SCHEMA_VERSION)?;
-            }
-            6 => {
-                transaction.execute_batch(include_str!("../migrations/0007.sql"))?;
-                transaction.execute_batch(include_str!("../migrations/0008.sql"))?;
-                transaction.execute_batch(include_str!("../migrations/0009.sql"))?;
-                transaction.execute_batch(include_str!("../migrations/0010.sql"))?;
-                transaction.execute_batch(include_str!("../migrations/0011.sql"))?;
-                transaction.pragma_update(None, "user_version", STORE_SCHEMA_VERSION)?;
-            }
-            7 => {
-                transaction.execute_batch(include_str!("../migrations/0008.sql"))?;
-                transaction.execute_batch(include_str!("../migrations/0009.sql"))?;
-                transaction.execute_batch(include_str!("../migrations/0010.sql"))?;
-                transaction.execute_batch(include_str!("../migrations/0011.sql"))?;
-                transaction.pragma_update(None, "user_version", STORE_SCHEMA_VERSION)?;
-            }
-            8 => {
-                transaction.execute_batch(include_str!("../migrations/0009.sql"))?;
-                transaction.execute_batch(include_str!("../migrations/0010.sql"))?;
-                transaction.execute_batch(include_str!("../migrations/0011.sql"))?;
-                transaction.pragma_update(None, "user_version", STORE_SCHEMA_VERSION)?;
-            }
-            9 => {
-                transaction.execute_batch(include_str!("../migrations/0010.sql"))?;
-                transaction.execute_batch(include_str!("../migrations/0011.sql"))?;
-                transaction.pragma_update(None, "user_version", STORE_SCHEMA_VERSION)?;
-            }
-            10 => {
-                transaction.execute_batch(include_str!("../migrations/0011.sql"))?;
-                transaction.pragma_update(None, "user_version", STORE_SCHEMA_VERSION)?;
-            }
-            STORE_SCHEMA_VERSION => {}
-            found if found > STORE_SCHEMA_VERSION => {
-                return Err(WorkspaceStoreError::UnsupportedSchemaVersion { found });
-            }
-            found => {
-                return Err(WorkspaceStoreError::CorruptRecord(format!(
-                    "unsupported historical store schema {found}"
-                )));
-            }
+        if version > STORE_SCHEMA_VERSION {
+            return Err(WorkspaceStoreError::UnsupportedSchemaVersion { found: version });
+        }
+        if version < 0 {
+            return Err(WorkspaceStoreError::CorruptRecord(format!(
+                "unsupported historical store schema {version}"
+            )));
+        }
+        // Migrations are applied in order; MIGRATIONS[i] upgrades
+        // schema version i to i + 1. Adding a migration means appending
+        // one entry here and bumping STORE_SCHEMA_VERSION.
+        const MIGRATIONS: [&str; 11] = [
+            include_str!("../migrations/0001.sql"),
+            include_str!("../migrations/0002.sql"),
+            include_str!("../migrations/0003.sql"),
+            include_str!("../migrations/0004.sql"),
+            include_str!("../migrations/0005.sql"),
+            include_str!("../migrations/0006.sql"),
+            include_str!("../migrations/0007.sql"),
+            include_str!("../migrations/0008.sql"),
+            include_str!("../migrations/0009.sql"),
+            include_str!("../migrations/0010.sql"),
+            include_str!("../migrations/0011.sql"),
+        ];
+        for migration in MIGRATIONS.iter().skip(version as usize) {
+            transaction.execute_batch(migration)?;
+        }
+        if version < STORE_SCHEMA_VERSION {
+            transaction.pragma_update(None, "user_version", STORE_SCHEMA_VERSION)?;
         }
         transaction.commit()?;
         Ok(())
@@ -1746,6 +1666,7 @@ impl WorkspaceStore {
 
     fn view(
         &self,
+        connection: &Connection,
         record: WorkspaceRecord,
         lifecycle: WorkspaceLifecycleSummary,
     ) -> Result<WorkspaceView, WorkspaceStoreError> {
@@ -1765,9 +1686,8 @@ impl WorkspaceStore {
         debug_assert!(
             workspace_display_path.starts_with(self.inner.workspace_root.display_path.as_str())
         );
-        let connection = self.connection()?;
-        let observed_work_items = load_observed_work_items(&connection, record.workspace_id)?;
-        let workflow = load_workflow(&connection, record.workspace_id)?;
+        let observed_work_items = load_observed_work_items(connection, record.workspace_id)?;
+        let workflow = load_workflow(connection, record.workspace_id)?;
         Ok(WorkspaceView {
             schema_version: record.schema_version,
             workspace_id: record.workspace_id,

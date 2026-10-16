@@ -30,11 +30,13 @@ pub(crate) struct CommandOutput {
 }
 
 impl CommandOutput {
-    pub fn success_text(&self, operation: GitOperation) -> Result<String, GitError> {
+    pub fn success_text(mut self, operation: GitOperation) -> Result<String, GitError> {
         if self.stdout_truncated {
             return Err(GitError::OutputTooLarge { operation });
         }
-        String::from_utf8(self.stdout.clone()).map_err(|_| GitError::InvalidRepositoryMetadata)
+        // Take the buffer instead of cloning it: stdout can be several MiB.
+        String::from_utf8(std::mem::take(&mut self.stdout))
+            .map_err(|_| GitError::InvalidRepositoryMetadata)
     }
 
     pub fn command_error(&self, operation: GitOperation) -> GitError {

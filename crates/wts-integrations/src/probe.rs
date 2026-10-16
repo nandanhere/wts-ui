@@ -483,13 +483,14 @@ impl ProcessCommandRunner {
 
 impl CommandRunner for ProcessCommandRunner {
     fn run(&self, probe: CommandProbe<'_>) -> Result<ProbeOutput, ProbeFailure> {
-        let mut child = Command::new(probe.executable)
+        let mut command = Command::new(probe.executable);
+        command
             .args(probe.args)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .map_err(|_| ProbeFailure::Spawn)?;
+            .stderr(Stdio::piped());
+        crate::process_group::configure_process_group(&mut command);
+        let mut child = command.spawn().map_err(|_| ProbeFailure::Spawn)?;
 
         let Some(stdout) = child.stdout.take() else {
             terminate(&mut child);
@@ -539,8 +540,7 @@ impl CommandRunner for ProcessCommandRunner {
 }
 
 fn terminate(child: &mut std::process::Child) {
-    let _ = child.kill();
-    let _ = child.wait();
+    crate::process_group::terminate_process_group(child);
 }
 
 fn read_bounded(reader: impl Read, max_output_bytes: usize) -> io::Result<Vec<u8>> {

@@ -566,14 +566,15 @@ struct McpClient {
 
 impl McpClient {
     fn start(registration: &StdioRegistration) -> Result<Self, JiraMcpError> {
-        let mut child = Command::new(&registration.command)
+        let mut command = Command::new(&registration.command);
+        command
             .args(&registration.args)
             .envs(&registration.env)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .spawn()
-            .map_err(|_| JiraMcpError::SpawnFailed)?;
+            .stderr(Stdio::null());
+        crate::process_group::configure_process_group(&mut command);
+        let mut child = command.spawn().map_err(|_| JiraMcpError::SpawnFailed)?;
         let stdin = child.stdin.take().ok_or(JiraMcpError::SpawnFailed)?;
         let stdout = child.stdout.take().ok_or(JiraMcpError::SpawnFailed)?;
         let (sender, messages) = mpsc::sync_channel(32);
@@ -802,8 +803,9 @@ fn extract_active_issues(content: &str) -> Result<Vec<JiraActiveIssue>, JiraMcpE
 
 impl Drop for McpClient {
     fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        // Terminate the whole group: MCP servers can spawn containers
+        // or grandchildren that outlive the direct child.
+        crate::process_group::terminate_process_group(&mut self.child);
     }
 }
 

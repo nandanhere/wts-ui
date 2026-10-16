@@ -46,6 +46,13 @@ impl GitWorktreeService {
     ) -> Result<Option<(Vec<u8>, u32)>, GitError> {
         source::checkpoint_bytes(root, file_path)
     }
+    pub(crate) fn checkpoint_source_digest(
+        &self,
+        root: &Path,
+        file_path: &str,
+    ) -> Result<Option<(String, u32)>, GitError> {
+        source::checkpoint_digest(root, file_path)
+    }
     #[allow(
         clippy::too_many_arguments,
         reason = "The file and root expectations are separate trust checks."
@@ -334,6 +341,91 @@ mod source {
     ) -> Result<Option<(Vec<u8>, u32)>, GitError> {
         Ok(checkpoint_raw_checked(root, file_path, None)?
             .map(|(source, mode)| (source.content, mode)))
+    }
+
+    /// Streaming SHA-256 of a checkpoint source file.
+    ///
+    /// Uses the same no-follow directory traversal as
+    /// `checkpoint_raw_checked`, but hashes in chunks so the stability
+    /// re-check never materializes a second full copy of the file.
+    /// Returns the digest in the same `sha256:<hex>` format produced
+    /// from the captured bytes, plus the file mode.
+    pub(super) fn checkpoint_digest(
+        root: &Path,
+        file_path: &str,
+    ) -> Result<Option<(String, u32)>, GitError> {
+        let parts = components(file_path)?;
+        let mut directory = open_root(root, None)?;
+        for component in &parts[..parts.len() - 1] {
+            let fd = unsafe {
+                libc::openat(
+                    directory.as_raw_fd(),
+                    component.as_ptr(),
+                    libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+                )
+            };
+            if fd < 0 {
+                return if std::io::Error::last_os_error().kind() == std::io::ErrorKind::NotFound {
+                    Ok(None)
+                } else {
+                    Err(GitError::WorktreeFileUnavailable)
+                };
+            }
+            directory = unsafe { File::from_raw_fd(fd) };
+        }
+        let leaf = parts.last().expect("validated path");
+        let mut stat = std::mem::MaybeUninit::<libc::stat>::uninit();
+        if unsafe {
+            libc::fstatat(
+                directory.as_raw_fd(),
+                leaf.as_ptr(),
+                stat.as_mut_ptr(),
+                libc::AT_SYMLINK_NOFOLLOW,
+            )
+        } < 0
+        {
+            return if std::io::Error::last_os_error().kind() == std::io::ErrorKind::NotFound {
+                Ok(None)
+            } else {
+                Err(GitError::WorktreeFileUnavailable)
+            };
+        }
+        let file = open_at(&directory, leaf, libc::O_RDONLY | libc::O_NONBLOCK, 0)?;
+        let before = file.metadata().map_err(|_| GitError::Filesystem)?;
+        if !before.is_file() {
+            return Err(GitError::WorktreeFileUnavailable);
+        }
+        if before.len() > MAX_WORKTREE_SOURCE_BYTES as u64 {
+            return Err(GitError::WorktreeFileTooLarge);
+        }
+        let mut hasher = Sha256::new();
+        let mut reader = (&file).take((MAX_WORKTREE_SOURCE_BYTES + 1) as u64);
+        let mut chunk = [0u8; 8192];
+        let mut total: u64 = 0;
+        loop {
+            let read = reader.read(&mut chunk).map_err(|_| GitError::Filesystem)?;
+            if read == 0 {
+                break;
+            }
+            total += read as u64;
+            if total > MAX_WORKTREE_SOURCE_BYTES as u64 {
+                return Err(GitError::WorktreeFileTooLarge);
+            }
+            hasher.update(&chunk[..read]);
+        }
+        let after = file.metadata().map_err(|_| GitError::Filesystem)?;
+        if before.dev() != after.dev()
+            || before.ino() != after.ino()
+            || before.len() != after.len()
+            || before.mtime() != after.mtime()
+            || before.mtime_nsec() != after.mtime_nsec()
+        {
+            return Err(GitError::WorktreeFileConflict);
+        }
+        Ok(Some((
+            format!("sha256:{:x}", hasher.finalize()),
+            after.mode() & 0o777,
+        )))
     }
     fn checkpoint_raw_checked(
         root: &Path,
@@ -925,6 +1017,9 @@ mod source {
 mod source {
     use super::*;
     pub(super) fn checkpoint_bytes(_: &Path, _: &str) -> Result<Option<(Vec<u8>, u32)>, GitError> {
+        Err(GitError::WorktreeFileUnavailable)
+    }
+    pub(super) fn checkpoint_digest(_: &Path, _: &str) -> Result<Option<(String, u32)>, GitError> {
         Err(GitError::WorktreeFileUnavailable)
     }
     pub(super) fn restore_raw_checked(

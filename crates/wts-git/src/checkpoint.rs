@@ -151,10 +151,12 @@ impl GitWorktreeService {
             }
             files.insert(path.clone(), file);
         }
+        // Stability re-check: stream a digest instead of materializing
+        // a second full copy of every captured file.
         let stable_files = files.values().filter(|file| !file.unsupported).all(|file| {
-            match self.checkpoint_source_bytes(root, &file.file_path) {
-                Ok(Some((source, mode))) => {
-                    file.sha256.as_ref() == Some(&digest(&source)) && file.mode == Some(mode)
+            match self.checkpoint_source_digest(root, &file.file_path) {
+                Ok(Some((source_digest, mode))) => {
+                    file.sha256.as_ref() == Some(&source_digest) && file.mode == Some(mode)
                 }
                 Ok(None) => file.sha256.is_none(),
                 Err(_) => false,
