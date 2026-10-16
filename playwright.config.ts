@@ -5,6 +5,7 @@ export default defineConfig({
   timeout: 30000,
   expect: { timeout: 10000 },
   fullyParallel: false,
+  forbidOnly: Boolean(process.env.CI),
   retries: 0,
   use: {
     baseURL: "http://localhost:3000",
@@ -15,7 +16,7 @@ export default defineConfig({
   webServer: {
     command: "npm run dev -- --port 3000",
     port: 3000,
-    reuseExistingServer: true,
+    reuseExistingServer: !process.env.CI,
     timeout: 60000,
   },
 });

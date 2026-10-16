@@ -1,0 +1,32 @@
+name: External integration tests
+
+# Runs the #[ignore]d external-boundary tests (Jira MCP, ActivityWatch,
+# real Codex) that the PR gates never exercise. Manual dispatch only:
+# these need local tools or secrets that CI runners may not have, so a
+# failure here is a signal to investigate, not a merge blocker.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ignored-integration-tests:
+    name: Ignored external-boundary tests
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - name: Check out WTS
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Use Rust 1.95
+        uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # v1 (was @master)
+        with:
+          toolchain: 1.95.0
+
+      - name: Cache Rust builds
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+
+      - name: Run ignored integration tests
+        run: cargo test -p wts-integrations -p wts-app --locked -- --ignored

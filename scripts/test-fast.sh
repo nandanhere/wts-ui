@@ -50,6 +50,7 @@ run_step \
   "Verification HTTP endpoint contract" \
   cargo test -p wts-server \
     graph_agent_and_jira_adapter_routes_return_real_wire_contracts
+run_step "Root Node contracts" npm test
 run_step \
   "Browser driver contract" \
   node --test scripts/wts-browser-driver.test.mjs

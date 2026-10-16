@@ -23,31 +23,37 @@ jobs:
 
     steps:
       - name: Check out WTS
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Use Node 22
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22.13.1
           cache: npm
           cache-dependency-path: ui/package-lock.json
 
       - name: Use Rust 1.95
-        uses: dtolnay/rust-toolchain@master
+        uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # v1 (was @master)
         with:
           toolchain: 1.95.0
 
       - name: Cache Rust builds
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
 
       - name: Install UI dependencies
         run: npm ci --prefix ui
 
       - name: Install Chromium and system dependencies
-        run: npm --prefix ui exec -- playwright install --with-deps chromium
+        run: npm --prefix ui exec -- playwright install --with-deps chromium webkit
 
       - name: Build the production UI
         run: npm --prefix ui run build
+
+      - name: Run additional browser flows
+        run: |
+          for config in product-polish motion result-webkit; do
+            npm --prefix ui exec -- playwright test --config "ui/playwright.${config}.config.ts"
+          done
 
       - name: Run WTS on WTS
         env:
@@ -57,7 +63,7 @@ jobs:
 
       - name: Upload self-host failure diagnostics
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: wts-on-wts-failure-${{ github.run_attempt }}
           path: |

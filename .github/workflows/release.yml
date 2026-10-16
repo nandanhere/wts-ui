@@ -25,7 +25,7 @@ jobs:
     timeout-minutes: 45
     steps:
       - name: Check out release ref
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ inputs.tag || github.ref }}
 
@@ -45,7 +45,7 @@ jobs:
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
       - name: Use Node 22
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22.13.1
           cache: npm
@@ -54,32 +54,45 @@ jobs:
             ui/package-lock.json
 
       - name: Use Rust 1.95
-        uses: dtolnay/rust-toolchain@master
+        uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # v1 (was @master)
         with:
           toolchain: 1.95.0
           targets: aarch64-apple-darwin
 
       - name: Cache Rust builds
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
 
       - name: Install pinned dependencies
         run: |
           npm ci
           npm ci --prefix ui
 
+      - name: Require updater public key
+        env:
+          WTS_UPDATE_PUBLIC_KEY: ${{ secrets.WTS_UPDATE_PUBLIC_KEY }}
+        run: |
+          if [ -z "$WTS_UPDATE_PUBLIC_KEY" ]; then
+            echo "WTS_UPDATE_PUBLIC_KEY secret is required for release builds" >&2
+            exit 1
+          fi
+
       - name: Stamp Tauri bundle version
         env:
           RELEASE_VERSION: ${{ steps.version.outputs.version }}
+          WTS_UPDATE_PUBLIC_KEY: ${{ secrets.WTS_UPDATE_PUBLIC_KEY }}
         run: |
           node - <<'NODE'
           const fs = require('node:fs');
           const path = 'src-tauri/tauri.conf.json';
           const config = JSON.parse(fs.readFileSync(path, 'utf8'));
           config.version = process.env.RELEASE_VERSION;
+          config.plugins.updater.pubkey = process.env.WTS_UPDATE_PUBLIC_KEY;
           fs.writeFileSync(path, `${JSON.stringify(config, null, 2)}\n`);
           NODE
 
       - name: Build signed-ready macOS bundles
+        env:
+          WTS_UPDATE_PUBLIC_KEY: ${{ secrets.WTS_UPDATE_PUBLIC_KEY }}
         run: |
           npm exec -- tauri build \
             --target aarch64-apple-darwin \
@@ -101,7 +114,7 @@ jobs:
           done
 
       - name: Publish GitHub release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           tag_name: ${{ steps.version.outputs.tag }}
           name: WTS ${{ steps.version.outputs.tag }}

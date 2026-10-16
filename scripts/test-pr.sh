@@ -50,6 +50,14 @@ run_step \
   "Workspace attention and recovery browser flows" \
   npm --prefix ui exec -- playwright test \
     --config ui/playwright.attention.config.ts
+if [[ "${WTS_EXTRA_BROWSER_CONFIGS:-0}" == "1" ]]; then
+  for extra_config in product-polish motion result-webkit; do
+    run_step \
+      "Additional browser flows ($extra_config)" \
+      npm --prefix ui exec -- playwright test \
+        --config "ui/playwright.${extra_config}.config.ts"
+  done
+fi
 if [[ "${WTS_SKIP_PERFORMANCE:-0}" != "1" ]]; then
   run_step \
     "Workspace request budgets and cached navigation" \

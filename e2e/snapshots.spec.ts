@@ -532,9 +532,7 @@ test.describe("Snapshot management UI", () => {
       timeout: 5000,
     });
 
-    // Give it time to process
-    await page.waitForTimeout(500);
-    expect(duplicated).toBe(true);
+    await expect.poll(() => duplicated).toBe(true);
   });
 
   test("shows empty state when no snapshots exist", async ({ page }) => {
