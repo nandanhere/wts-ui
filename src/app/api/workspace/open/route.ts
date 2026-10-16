@@ -1,11 +1,13 @@
 /**
- * GET /api/workspace/open?path=<encoded-path>
+ * POST /api/workspace/open?path=<encoded-path>
  *
  * Opens/loads a .code-workspace file, discovers its folders and
  * Git repositories, updates the registry, and returns the full
  * scan result.
  *
- * Read-only discovery.  No mutations of repositories.
+ * Opening a workspace mutates the global repository registry, so this
+ * is a POST that requires the same-origin + action-token checks used
+ * by the git mutation routes. It never mutates repositories on disk.
  * Accepts both absolute paths and paths relative to HOME (~).
  */
 
@@ -17,6 +19,7 @@ import { loadWorkspaceFile } from "@/lib/workspace/parser";
 import { scanWorkspace } from "@/lib/workspace/discovery";
 import { upsertRegistryEntry } from "@/lib/workspace/registry";
 import { registerRepos } from "@/lib/git/registry";
+import { rejectIfNotAuthorized } from "@/lib/git/request-security";
 import type { WorkspaceDefinition } from "@/lib/workspace/types";
 
 export const dynamic = "force-dynamic";
@@ -52,9 +55,11 @@ function validatePath(rawPath: string): string | null {
   return resolved;
 }
 
-export async function GET(
+export async function POST(
   request: NextRequest
 ): Promise<Response> {
+  const authError = rejectIfNotAuthorized(request);
+  if (authError) return authError;
   try {
     const rawPath = request.nextUrl.searchParams.get("path");
     if (!rawPath) {

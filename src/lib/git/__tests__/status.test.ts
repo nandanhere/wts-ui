@@ -11,7 +11,12 @@ import { mkdirSync, writeFileSync, rmSync, realpathSync } from "node:fs";
 import { resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
-import { getRepoStatus, clearStatusCache, readPorcelainV2 } from "../status";
+import {
+  getRepoStatus,
+  getWorkspaceStatusAsync,
+  clearStatusCache,
+  readPorcelainV2,
+} from "../status";
 import { _registerRepoPath, _clearRepoPaths } from "../runner";
 import type { Repository } from "@/lib/workspace/types";
 
@@ -138,6 +143,19 @@ void describe("Status Reader", () => {
     ok(v2 !== null);
     ok(v2.branch.headOid.length > 0);
     ok(v2.branch.ref.includes("main") || v2.branch.ref === "(detached)");
+  });
+
+  void it("async workspace status matches sync status shape", async () => {
+    clearStatusCache();
+    const statuses = await getWorkspaceStatusAsync([repo], { ttlMs: 0 });
+    strictEqual(statuses.length, 1);
+    strictEqual(statuses[0]!.repoId, "status-test-repo");
+    ok(
+      statuses[0]!.currentBranch === "main" ||
+        statuses[0]!.headRef.includes("main"),
+      "async reader must report the main branch"
+    );
+    ok(statuses[0]!.localBranches.some((b) => b.name === "main"));
   });
 
   void it("handles errors gracefully for invalid repos", () => {

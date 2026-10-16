@@ -4,8 +4,12 @@ import { taskRegistry } from "@/lib/tasks/registry";
 import { getRepo } from "@/lib/git/registry";
 import { toSessionPublic } from "@/lib/tasks/types";
 import type { TaskRepoStatus, TaskWorktreeStatus } from "@/lib/tasks/types";
+import { rejectIfNotAuthorized } from "@/lib/git/request-security";
 
 export async function GET(req: NextRequest) {
+  const authError = rejectIfNotAuthorized(req);
+  if (authError) return authError;
+
   const repoId = req.nextUrl.searchParams.get("repoId");
   if (!repoId) {
     return NextResponse.json({ error: "repoId is required" }, { status: 400 });

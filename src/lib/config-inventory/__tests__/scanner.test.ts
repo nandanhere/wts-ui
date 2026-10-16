@@ -21,7 +21,11 @@ import {
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 
-import { scanRepository, scanRepositories } from "@/lib/config-inventory/scanner";
+import {
+  scanRepository,
+  scanRepositories,
+  compileExcludePatterns,
+} from "@/lib/config-inventory/scanner";
 import type { ConfigFileMetadata } from "@/lib/config-inventory/types";
 
 /* ------------------------------------------------------------------ */
@@ -535,6 +539,18 @@ void describe("scanRepository — edge cases", () => {
     const result = scanRepository("repo-nonexistent", "/tmp/does-not-exist-12345");
     strictEqual(result.files.length, 0);
     strictEqual(result.truncated, false);
+  });
+
+  void it("drops catastrophic-backtracking exclude patterns", () => {
+    const compiled = compileExcludePatterns(["(a+)+$", "(.*)*", "^internal$"]);
+    strictEqual(compiled.length, 1);
+    ok(compiled[0]!.test("internal"));
+  });
+
+  void it("caps the number and length of exclude patterns", () => {
+    const many = Array.from({ length: 20 }, (_, i) => `^dir${i}$`);
+    strictEqual(compileExcludePatterns(many).length, 8);
+    strictEqual(compileExcludePatterns(["^" + "a".repeat(100) + "$"]).length, 0);
   });
 
   void it("includes workspace-relative path when workspaceFilePath is provided", () => {

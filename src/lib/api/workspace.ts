@@ -16,6 +16,7 @@ import type {
   WorkspaceScanResult,
   RegistryEntry,
 } from "@/lib/workspace/types";
+import { ensureActionToken, resetCachedToken } from "@/lib/api/git";
 
 /* ------------------------------------------------------------------ */
 /*  Client-only UI types  (thin envelope over server types)            */
@@ -120,19 +121,39 @@ export async function fetchRecents(
 }
 
 /**
- * GET /api/workspace/open?path=<path> — open a .code-workspace file.
+ * POST /api/workspace/open?path=<path> — open a .code-workspace file.
  *
- * Returns the full scan result. Accepts absolute paths or ~-prefixed paths.
+ * Opening a workspace replaces the server-side repository registry, so
+ * the route requires the action token. Returns the full scan result.
+ * Accepts absolute paths or ~-prefixed paths.
  */
 export async function openWorkspace(
   path: string,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  retryToken = true
 ): Promise<WorkspaceViewData> {
-  const data = await apiFetch<{
+  const token = await ensureActionToken();
+  const res = await fetch(
+    `${apiBase()}/api/workspace/open?path=${encodeURIComponent(path)}`,
+    {
+      method: "POST",
+      signal,
+      headers: { Accept: "application/json", "x-action-token": token },
+    }
+  );
+  if (res.status === 403 && retryToken) {
+    resetCachedToken();
+    return openWorkspace(path, signal, false);
+  }
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body?.error ?? `API error ${res.status}`);
+  }
+  const data = (await res.json()) as {
     workspace: WorkspaceDefinition;
     repositories: Repository[];
     scanErrors: string[];
-  }>(`/api/workspace/open?path=${encodeURIComponent(path)}`, signal);
+  };
 
   return {
     definition: data.workspace,

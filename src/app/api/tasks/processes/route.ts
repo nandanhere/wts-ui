@@ -1,23 +1,36 @@
 import { NextRequest, NextResponse } from "next/server";
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
+import { realpathSync, statSync } from "node:fs";
+import { resolve } from "node:path";
 import { loadConfig } from "@/lib/tasks/config";
 import { taskRegistry } from "@/lib/tasks/registry";
 import { getRepo } from "@/lib/git/registry";
-import { isSameOriginRequest } from "@/lib/git/request-security";
-import { verifyActionToken } from "@/lib/git/action-token";
+import { rejectIfNotAuthorized } from "@/lib/git/request-security";
+import { resolveProcessCwd } from "@/lib/tasks/paths";
 import { toSessionPublic } from "@/lib/tasks/types";
 
 /* ── Helpers ────────────────────────────────────────────────────── */
 
-function rejectIfNotAuthorized(req: NextRequest): NextResponse | null {
-  if (!isSameOriginRequest(req)) {
-    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+function gitCommonDir(dir: string): string {
+  const raw = execFileSync("git", ["-C", dir, "rev-parse", "--git-common-dir"], {
+    encoding: "utf-8",
+  }).trim();
+  return realpathSync(resolve(dir, raw));
+}
+
+/**
+ * Return the canonical worktree path when `worktreePath` is a real
+ * worktree of the repository (same git common dir), otherwise null.
+ * This stops a request from spawning task commands in arbitrary dirs.
+ */
+function canonicalWorktree(repoRoot: string, worktreePath: string): string | null {
+  try {
+    const wt = realpathSync(worktreePath);
+    if (!statSync(wt).isDirectory()) return null;
+    return gitCommonDir(wt) === gitCommonDir(realpathSync(repoRoot)) ? wt : null;
+  } catch {
+    return null;
   }
-  const token = req.headers.get("x-action-token") ?? "";
-  if (!verifyActionToken(token)) {
-    return NextResponse.json({ error: "Invalid action token" }, { status: 403 });
-  }
-  return null;
 }
 
 function makeKey(repoId: string, worktreePath: string, procName: string): string {
@@ -66,13 +79,17 @@ async function startProcess(
   repoId: string,
   repoRoot: string,
   worktreePath: string,
+  canonicalWorktreePath: string,
   procDef: { name: string; command: string; workdir?: string; env?: Record<string, string> },
 ): Promise<{ session: ReturnType<typeof toSessionPublic> | null; error?: string }> {
   if (taskRegistry.isRunning(repoId, worktreePath, procDef.name)) {
     return { session: null, error: "already running" };
   }
 
-  const cwd = procDef.workdir ? `${worktreePath}/${procDef.workdir}` : worktreePath;
+  const cwd = resolveProcessCwd(canonicalWorktreePath, procDef.workdir);
+  if (!cwd) {
+    return { session: null, error: "Process workdir escapes the worktree" };
+  }
 
   try {
     const child = spawn("/bin/sh", ["-c", procDef.command], {
@@ -179,6 +196,14 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "worktreePath is required" }, { status: 400 });
   }
 
+  const canonical = canonicalWorktree(repo.rootPath, worktreePath);
+  if (!canonical) {
+    return NextResponse.json(
+      { error: "worktreePath is not a worktree of this repository" },
+      { status: 400 }
+    );
+  }
+
   const { config } = loadConfig(repo.rootPath);
   if (!config) {
     return NextResponse.json({ error: "No tasks config found" }, { status: 404 });
@@ -201,7 +226,7 @@ export async function POST(req: NextRequest) {
         hasFailure = true;
         continue;
       }
-      const result = await startProcess(repoId, repo.rootPath, worktreePath, procDef);
+      const result = await startProcess(repoId, repo.rootPath, worktreePath, canonical, procDef);
       results.push({ processName: pname, ...result });
       if (result.error) hasFailure = true;
     }
@@ -222,7 +247,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: `Process "${processName}" not defined in config` }, { status: 404 });
   }
 
-  const result = await startProcess(repoId, repo.rootPath, worktreePath, procDef);
+  const result = await startProcess(repoId, repo.rootPath, worktreePath, canonical, procDef);
   if (result.error === "already running") {
     return NextResponse.json({ error: "Process is already running" }, { status: 409 });
   }

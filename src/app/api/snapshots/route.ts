@@ -8,6 +8,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { listSnapshots, createSnapshot } from "@/lib/snapshot/store";
+import { rejectIfNotAuthorized } from "@/lib/git/request-security";
 import { captureSnapshot } from "@/lib/snapshot/capture";
 import { getAllRepos, getOpenedWorkspaceFilePath } from "@/lib/git/registry";
 
@@ -43,6 +44,8 @@ export async function GET(): Promise<Response> {
  * Authorization: requires at least one registered repo (workspace/open first).
  */
 export async function POST(request: NextRequest): Promise<Response> {
+  const authError = rejectIfNotAuthorized(request);
+  if (authError) return authError;
   try {
     const repos = getAllRepos();
     if (repos.length === 0) {

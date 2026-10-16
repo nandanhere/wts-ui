@@ -4,11 +4,13 @@
  * PATCH  /api/snapshots/[id] — update snapshot metadata (label, description)
  *
  * Snapshot IDs are derived from content hashes — no enumeration risk.
- * Authorization: local single-user app (no auth required for read/delete of own snapshots).
+ * Authorization: reads are local; mutations (DELETE, PATCH) require the
+ * same-origin + action-token checks used by the git mutation routes.
  */
 
 import { NextRequest, NextResponse } from "next/server";
 import { getSnapshot, deleteSnapshot, updateSnapshotMeta } from "@/lib/snapshot/store";
+import { rejectIfNotAuthorized } from "@/lib/git/request-security";
 
 export const dynamic = "force-dynamic";
 
@@ -50,9 +52,11 @@ export async function GET(
  * Returns 200 with deleted: true, or 404 if not found.
  */
 export async function DELETE(
-  _request: NextRequest,
+  request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ): Promise<Response> {
+  const authError = rejectIfNotAuthorized(request);
+  if (authError) return authError;
   try {
     const { id } = await params;
     const deleted = deleteSnapshot(id);
@@ -86,6 +90,8 @@ export async function PATCH(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ): Promise<Response> {
+  const authError = rejectIfNotAuthorized(request);
+  if (authError) return authError;
   try {
     const { id } = await params;
 

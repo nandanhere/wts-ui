@@ -1,8 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { loadConfig } from "@/lib/tasks/config";
 import { getRepo } from "@/lib/git/registry";
+import { rejectIfNotAuthorized } from "@/lib/git/request-security";
 
 export async function GET(req: NextRequest) {
+  const authError = rejectIfNotAuthorized(req);
+  if (authError) return authError;
+
   const repoId = req.nextUrl.searchParams.get("repoId");
   if (!repoId) {
     return NextResponse.json({ error: "repoId is required" }, { status: 400 });

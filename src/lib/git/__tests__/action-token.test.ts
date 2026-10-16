@@ -10,6 +10,7 @@ import {
   verifyActionToken,
   resetActionToken,
   _setActionToken,
+  ACTION_TOKEN_TTL_MS,
 } from "../action-token";
 
 void describe("ActionToken", () => {
@@ -46,6 +47,22 @@ void describe("ActionToken", () => {
     const result = verifyActionToken("");
     // If ACTION_TOKEN_INSECURE is not set, this should be false
     ok(result === false);
+  });
+
+  void it("rejects and rotates the token after the TTL", () => {
+    resetActionToken();
+    const first = getOrCreateActionToken();
+    const realNow = Date.now;
+    Date.now = () => realNow() + ACTION_TOKEN_TTL_MS + 1;
+    try {
+      ok(verifyActionToken(first) === false, "expired token must not verify");
+      const second = getOrCreateActionToken();
+      ok(second !== first, "expired token must rotate");
+      ok(verifyActionToken(second), "rotated token must verify");
+    } finally {
+      Date.now = realNow;
+      resetActionToken();
+    }
   });
 
   void it("_setActionToken allows setting a specific token", () => {

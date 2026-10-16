@@ -68,6 +68,32 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+/** Fetch for mutation routes, which require the action token. */
+async function apiFetchWithToken<T>(
+  path: string,
+  init?: RequestInit,
+  retryToken = true
+): Promise<T> {
+  const token = await ensureActionToken();
+  const res = await fetch(`${apiBase()}${path}`, {
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+      "x-action-token": token,
+    },
+    ...init,
+  });
+  if (res.status === 403 && retryToken) {
+    resetCachedToken();
+    return apiFetchWithToken<T>(path, init, false);
+  }
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body?.error ?? `API error ${res.status}`);
+  }
+  return res.json() as Promise<T>;
+}
+
 /* ------------------------------------------------------------------ */
 /*  Snapshot list / create                                             */
 /* ------------------------------------------------------------------ */
@@ -88,7 +114,7 @@ export async function createSnapshot(
   payload: CreateSnapshotPayload,
   signal?: AbortSignal
 ): Promise<SnapshotEntry> {
-  const data = await apiFetch<{ snapshot: SnapshotEntry }>("/api/snapshots", {
+  const data = await apiFetchWithToken<{ snapshot: SnapshotEntry }>("/api/snapshots", {
     method: "POST",
     body: JSON.stringify(payload),
     signal,
@@ -116,7 +142,7 @@ export async function fetchSnapshotDetail(
 export async function deleteSnapshot(
   id: string
 ): Promise<{ deleted: boolean }> {
-  return apiFetch<{ deleted: boolean; id: string }>(
+  return apiFetchWithToken<{ deleted: boolean; id: string }>(
     `/api/snapshots/${encodeURIComponent(id)}`,
     { method: "DELETE" }
   );
@@ -127,7 +153,7 @@ export async function updateSnapshotMeta(
   id: string,
   updates: { label?: string; description?: string }
 ): Promise<{ updated: boolean }> {
-  return apiFetch<{ updated: boolean; id: string }>(
+  return apiFetchWithToken<{ updated: boolean; id: string }>(
     `/api/snapshots/${encodeURIComponent(id)}`,
     {
       method: "PATCH",
@@ -204,7 +230,7 @@ export async function duplicateSnapshot(
   id: string,
   label: string
 ): Promise<SnapshotEntry> {
-  const data = await apiFetch<{ snapshot: SnapshotEntry }>(
+  const data = await apiFetchWithToken<{ snapshot: SnapshotEntry }>(
     `/api/snapshots/${encodeURIComponent(id)}/duplicate`,
     {
       method: "POST",

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { taskRegistry } from "@/lib/tasks/registry";
+import { rejectIfNotAuthorized } from "@/lib/git/request-security";
 
 /**
  * GET /api/tasks/logs?repoId=xxx&worktreePath=...&processName=api&lines=200
@@ -7,6 +8,9 @@ import { taskRegistry } from "@/lib/tasks/registry";
  * Returns buffered log lines for a running/stopped process.
  */
 export async function GET(req: NextRequest) {
+  const authError = rejectIfNotAuthorized(req);
+  if (authError) return authError;
+
   const repoId = req.nextUrl.searchParams.get("repoId");
   const worktreePath = req.nextUrl.searchParams.get("worktreePath");
   const processName = req.nextUrl.searchParams.get("processName");

@@ -4,6 +4,7 @@ import { useState, useCallback, useEffect, useRef } from "react";
 import { Play, Square, RotateCw, Terminal } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { TasksLogViewer } from "./tasks-log-viewer";
+import { ensureActionToken } from "@/lib/api/git";
 import type { TaskProcessStatus } from "@/lib/tasks/types";
 
 /* ------------------------------------------------------------------ */
@@ -44,7 +45,10 @@ export function TasksProcessRow({
         processName: process.name,
         lines: "200",
       });
-      const res = await fetch(`/api/tasks/logs?${params}`);
+      const token = await ensureActionToken();
+      const res = await fetch(`/api/tasks/logs?${params}`, {
+        headers: { "x-action-token": token },
+      });
       if (res.ok) {
         const data = await res.json();
         setLogLines(data.lines ?? []);

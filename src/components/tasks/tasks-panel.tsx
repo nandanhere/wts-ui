@@ -55,9 +55,12 @@ export function TasksPanel() {
     setLoading(true);
     setError(null);
     try {
+      const token = await getActionToken();
       const results = await Promise.allSettled(
         repoIds.map((id) =>
-          fetch(`/api/tasks/status?repoId=${encodeURIComponent(id)}`).then(
+          fetch(`/api/tasks/status?repoId=${encodeURIComponent(id)}`, {
+            headers: { "x-action-token": token },
+          }).then(
             (r) => (r.ok ? r.json() : Promise.reject(r.statusText)),
           ),
         ),
@@ -83,7 +86,7 @@ export function TasksPanel() {
     } finally {
       setLoading(false);
     }
-  }, [repoIds]);
+  }, [repoIds, getActionToken]);
 
   /* ── Start a process ──────────────────────────────────────── */
   const handleStart = useCallback(

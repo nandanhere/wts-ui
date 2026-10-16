@@ -207,16 +207,42 @@ const ENV_PATTERNS: [RegExp, string][] = [
 /*  Merged exclusions                                                 */
 /* ------------------------------------------------------------------ */
 
-function buildExcludedDirs(extraPatterns: string[]): RegExp[] {
-  const patterns = [...EXCLUDED_DIRS];
-  for (const src of extraPatterns) {
+/** User-supplied exclusion patterns are capped and screened before use. */
+export const MAX_EXCLUDE_PATTERNS = 8;
+export const MAX_EXCLUDE_PATTERN_LENGTH = 64;
+
+/**
+ * Reject patterns that can backtrack catastrophically when tested
+ * against every directory in a walk: nested quantifiers such as
+ * `(a+)+`, backreferences, and over-long sources.
+ */
+function isSafeExcludePattern(src: string): boolean {
+  if (src.length === 0 || src.length > MAX_EXCLUDE_PATTERN_LENGTH) return false;
+  if (src.includes("\\1") || src.includes("\\2")) return false;
+  // A quantified group that itself contains a quantifier, e.g. (a+)+ or (.*)*
+  if (/\([^)]*[+*][^)]*\)\s*(?:[+*]|\{\d)/.test(src)) return false;
+  return true;
+}
+
+/**
+ * Compile user-supplied directory exclusion patterns.
+ * Invalid or unsafe patterns are skipped, never thrown.
+ */
+export function compileExcludePatterns(extraPatterns: string[]): RegExp[] {
+  const compiled: RegExp[] = [];
+  for (const src of extraPatterns.slice(0, MAX_EXCLUDE_PATTERNS)) {
+    if (!isSafeExcludePattern(src)) continue;
     try {
-      patterns.push(new RegExp(src));
+      compiled.push(new RegExp(src));
     } catch {
       // skip invalid patterns
     }
   }
-  return patterns;
+  return compiled;
+}
+
+function buildExcludedDirs(extraPatterns: string[]): RegExp[] {
+  return [...EXCLUDED_DIRS, ...compileExcludePatterns(extraPatterns)];
 }
 
 /* ------------------------------------------------------------------ */

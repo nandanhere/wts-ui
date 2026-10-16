@@ -4,7 +4,8 @@
  * Query params:
  *   limit — max entries to return (default 100, max 500)
  *
- * Read-only. Returns structured journal entries with no secrets.
+ * Read-only. Requires the action token: entries expose repository
+ * paths and operation history. Returns entries with no secrets.
  *
  * DELETE /api/git/journal — clear all journal entries.
  * Requires action token.
@@ -13,10 +14,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { listJournalEntries, clearJournal } from "@/lib/git/journal";
 import { verifyActionToken } from "@/lib/git/action-token";
+import { rejectIfNotAuthorized } from "@/lib/git/request-security";
 
 export const dynamic = "force-dynamic";
 
 export async function GET(request: NextRequest): Promise<Response> {
+  const authError = rejectIfNotAuthorized(request);
+  if (authError) return authError;
   try {
     const limitParam = request.nextUrl.searchParams.get("limit");
     const limit = limitParam ? Math.min(Math.max(1, parseInt(limitParam, 10) || 100), 500) : 100;

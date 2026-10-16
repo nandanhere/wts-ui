@@ -6,7 +6,7 @@
  */
 
 import { realpathSync, existsSync } from "node:fs";
-import { runGitSync } from "./runner";
+import { runGit, runGitSync } from "./runner";
 import { _registerRepoPath } from "./runner";
 import type {
   RepoStatus,
@@ -508,6 +508,315 @@ export function getRepoStatus(
 
   setCached(repo.id, status, opts?.ttlMs);
   return status;
+}
+
+/* ------------------------------------------------------------------ */
+/*  Async read operations (non-blocking, for request handlers)         */
+/* ------------------------------------------------------------------ */
+
+async function readPorcelainV2Async(repoPath: string): Promise<V2Status | null> {
+  const r = await runGit(
+    ["status", "--porcelain=v2", "--branch", "-z", "-u"],
+    getRepoOptions(repoPath)
+  );
+  if (r.exitCode !== 0) return null;
+  return parsePorcelainV2(r.stdout);
+}
+
+async function readLocalBranchesAsync(repoPath: string): Promise<LocalBranch[]> {
+  const r = await runGit(
+    ["branch", "--format=%(refname:short)|%(objectname)|%(upstream:short)|%(upstream:track)", "--list"],
+    getRepoOptions(repoPath)
+  );
+  if (r.exitCode !== 0) return [];
+
+  const currentR = await runGit(
+    ["rev-parse", "--abbrev-ref", "HEAD"],
+    getRepoOptions(repoPath)
+  );
+  const currentBranch = currentR.exitCode === 0 ? currentR.stdout.trim() : "HEAD";
+
+  const branches: LocalBranch[] = [];
+  for (const line of r.stdout.trim().split("\n")) {
+    if (!line) continue;
+    const [name, oid, upstreamShort, track] = line.split("|");
+    if (!name || !oid) continue;
+
+    let ahead = 0;
+    let behind = 0;
+    if (track && track.includes("[")) {
+      const trackInfo = track.split("[")[1]?.replace("]", "") ?? "";
+      const a = trackInfo.match(/ahead (\d+)/);
+      const b = trackInfo.match(/behind (\d+)/);
+      ahead = a ? parseInt(a[1], 10) : 0;
+      behind = b ? parseInt(b[1], 10) : 0;
+    }
+
+    const upstream = upstreamShort && upstreamShort !== "(upstream)" ? upstreamShort : "";
+
+    branches.push({
+      name,
+      ref: `refs/heads/${name}`,
+      headOid: oid,
+      upstream,
+      ahead,
+      behind,
+      isCurrent: name === currentBranch,
+    });
+  }
+
+  return branches;
+}
+
+async function readRemotesAsync(repoPath: string): Promise<RemoteInfo[]> {
+  const r = await runGit(["remote", "-v"], getRepoOptions(repoPath));
+  if (r.exitCode !== 0) return [];
+
+  const remotes = new Map<string, RemoteInfo>();
+  for (const line of r.stdout.trim().split("\n")) {
+    if (!line) continue;
+    const parts = line.split(/\s+/);
+    if (parts.length < 3) continue;
+    const name = parts[0]!;
+    const url = parts[1]!;
+    const type = parts[2] ?? "";
+
+    if (!remotes.has(name)) {
+      remotes.set(name, { name, pushUrl: "", fetchUrl: "" });
+    }
+    const entry = remotes.get(name)!;
+    if (type === "(fetch)") entry.fetchUrl = url;
+    if (type === "(push)") entry.pushUrl = url;
+    if (!type) entry.fetchUrl = url;
+  }
+
+  return Array.from(remotes.values());
+}
+
+async function readCachedRemoteRefsAsync(repoPath: string): Promise<RemoteRef[]> {
+  const r = await runGit(
+    ["for-each-ref", "--format=%(refname)|%(objectname)", "refs/remotes/"],
+    getRepoOptions(repoPath, 10_000)
+  );
+  if (r.exitCode !== 0) return [];
+
+  const refs: RemoteRef[] = [];
+  for (const line of r.stdout.trim().split("\n")) {
+    if (!line) continue;
+    const sep = line.indexOf("|");
+    if (sep === -1) continue;
+    const ref = line.slice(0, sep);
+    const oid = line.slice(sep + 1);
+    if (ref && oid) refs.push({ ref, oid });
+  }
+  return refs;
+}
+
+async function readWorktreesAsync(repoPath: string): Promise<WorktreeEntry[]> {
+  const r = await runGit(
+    ["worktree", "list", "--porcelain"],
+    getRepoOptions(repoPath)
+  );
+  if (r.exitCode !== 0) return [];
+
+  const wts: WorktreeEntry[] = [];
+  let current: Partial<WorktreeEntry> = {};
+
+  for (const line of r.stdout.split("\n")) {
+    const t = line.trim();
+    if (t.startsWith("worktree ")) {
+      if (current.path) {
+        wts.push(finalizeWorktree(current));
+      }
+      current = { path: t.slice("worktree ".length) };
+    } else if (t.startsWith("HEAD ")) {
+      current.headOid = t.slice("HEAD ".length);
+    } else if (t.startsWith("branch ")) {
+      const ref = t.slice("branch ".length);
+      current.branch = ref.startsWith("refs/heads/") ? ref.slice("refs/heads/".length) : ref;
+    } else if (t === "detached") {
+      current.branch = null;
+    } else if (t.startsWith("locked")) {
+      current.locked = true;
+    } else if (t.startsWith("prunable")) {
+      current.prunable = true;
+    }
+  }
+
+  if (current.path) {
+    wts.push(finalizeWorktree(current));
+  }
+
+  markPrimaryWorktree(wts);
+  return wts;
+}
+
+function errorStatus(repo: Repository, errors: string[]): RepoStatus {
+  return {
+    repoId: repo.id,
+    rootPath: repo.rootPath,
+    currentBranch: "(error)",
+    headRef: "",
+    headOid: "",
+    upstream: null,
+    ahead: 0,
+    behind: 0,
+    v2Status: null,
+    localBranches: [],
+    remotes: [],
+    remoteRefs: [],
+    worktrees: [],
+    errors,
+    cachedAt: Date.now(),
+  };
+}
+
+/**
+ * Async variant of getRepoStatus. Request handlers must use this so a
+ * multi-repo status read never blocks the event loop on sync git calls.
+ */
+export async function getRepoStatusAsync(
+  repo: Repository,
+  opts?: { ttlMs?: number; timeout?: number }
+): Promise<RepoStatus> {
+  const cached = getCached(repo.id, opts?.ttlMs);
+  if (cached) return cached;
+
+  const errors: string[] = [];
+
+  if (!existsSync(repo.rootPath)) {
+    return errorStatus(repo, [`Repository path does not exist: ${repo.rootPath}`]);
+  }
+
+  try {
+    const canonical = realpathSync(repo.rootPath);
+    _registerRepoPath(canonical);
+  } catch {
+    errors.push(`Cannot resolve canonical path: ${repo.rootPath}`);
+  }
+
+  const repoPath = repo.rootPath;
+  const timeout = opts?.timeout;
+
+  let v2Status: V2Status | null = null;
+  let localBranches: LocalBranch[] = [];
+  let remotes: RemoteInfo[] = [];
+  let worktrees: WorktreeEntry[] = [];
+  let remoteRefs: RemoteRef[] = [];
+
+  const settled = await Promise.allSettled([
+    readPorcelainV2Async(repoPath),
+    readLocalBranchesAsync(repoPath),
+    readRemotesAsync(repoPath),
+    readWorktreesAsync(repoPath),
+    readCachedRemoteRefsAsync(repoPath),
+  ]);
+  const labels = ["v2 status", "branches", "remotes", "worktrees", "remote refs"];
+  settled.forEach((result, i) => {
+    if (result.status === "rejected") {
+      errors.push(`${labels[i]}: ${String(result.reason)}`);
+    }
+  });
+  if (settled[0].status === "fulfilled") v2Status = settled[0].value as V2Status | null;
+  if (settled[1].status === "fulfilled") localBranches = settled[1].value as LocalBranch[];
+  if (settled[2].status === "fulfilled") remotes = settled[2].value as RemoteInfo[];
+  if (settled[3].status === "fulfilled") worktrees = settled[3].value as WorktreeEntry[];
+  if (settled[4].status === "fulfilled") remoteRefs = settled[4].value as RemoteRef[];
+
+  let headRef = "(detached)";
+  let currentBranch = "(detached)";
+  let headOid = "";
+  let upstream: string | null = null;
+  let ahead = 0;
+  let behind = 0;
+
+  if (v2Status) {
+    headRef = v2Status.branch.ref;
+    headOid = v2Status.branch.headOid;
+    upstream = v2Status.branch.upstream || null;
+    ahead = v2Status.branch.ahead;
+    behind = v2Status.branch.behind;
+
+    if (headRef.startsWith("refs/heads/")) {
+      currentBranch = headRef.slice("refs/heads/".length);
+    }
+  }
+
+  if (currentBranch === "(detached)") {
+    const br = await runGit(
+      ["rev-parse", "--abbrev-ref", "HEAD"],
+      getRepoOptions(repoPath, timeout)
+    );
+    if (br.exitCode === 0 && br.stdout.trim() !== "HEAD") {
+      currentBranch = br.stdout.trim();
+      headRef = `refs/heads/${currentBranch}`;
+    }
+  }
+
+  if (!headOid) {
+    const oidR = await runGit(
+      ["rev-parse", "HEAD"],
+      getRepoOptions(repoPath, timeout)
+    );
+    if (oidR.exitCode === 0) {
+      headOid = oidR.stdout.trim();
+    }
+  }
+
+  const status: RepoStatus = {
+    repoId: repo.id,
+    rootPath: repo.rootPath,
+    currentBranch,
+    headRef,
+    headOid,
+    upstream,
+    ahead,
+    behind,
+    v2Status,
+    localBranches,
+    remotes,
+    remoteRefs,
+    worktrees,
+    errors,
+    cachedAt: Date.now(),
+  };
+
+  setCached(repo.id, status, opts?.ttlMs);
+  return status;
+}
+
+/** Max repositories read concurrently by getWorkspaceStatusAsync. */
+export const WORKSPACE_STATUS_CONCURRENCY = 4;
+
+/**
+ * Async variant of getWorkspaceStatus with bounded per-repo
+ * concurrency. Request handlers must use this instead of the sync
+ * version, which blocks the event loop once per repository.
+ */
+export async function getWorkspaceStatusAsync(
+  repos: Repository[],
+  opts?: { ttlMs?: number; timeout?: number }
+): Promise<RepoStatus[]> {
+  const results: RepoStatus[] = new Array(repos.length);
+  let next = 0;
+  async function worker(): Promise<void> {
+    while (next < repos.length) {
+      const index = next++;
+      const repo = repos[index]!;
+      try {
+        results[index] = await getRepoStatusAsync(repo, opts);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        results[index] = errorStatus(repo, [msg]);
+      }
+    }
+  }
+  const workers = Array.from(
+    { length: Math.min(WORKSPACE_STATUS_CONCURRENCY, repos.length) },
+    () => worker()
+  );
+  await Promise.all(workers);
+  return results;
 }
 
 /**

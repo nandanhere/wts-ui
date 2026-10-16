@@ -52,6 +52,13 @@ function snapshotsDir(): string {
   return resolve(homedir(), SNAPSHOTS_REL);
 }
 
+/** Snapshot IDs are generated as 16 lowercase hex characters (see generateId). */
+const SNAPSHOT_ID_PATTERN = /^[a-f0-9]{16}$/;
+
+export function isValidSnapshotId(id: string): boolean {
+  return SNAPSHOT_ID_PATTERN.test(id);
+}
+
 function snapshotPath(id: string): string {
   return resolve(snapshotsDir(), `${id}.json`);
 }
@@ -169,6 +176,7 @@ export function listSnapshots(): SnapshotEntry[] {
  * Returns null if not found.
  */
 export function getSnapshot(id: string): SnapshotSchema | null {
+  if (!isValidSnapshotId(id)) return null;
   const path = snapshotPath(id);
   if (!existsSync(path)) return null;
   try {
@@ -188,6 +196,7 @@ export function getSnapshot(id: string): SnapshotSchema | null {
  * Returns true if deleted, false if not found.
  */
 export function deleteSnapshot(id: string): boolean {
+  if (!isValidSnapshotId(id)) return false;
   // Remove schema file
   const path = snapshotPath(id);
   if (existsSync(path)) {

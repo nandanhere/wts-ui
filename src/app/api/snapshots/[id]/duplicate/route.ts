@@ -12,6 +12,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { duplicateSnapshot } from "@/lib/snapshot/store";
+import { rejectIfNotAuthorized } from "@/lib/git/request-security";
 
 export const dynamic = "force-dynamic";
 
@@ -19,6 +20,8 @@ export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ): Promise<Response> {
+  const authError = rejectIfNotAuthorized(request);
+  if (authError) return authError;
   try {
     const { id } = await params;
 

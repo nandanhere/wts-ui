@@ -31,6 +31,7 @@ function main() {
     "src/lib/snapshot/__tests__/*.test.ts",
     "src/lib/config-inventory/__tests__/*.test.ts",
     "src/app/api/snapshots/__tests__/*.test.ts",
+    "src/lib/tasks/__tests__/*.test.ts",
     "src/lib/api/workspace.test.ts",
     "src/lib/api/git.test.ts",
     "src/lib/api/git-actions.test.ts",

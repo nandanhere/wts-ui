@@ -9,11 +9,12 @@
  * Repos are resolved from the in-memory repo registry (populated by workspace/open).
  * If a repo ID is unknown it's returned with an error entry.
  *
- * Read-only. No auth required in local single-user mode.
+ * Read-only. Uses the async status reader so multi-repo reads do
+ * not block the event loop. No auth required in local single-user mode.
  */
 
 import { NextRequest, NextResponse } from "next/server";
-import { getWorkspaceStatus } from "@/lib/git/status";
+import { getWorkspaceStatusAsync } from "@/lib/git/status";
 import { getRepo } from "@/lib/git/registry";
 import type { Repository } from "@/lib/workspace/types";
 
@@ -60,7 +61,7 @@ export async function GET(request: NextRequest): Promise<Response> {
     }
 
     // Get status
-    const statuses = getWorkspaceStatus(repos, { ttlMs });
+    const statuses = await getWorkspaceStatusAsync(repos, { ttlMs });
 
     // Attach error entries for unknown repos
     for (const err of errors) {
