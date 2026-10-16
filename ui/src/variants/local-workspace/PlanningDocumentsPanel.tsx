@@ -215,9 +215,20 @@ function sanitizeMermaidSvg(svg: string) {
     throw new Error("Mermaid returned invalid SVG.");
   }
 
+  // Remove elements that can execute script, embed external content,
+  // animate attributes (including href), or reference external resources.
   document
-    .querySelectorAll("script, iframe, object, embed, link, meta")
+    .querySelectorAll(
+      "script, iframe, object, embed, link, meta, foreignObject, animate, animateTransform, animateMotion, set, use, image",
+    )
     .forEach((element) => element.remove());
+  // Mermaid emits a <style> block for its theme. Keep the theme rules but
+  // strip anything that loads external resources.
+  document.querySelectorAll("style").forEach((element) => {
+    element.textContent = (element.textContent ?? "")
+      .replace(/@import[^;]+;/gi, "")
+      .replace(/url\s*\([^)]*\)/gi, "none");
+  });
   document.querySelectorAll("*").forEach((element) => {
     for (const attribute of [...element.attributes]) {
       const name = attribute.name.toLowerCase();

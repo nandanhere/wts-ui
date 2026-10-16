@@ -98,7 +98,7 @@ async function dragTo(
   } else {
     await expect(target).toHaveAttribute("data-drop-active", "true");
   }
-  await page.waitForTimeout(100);
+  // The drop indicator is already asserted above; release immediately.
   await page.mouse.up();
 }
 
@@ -186,7 +186,7 @@ test("drags workspaces within a lane and into an empty lane", async ({
     }
   });
   await dragBackToSource(page, source, target);
-  await page.waitForTimeout(150);
+  await expect.poll(() => placementRequests.length).toBe(0);
   expect(placementRequests).toHaveLength(0);
   expect(await seededWorkspaceIds(ready, createdIds)).toEqual(initialOrder);
   const reorderRequestPromise = nextBoardPlacementRequest(page);

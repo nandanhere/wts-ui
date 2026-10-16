@@ -1452,6 +1452,7 @@ export function RepositoryPatchViewer({
         </div>
         <div
           className={styles.codeView}
+          role="region"
           tabIndex={0}
           aria-label="Changed code text"
           onPointerDownCapture={(event) => {

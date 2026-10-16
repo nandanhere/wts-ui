@@ -15,22 +15,74 @@ fn preview_label(work_set_id: Uuid, task_id: Uuid) -> String {
     format!("wts-preview-{work_set_id}-{task_id}")
 }
 
+/// Commands the remote agent-preview origin may call.
+///
+/// This is an explicit allowlist: a command added to the main window
+/// capability is NOT exposed to preview content until it is added
+/// here after review. Do not replace this with a `get_`/`list_`
+/// prefix rule.
+const PREVIEW_READ_COMMANDS: &[&str] = &[
+    "get_activity_watch_daily_review",
+    "get_activity_watch_status",
+    "get_activity_watch_time_review_brief",
+    "get_agent_conversation",
+    "get_agent_session_detail",
+    "get_agent_turn_changes",
+    "get_agent_turn_checks",
+    "get_agent_turn_decisions",
+    "get_agent_work_set",
+    "get_app_info",
+    "get_demo_boundary",
+    "get_github_review_inbox",
+    "get_gitlab_discussions",
+    "get_gitlab_integration_status",
+    "get_gitlab_merge_requests",
+    "get_gitlab_review_inbox",
+    "get_gitlab_review_patch",
+    "get_setup_snapshot",
+    "get_update_status",
+    "get_workspace",
+    "get_workspace_code_review",
+    "get_workspace_code_review_trace",
+    "get_workspace_evidence",
+    "get_workspace_gitlab_comparison",
+    "get_workspace_materialization",
+    "get_workspace_repository_diff",
+    "get_workspace_repository_file_review",
+    "get_workspace_repository_review_graph",
+    "get_workspace_repository_source",
+    "get_workspace_test_run",
+    "get_workspace_verification_summary",
+    "list_active_jira_issues",
+    "list_agent_conversations",
+    "list_agent_models",
+    "list_agent_sessions",
+    "list_agent_work_sets",
+    "list_repositories",
+    "list_workspace_planning_documents",
+    "list_workspace_review_threads",
+    "list_workspace_test_runs",
+    "list_workspace_work_item_links",
+    "list_workspaces",
+    "read_workspace_planning_document",
+];
+
 fn read_commands() -> Vec<String> {
     let capability: serde_json::Value =
         serde_json::from_str(include_str!("../capabilities/default.json"))
             .expect("built-in capability");
-    capability["permissions"]
+    let granted: std::collections::HashSet<String> = capability["permissions"]
         .as_array()
         .expect("built-in permissions")
         .iter()
         .filter_map(|permission| permission.as_str())
         .filter_map(|permission| permission.strip_prefix("allow-"))
         .map(|command| command.replace('-', "_"))
-        .filter(|command| {
-            command.starts_with("get_")
-                || command.starts_with("list_")
-                || command == "read_workspace_planning_document"
-        })
+        .collect();
+    PREVIEW_READ_COMMANDS
+        .iter()
+        .filter(|command| granted.contains(**command))
+        .map(|command| (*command).to_owned())
         .collect()
 }
 
@@ -183,6 +235,24 @@ fn preview_error(message: &str) -> WorkspaceCommandError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn preview_read_commands_come_only_from_the_explicit_allowlist() {
+        let commands = read_commands();
+        assert!(!commands.is_empty());
+        for command in &commands {
+            assert!(
+                PREVIEW_READ_COMMANDS.contains(&command.as_str()),
+                "preview command {command} is not in the explicit allowlist"
+            );
+        }
+        // The main-window capability must never widen the preview set
+        // on its own: every granted preview command is listed above.
+        let mut sorted = commands.clone();
+        sorted.sort();
+        sorted.dedup();
+        assert_eq!(sorted.len(), commands.len(), "duplicate preview commands");
+    }
+
     #[test]
     fn candidate_preview_capability_allows_only_reads_on_one_exact_window_and_origin() {
         let label = preview_label(Uuid::new_v4(), Uuid::new_v4());

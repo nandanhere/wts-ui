@@ -11,7 +11,7 @@ let index = 0;
 async function shot(page: Page, step: string) {
   index += 1;
   const file = `${String(index).padStart(2, "0")}.png`;
-  await page.waitForTimeout(350);
+  await page.waitForLoadState("networkidle");
   await page.screenshot({ path: resolve(tourDir, file), animations: "disabled" });
   notes.push({ file, step });
 }

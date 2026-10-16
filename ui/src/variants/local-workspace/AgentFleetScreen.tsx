@@ -317,7 +317,10 @@ export function AgentFleetScreen({
       if (document.hidden) return;
       void refresh();
     }, REFRESH_MS);
-    const ticker = window.setInterval(() => setNow(Date.now()), 1_000);
+    const ticker = window.setInterval(() => {
+      if (document.hidden) return;
+      setNow(Date.now());
+    }, 1_000);
     return () => {
       unsubscribe();
       mounted.current = false;

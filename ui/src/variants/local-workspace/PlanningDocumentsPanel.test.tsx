@@ -1375,6 +1375,39 @@ describe("PlanningDocumentsPanel", () => {
     view.unmount();
   });
 
+  it("strips active SVG elements from rendered Mermaid markup", async () => {
+    const fake = planningClient();
+    mermaidMocks.render.mockResolvedValueOnce({
+      svg: '<svg xmlns="http://www.w3.org/2000/svg"><foreignObject><div>evil</div></foreignObject><style>@import url(https://evil.example/x.css);</style><animate attributeName="href" values="javascript:alert(1)"/><set attributeName="onclick" to="alert(1)"/><use href="https://evil.example/x.svg#x"/><text>Safe</text></svg>',
+    });
+    fake.readWorkspacePlanningDocument.mockResolvedValue(
+      planningDocument(
+        "plan",
+        "# Flow\n\n```mermaid\nflowchart LR\n  Start --> Done\n```",
+      ),
+    );
+
+    const view = render(
+      <PlanningDocumentsPanel
+        client={fake.client}
+        workspaceId={workspaceId}
+        workspaceKey="TASK-42"
+      />,
+    );
+
+    const image = await screen.findByRole("img", { name: "Mermaid diagram" });
+    const svg = image.querySelector("svg");
+    expect(svg).not.toBeNull();
+    expect(svg?.querySelector("foreignObject")).toBeNull();
+    expect(svg?.querySelector("animate")).toBeNull();
+    expect(svg?.querySelector("set")).toBeNull();
+    expect(svg?.querySelector("use")).toBeNull();
+    expect(svg?.querySelector("style")?.textContent ?? "").not.toContain("@import");
+    expect(svg?.querySelector("style")?.textContent ?? "").not.toContain("url(");
+    expect(image).toHaveTextContent("Safe");
+    view.unmount();
+  });
+
   it("keeps a rendered diagram and its zoom during planning screen updates", async () => {
     const user = userEvent.setup();
     const fake = planningClient();

@@ -73,7 +73,7 @@
     "updater": {
       "pubkey": "",
       "endpoints": [],
-      "dangerousInsecureTransportProtocol": true
+      "dangerousInsecureTransportProtocol": false
     }
   },
   "bundle": {

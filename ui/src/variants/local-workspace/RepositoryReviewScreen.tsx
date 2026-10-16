@@ -15,6 +15,7 @@ import type {
 } from "../../lib/wtsClient";
 import { useTheme } from "../../theme";
 import { openAgentFeedback } from "../../lib/agentFeedbackEvents";
+import { useVisiblePolling } from "../../lib/useVisiblePolling";
 import { Glyph } from "./Glyph";
 import { SelectMenu } from "../../components/SelectMenu";
 import { RepositoryPatchViewer, type AiReviewFocusRequest } from "./RepositoryPatchViewer";
@@ -452,18 +453,17 @@ export function RepositoryReviewScreen({
     selectedCommitOid,
   ]);
 
-  useEffect(() => {
-    if (!gitlabPatchTarget || managedTargetKey) return;
-    const check = () => {
+  useVisiblePolling(
+    () => {
       forceProviderRefreshRef.current = true;
       preserveDisplayedReviewRef.current = true;
       displayedRequestRef.current = null;
       setCheckingReviewUpdates(true);
       setRequestRevision((value) => value + 1);
-    };
-    const interval = window.setInterval(check, REVIEW_PATCH_POLL_INTERVAL_MS);
-    return () => window.clearInterval(interval);
-  }, [gitlabPatchTarget, managedTargetKey]);
+    },
+    REVIEW_PATCH_POLL_INTERVAL_MS,
+    { enabled: Boolean(gitlabPatchTarget && !managedTargetKey), refireOnVisible: false },
+  );
 
   useEffect(() => {
     if (gitlabPatchTarget || managedTargetKey || changeMode !== "code") return;

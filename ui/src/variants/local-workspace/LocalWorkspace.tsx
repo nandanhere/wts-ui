@@ -2162,24 +2162,33 @@ function DraftOverviewPanel({
   const [openBranchNoteId, setOpenBranchNoteId] = useState<string | null>(null);
   const [linkingMergeRequest, setLinkingMergeRequest] = useState(false);
   const [agentMrHints, setAgentMrHints] = useState<AgentMrLinkProposal[]>([]);
-  useEffect(() => {
-    let active = true;
-    const refresh = () => {
-      void loadAgentSessions(client, workspace.id).then((list: AgentSessionList) => {
-        if (!active) return;
-        setAgentMrHints([
-          ...list.sessions.filter((session) => session.workspaceId === workspace.id),
-          ...(list.observedSessions ?? []).filter((session) => session.workspaceId === workspace.id),
-        ].sort((left, right) =>
-          ("lastEventAtUnixMs" in right ? right.lastEventAtUnixMs : right.lastHeartbeatAtUnixMs)
-          - ("lastEventAtUnixMs" in left ? left.lastEventAtUnixMs : left.lastHeartbeatAtUnixMs)
-        ).flatMap((session) => session.mrLinkProposals ?? []));
-      }, () => { if (active) setAgentMrHints([]); });
-    };
-    refresh();
-    const timer = window.setInterval(refresh, 10_000);
-    return () => { active = false; window.clearInterval(timer); };
+  const [agentMrHintsError, setAgentMrHintsError] = useState(false);
+  const agentMrHintsInFlight = useRef(false);
+  const refreshAgentMrHints = useCallback(async () => {
+    if (agentMrHintsInFlight.current) return;
+    agentMrHintsInFlight.current = true;
+    try {
+      const list: AgentSessionList = await loadAgentSessions(client, workspace.id);
+      setAgentMrHintsError(false);
+      setAgentMrHints([
+        ...list.sessions.filter((session) => session.workspaceId === workspace.id),
+        ...(list.observedSessions ?? []).filter((session) => session.workspaceId === workspace.id),
+      ].sort((left, right) =>
+        ("lastEventAtUnixMs" in right ? right.lastEventAtUnixMs : right.lastHeartbeatAtUnixMs)
+        - ("lastEventAtUnixMs" in left ? left.lastEventAtUnixMs : left.lastHeartbeatAtUnixMs)
+      ).flatMap((session) => session.mrLinkProposals ?? []));
+    } catch {
+      // Keep the last good hints and surface a distinct error state so a
+      // backend failure is not mistaken for "no proposals".
+      setAgentMrHintsError(true);
+    } finally {
+      agentMrHintsInFlight.current = false;
+    }
   }, [client, workspace.id]);
+  useEffect(() => {
+    void refreshAgentMrHints();
+  }, [refreshAgentMrHints]);
+  useVisiblePolling(refreshAgentMrHints, 10_000);
   const [alignmentOpen, setAlignmentOpen] = useState(false);
   const [alignmentRepositoryId, setAlignmentRepositoryId] = useState<string | null>(null);
   const alignmentGeneration = useRef(0);
@@ -3455,6 +3464,9 @@ function DraftOverviewPanel({
                                   ? "Checking…"
                                   : "Prepare MR"}
                               </button>
+                              {agentMrHintsError && (
+                                <span role="status">Agent MR hints unavailable. Retrying…</span>
+                              )}
                               {agentMrHints.filter((proposal) =>
                                 proposal.repositoryId === created.repositoryId
                               ).slice(0, 1).map((proposal) => (
